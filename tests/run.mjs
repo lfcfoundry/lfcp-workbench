@@ -30,12 +30,17 @@ for (const f of ['ingest.test.mjs', 'ingest-lfcp.test.mjs']) {
 const sha = createHash('sha256').update(readFileSync(join(root, 'vendor/lfcp/0.4.19/lfc-pack.js'))).digest('hex');
 record('vendor 0.4.19 sha256 unchanged', sha === '8c312582c7c739fa43b9df82a418a9ac6cdebfcb27cc32ed2e92642dc646c259');
 
-const sha21 = createHash('sha256').update(readFileSync(join(root, 'vendor/lfcp/0.4.21/lfc-pack.js'))).digest('hex');
-record('vendor 0.4.21 sha256 matches PROVENANCE.md', readFileSync(join(root, 'vendor/lfcp/0.4.21/PROVENANCE.md'), 'utf8').includes(sha21));
+const FIXED = ['0.4.21', '0.4.22'];
+for (const v of FIXED) {
+  const h = createHash('sha256').update(readFileSync(join(root, `vendor/lfcp/${v}/lfc-pack.js`))).digest('hex');
+  record(`vendor ${v} sha256 matches PROVENANCE.md`, readFileSync(join(root, `vendor/lfcp/${v}/PROVENANCE.md`), 'utf8').includes(h));
+}
 
 // 2b. Real ingest path (CSV -> packStream -> unpackRows) is lossless on 0.4.21; on 0.4.19 it must lose data for the documented trigger shapes
-const r21 = spawnSync(process.execPath, [join(root, 'tests/csv-roundtrip.test.mjs')], { encoding: 'utf8' });
-record('CSV ingest round trip lossless on 0.4.21', r21.status === 0, r21.stdout.trim().split('\n').pop());
+for (const v of FIXED) {
+  const r = spawnSync(process.execPath, [join(root, 'tests/csv-roundtrip.test.mjs'), join(root, `vendor/lfcp/${v}/lfc-pack.js`)], { encoding: 'utf8' });
+  record(`CSV ingest round trip lossless on ${v}`, r.status === 0, r.stdout.trim().split('\n').pop());
+}
 const r19 = spawnSync(process.execPath, [join(root, 'tests/csv-roundtrip.test.mjs'), join(root, 'vendor/lfcp/0.4.19/lfc-pack.js'), '--expect-loss'], { encoding: 'utf8' });
 record('CSV ingest round trip loses data on 0.4.19 (expected, proves the cases bite)', r19.status === 0 && /DATA DIFFERS/.test(r19.stdout));
 
@@ -54,9 +59,11 @@ try {
   const b = spawnSync(process.execPath, [join(tmp, 'tests/lfcp-variable-length-string-roundtrip.cjs')], { encoding: 'utf8', maxBuffer: 1 << 28 });
   let jb = {}; try { jb = JSON.parse(b.stdout); } catch {}
   record('probe: round-trip defect result unchanged (expected exit 1, 98 failed)', b.status === 1 && jb.failedChecks === 98, `exit ${b.status}, ${jb.failedChecks} failed`);
-  const c = spawnSync(process.execPath, [join(tmp, 'tests/lfcp-variable-length-string-roundtrip.cjs')], { encoding: 'utf8', maxBuffer: 1 << 28, env: { ...process.env, LFCP_PACK_PATH: join(tmp, 'vendor/lfcp/0.4.21/lfc-pack.js') } });
-  let jc = {}; try { jc = JSON.parse(c.stdout); } catch {}
-  record('0.4.21 passes the same round-trip probe', c.status === 0 && jc.failedChecks === 0 && jc.library?.version === '0.4.21', `exit ${c.status}, ${jc.failedChecks} failed, version ${jc.library?.version}`);
+  for (const v of FIXED) {
+    const c = spawnSync(process.execPath, [join(tmp, 'tests/lfcp-variable-length-string-roundtrip.cjs')], { encoding: 'utf8', maxBuffer: 1 << 28, env: { ...process.env, LFCP_PACK_PATH: join(tmp, `vendor/lfcp/${v}/lfc-pack.js`) } });
+    let jc = {}; try { jc = JSON.parse(c.stdout); } catch {}
+    record(`${v} passes the same round-trip probe`, c.status === 0 && jc.failedChecks === 0 && jc.library?.version === v, `exit ${c.status}, ${jc.failedChecks} failed, version ${jc.library?.version}`);
+  }
 } finally { rmSync(tmp, { recursive: true, force: true }); }
 
 const failed = results.filter((r) => !r.ok).length;
