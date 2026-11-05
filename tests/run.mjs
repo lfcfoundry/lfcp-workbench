@@ -24,6 +24,9 @@ record('adapters unit tests', unit.status === 0, unit.status === 0 ? '' : unit.s
 const sha = createHash('sha256').update(readFileSync(join(root, 'vendor/lfcp/0.4.19/lfc-pack.js'))).digest('hex');
 record('vendor 0.4.19 sha256 unchanged', sha === '8c312582c7c739fa43b9df82a418a9ac6cdebfcb27cc32ed2e92642dc646c259');
 
+const sha21 = createHash('sha256').update(readFileSync(join(root, 'vendor/lfcp/0.4.21/lfc-pack.js'))).digest('hex');
+record('vendor 0.4.21 sha256 matches PROVENANCE.md', readFileSync(join(root, 'vendor/lfcp/0.4.21/PROVENANCE.md'), 'utf8').includes(sha21));
+
 // 3. Defect probes on a temp copy. Expected results are documented: the fix
 //    candidate passes 19/19 and the pinned vendor shows 8 mismatching cases;
 //    the round-trip probe exits 1 with 98 failed checks (the known defect).
@@ -39,6 +42,9 @@ try {
   const b = spawnSync(process.execPath, [join(tmp, 'tests/lfcp-variable-length-string-roundtrip.cjs')], { encoding: 'utf8', maxBuffer: 1 << 28 });
   let jb = {}; try { jb = JSON.parse(b.stdout); } catch {}
   record('probe: round-trip defect result unchanged (expected exit 1, 98 failed)', b.status === 1 && jb.failedChecks === 98, `exit ${b.status}, ${jb.failedChecks} failed`);
+  const c = spawnSync(process.execPath, [join(tmp, 'tests/lfcp-variable-length-string-roundtrip.cjs')], { encoding: 'utf8', maxBuffer: 1 << 28, env: { ...process.env, LFCP_PACK_PATH: join(tmp, 'vendor/lfcp/0.4.21/lfc-pack.js') } });
+  let jc = {}; try { jc = JSON.parse(c.stdout); } catch {}
+  record('0.4.21 passes the same round-trip probe', c.status === 0 && jc.failedChecks === 0 && jc.library?.version === '0.4.21', `exit ${c.status}, ${jc.failedChecks} failed, version ${jc.library?.version}`);
 } finally { rmSync(tmp, { recursive: true, force: true }); }
 
 const failed = results.filter((r) => !r.ok).length;
