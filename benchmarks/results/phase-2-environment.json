@@ -1,0 +1,57 @@
+{
+  "schema": "lfcp-workbench-phase-2-environment/v1",
+  "assessedAt": "2026-11-01",
+  "updatedAt": "2026-11-02",
+  "environment": {
+    "workspace": "Termux on Android 14 (Linux kernel 6.1.162), arm64",
+    "node": "v26.13.0",
+    "python": "3.14.8",
+    "staticServer": "Python standard-library http.server available",
+    "browserExecutables": {
+      "chromium": "not found on PATH",
+      "chromium-browser": "not found on PATH",
+      "google-chrome": "not found on PATH",
+      "firefox": "not found on PATH"
+    },
+    "androidBrowserPackages": {
+      "com.android.chrome": { "installed": true, "versionCode": 807807304, "browserVersion": "156.0.8078.73", "device": "Android phone", "platform": "Android" }
+    },
+    "browserAutomation": {
+      "playwright": "not installed/resolvable",
+      "puppeteer": "not installed/resolvable",
+      "selenium": "not installed/resolvable",
+      "automationConnector": "not exposed"
+    }
+  },
+  "browserTests": {
+    "status": "executed-in-Android-Chrome",
+    "browserVersion": "156.0.8078.73",
+    "device": "Android phone",
+    "platform": "Android",
+    "secureContext": true,
+    "opfs": true,
+    "functionalMatrix": { "status": "pass", "cases": 22, "passed": 15, "expectedRejections": 7, "failed": 0, "report": "phase-2-browser-20261102T130353Z-c7aac769.json" },
+    "resourceSeries": { "status": "pass", "workloads": 3, "repetitionsPerSize": 2, "largestInputBytes": 16777188, "reports": ["phase-2-browser-20261102T130349Z-9dea0d1e.json", "phase-2-browser-20261102T130359Z-b6bd4a7e.json"] },
+    "opfsCancellation": { "status": "pass", "scenarios": 2, "cleanupPassed": true, "report": "phase-2-browser-20261102T130402Z-1ca27cdd.json" },
+    "workerTerminationDuringOpfsWrite": { "status": "observed", "outcome": "visible zero-byte file without LFC1 marker after termination; test file then removed", "report": "phase-2-browser-20261102T130407Z-4ff8b6da.json" },
+    "browserRestartPersistence": { "status": "not-run" },
+    "peakPageMemory": { "status": "sampled-nonstandard-api", "observedMainRealmHeapBytes": 10000000, "samplingIntervalMs": 50, "caveat": "Same reported value across samples/sizes; does not establish peak or bounded end-to-end memory." },
+    "workerMemory": { "status": "unavailable", "reason": "No portable per-Worker memory API was exposed." },
+    "storageMeasurements": { "status": "measured-approximate-origin-estimates", "reportedQuotaBytes": 10737418240, "caveat": "Estimate and usage vary; not a per-file measurement or quota guarantee." },
+    "reason": "Chrome was launched on localhost; its secure context, OPFS API, generated functional cases, resource workloads, cancellation, and Worker termination scenario were exercised. No non-Android browser matrix or browser-restart test was run."
+  },
+  "nonBrowserChecks": "benchmarks/results/phase-2-node-checks.json",
+  "lfcp": {
+    "package": "LFC-pack",
+    "version": "0.4.19",
+    "apiVersion": 0,
+    "artifact": "vendor/lfcp/0.4.19/lfc-pack.js",
+    "browserValidation": "Chrome 156.0.8078.73 on Android; see captured reports"
+  },
+  "limitations": [
+    "Only Android Chrome was tested; results do not establish support in desktop Chrome, Firefox, Safari, or other Android browsers.",
+    "No whole-browser restart test or storage quota/error injection was performed.",
+    "Browser APIs do not expose portable per-Worker peak memory measurements.",
+    "No storage quota exhaustion or restart/recovery test was performed."
+  ]
+}

@@ -1,0 +1,41 @@
+sha256	package_path	original_location
+8eea6aa198afbb4a6bad78bc2926d5a9a76fa74efce2ee5f93ec6e500226ae68	BUILD-PROPOSAL.md	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/BUILD-PROPOSAL.md
+eaad743c57ce5cdab1c1a7f936f796ec3b9270d994b2a3033736c907dcf198d2	INTEGRATION-DECISION-MATRIX.md	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/INTEGRATION-DECISION-MATRIX.md
+ed991d07ce4958286f846f7967f7e15ad1071630a1042474c028cfb144d43574	MAINTAINER-INQUIRY.md	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/MAINTAINER-INQUIRY.md
+573d6cbcd10b52db851d2678d253b40c7cfe6f6121218d7ad08cba3502c8de4d	PACKAGE-VERIFICATION.md	Generated for Phase 11 package
+424fe9c32f951f5b3939926c1114325246f17d767369ea2bef1a467aee9848cc	PHASE10-REPORT.md	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/PHASE10-REPORT.md
+1495e9f3e6830a7932015de1d5aa3d83f5bdff892611a23e91790bd1b9cc1b07	PROPOSED-ISSUE-BODY.md	Extracted from MAINTAINER-INQUIRY.md, Draft issue body section
+7b9206b2c2537e02cc98156f8359cb2ec5a1becba78b0d53843049a30fe2e564	README.md	Generated for Phase 11
+a09a5c2d4c16d9af3b8ff3d6de15df397114cc5cd1b8ea8072355e660828cd51	SUBMISSION-CHECKLIST.md	Generated for Phase 11
+9aebd7ae92f0dc57d8deab44b2546664474722c2c5c74305f887c57ae26d202a	UPSTREAM-PATCH-PROPOSAL.md	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/UPSTREAM-PATCH-PROPOSAL.md
+80a8332b64fa28697fbea3a054579076ed217b64e1c28078fc95fedd5a6d3c8a	evidence/build/flatscan-corrected-rebuild-20261102.wasm	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/flatscan-corrected-rebuild-20261102.wasm
+92494f9689651d2725f159fff06739593b213d659bad6cf774c3c197643432f7	evidence/build/flatscan-origin-rebuild-20261102.wasm	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/flatscan-origin-rebuild-20261102.wasm
+ebc9513bfe3e32b3ce9769a86f3ce6e3e3cef9d1d49be74f21127eff4b720766	evidence/phase8/DEPLOYMENT-QUALIFICATION-PHASE8.md	docs/lfcp/DEPLOYMENT-QUALIFICATION-PHASE8.md
+8bc8e7c33030d1ee21f435191a684a88d0e9e99ebbba9d22ec7273db5cc92cc0	evidence/phase8/phase8-validation-README.md	experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/README.md
+3236a8d0e0b514e08218ae776a53688f2058368bb25a72483ce67f0e60e38718	evidence/phase8/results/phase-8-browser-no_blob_worker-20261102T192746Z-336f5ecc.json	benchmarks/results/phase-8-browser-no_blob_worker-20261102T192746Z-336f5ecc.json
+2d217cc4e2d9328db8079a4e35018cb156f50f894b800a3774b4fa678284fbb0	evidence/phase8/results/phase-8-browser-no_connect-20261102T192748Z-d586bb7d.json	benchmarks/results/phase-8-browser-no_connect-20261102T192748Z-d586bb7d.json
+ccbb58cb05e311db995849fbf770ae4a5193b8ffa51623ebffa0bc934277883f	evidence/phase8/results/phase-8-browser-no_wasm-20261102T192745Z-e72d5ac0.json	benchmarks/results/phase-8-browser-no_wasm-20261102T192745Z-e72d5ac0.json
+ffb08d55264695d15f8803dc0b833cb750c802863229a29126652900363c38b4	evidence/phase8/results/phase-8-browser-strict-20261102T192745Z-afbc49f8.json	benchmarks/results/phase-8-browser-strict-20261102T192745Z-afbc49f8.json
+37ce2cc6481f62489c3db04afa1a5bcd85d27506319663cc47d25eb839120bee	evidence/phase9/UPSTREAM-INTEGRATION-PHASE9.md	docs/lfcp/UPSTREAM-INTEGRATION-PHASE9.md
+8dd51eb155337bcf4db4d64635ee52bbdfac9ee21c5f9dcd589b595036091168	evidence/phase9/results/phase9-19case-targeted.json	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/phase9-19case-targeted.json
+eb8f59f20f0d9b88fc237c2aab3024b9015e190dfd6aafe39367dbaec15675c0	evidence/phase9/results/phase9-49case-candidate.json	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/phase9-49case-candidate.json
+e144450041dd44e798f892197738299e2dde4ffbb32f49f648e1e93b209158e8	evidence/phase9/results/phase9-49case-vendor-negative-control.json	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/phase9-49case-vendor-negative-control.json
+7bb297001d7733896c6c8193feb46ddaaff400bc683b2300530accc0d8502e6e	evidence/phase9/verify-origin-artifact.py	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/verify-origin-artifact.py
+7b62b95cd2671f5c96fabac835e9241fb48ba6f56a1a8fdbc1e34fd9f1f9b058	patch/flatscan-string-separator.patch	experiments/fixes/lfc-pack-0.4.19-string-writer/phase9-proposal/flatscan-string-separator.patch
+140f435b5b162faf71322773c8943936eafbf01ae07c3c60c01268a993fe5810	reproduction/benchmarks/results/README.md	Generated for Phase 11
+95f4a225ddf1f0912a2dd6197bc95a35794f5222297959931e68a7b59570c484	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/LICENSE-JS-modules.txt	experiments/fixes/lfc-pack-0.4.19-string-writer/LICENSE-JS-modules.txt
+f4f0f18a000484677c7200b7ea68d8216d3f76fe6a3445f26429f963aa943d3a	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/NOTICE-zstd.txt	experiments/fixes/lfc-pack-0.4.19-string-writer/NOTICE-zstd.txt
+80a8332b64fa28697fbea3a054579076ed217b64e1c28078fc95fedd5a6d3c8a	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/flatscan-fixed-v2.wasm	experiments/fixes/lfc-pack-0.4.19-string-writer/flatscan-fixed-v2.wasm
+198c3ffbe4bac55770b140a9d6d59fd4403a726bf179a08db5d0b5f28446597c	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/flatscan.c	experiments/fixes/lfc-pack-0.4.19-string-writer/flatscan.c
+69a1d28e712224b3a98d93dbbde6ccd4f33b96bba457709c5568b56d5493601f	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/lfc-pack-fixed.js	experiments/fixes/lfc-pack-0.4.19-string-writer/lfc-pack-fixed.js
+8bc8e7c33030d1ee21f435191a684a88d0e9e99ebbba9d22ec7273db5cc92cc0	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/README.md	experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/README.md
+95162a251ea33577d42afa459fe54eecb46b47bc213daf36cfda755ccbd1982e	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/index.html	experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/index.html
+d06367e2fd31840692c748196f311b1945857704e3ad03e91349d7d757b06023	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/phase8.css	experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/phase8.css
+7d77adb23f0a1757c8b30cc2b95932054e2c3e6effe62ea04d300561dee71871	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/phase8.js	experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/phase8.js
+be3d86becec6f8700ae47d5bcf3d77ac71157054947a8e34ca1eca53bf0b112e	reproduction/experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/server.py	experiments/fixes/lfc-pack-0.4.19-string-writer/phase8-validation/server.py
+d7a6f013bfe445811d847a340b939ead356cabc00792a864b3a3bacada8f3a04	reproduction/tests/lfcp-optimized-string-writer-fix.cjs	tests/lfcp-optimized-string-writer-fix.cjs
+40ee503b8bc7c32b432cae80e43afdbd64f3a8c9d7afe8543814b636ce226836	reproduction/tests/lfcp-variable-length-string-roundtrip.cjs	tests/lfcp-variable-length-string-roundtrip.cjs
+95f4a225ddf1f0912a2dd6197bc95a35794f5222297959931e68a7b59570c484	reproduction/vendor/lfcp/0.4.19/LICENSE-JS-modules.txt	vendor/lfcp/0.4.19/LICENSE-JS-modules.txt
+f4f0f18a000484677c7200b7ea68d8216d3f76fe6a3445f26429f963aa943d3a	reproduction/vendor/lfcp/0.4.19/NOTICE-zstd.txt	vendor/lfcp/0.4.19/NOTICE-zstd.txt
+5fdb439d019241c79f0b27f1e02d14d487f520995b1614f65c9731614524c545	reproduction/vendor/lfcp/0.4.19/PROVENANCE.md	vendor/lfcp/0.4.19/PROVENANCE.md
+8c312582c7c739fa43b9df82a418a9ac6cdebfcb27cc32ed2e92642dc646c259	reproduction/vendor/lfcp/0.4.19/lfc-pack.js	vendor/lfcp/0.4.19/lfc-pack.js

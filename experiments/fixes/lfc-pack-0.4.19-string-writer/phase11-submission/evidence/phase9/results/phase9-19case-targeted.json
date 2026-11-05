@@ -1,0 +1,2290 @@
+{
+  "schema": "lfcp-workbench-phase6-string-writer-fix/v1",
+  "generatedAt": "2026-11-02T19:36:42.707Z",
+  "runtime": {
+    "node": "v26.13.0",
+    "platform": "android",
+    "arch": "arm64",
+    "clang": "21.1.8 wasm32 target"
+  },
+  "artifact": {
+    "vendorSha256": "8c312582c7c739fa43b9df82a418a9ac6cdebfcb27cc32ed2e92642dc646c259",
+    "fixedCopySha256": "69a1d28e712224b3a98d93dbbde6ccd4f33b96bba457709c5568b56d5493601f"
+  },
+  "summary": {
+    "cases": 19,
+    "fixedCasesPassed": 19,
+    "vendorCasesWithMismatch": 8
+  },
+  "cases": [
+    {
+      "name": "early-join-empty-first-unique",
+      "branch": "early-more-than-half-distinct",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "A",
+        "B",
+        "C"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "A",
+          "B",
+          "C",
+          null
+        ],
+        "columnValues": [
+          "A",
+          "B",
+          "C"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": false,
+          "mismatchCount": 4,
+          "firstMismatch": {
+            "row": 0,
+            "expected": "",
+            "actual": "A"
+          }
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": false,
+        "outputBytes": 388
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "",
+          "A",
+          "B",
+          "C"
+        ],
+        "columnValues": [
+          "",
+          "A",
+          "B",
+          "C"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 386
+      },
+      "outputBytesIdentical": false
+    },
+    {
+      "name": "early-join-empty-middle",
+      "branch": "early-more-than-half-distinct",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "A",
+        "",
+        "B",
+        "C"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "A",
+          "",
+          "B",
+          "C"
+        ],
+        "columnValues": [
+          "A",
+          "",
+          "B",
+          "C"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 383
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "A",
+          "",
+          "B",
+          "C"
+        ],
+        "columnValues": [
+          "A",
+          "",
+          "B",
+          "C"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 383
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "early-join-empty-final",
+      "branch": "early-more-than-half-distinct",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "A",
+        "B",
+        "C",
+        ""
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "A",
+          "B",
+          "C",
+          ""
+        ],
+        "columnValues": [
+          "A",
+          "B",
+          "C",
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 389
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "A",
+          "B",
+          "C",
+          ""
+        ],
+        "columnValues": [
+          "A",
+          "B",
+          "C",
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 389
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "postscan-join-consecutive-empties",
+      "branch": "post-scan-all-values",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "",
+        "A",
+        "",
+        "B",
+        ""
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 6,
+        "decodedRows": 6,
+        "decodedValues": [
+          "A",
+          "",
+          "B",
+          "",
+          null,
+          null
+        ],
+        "columnValues": [
+          "A",
+          "",
+          "B",
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 6,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 6
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 6
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 6,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": false,
+          "mismatchCount": 4,
+          "firstMismatch": {
+            "row": 0,
+            "expected": "",
+            "actual": "A"
+          }
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": false,
+        "outputBytes": 390
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 6,
+        "decodedRows": 6,
+        "decodedValues": [
+          "",
+          "",
+          "A",
+          "",
+          "B",
+          ""
+        ],
+        "columnValues": [
+          "",
+          "",
+          "A",
+          "",
+          "B",
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 6,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 6
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 6
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 6,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 392
+      },
+      "outputBytesIdentical": false
+    },
+    {
+      "name": "all-values-empty",
+      "branch": "non-join-fallback-control",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "",
+        "",
+        ""
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "",
+          "",
+          "",
+          ""
+        ],
+        "columnValues": [
+          "",
+          "",
+          "",
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 381
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "",
+          "",
+          "",
+          ""
+        ],
+        "columnValues": [
+          "",
+          "",
+          "",
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 381
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "single-empty",
+      "branch": "single-value-control",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        ""
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 1,
+        "decodedRows": 1,
+        "decodedValues": [
+          ""
+        ],
+        "columnValues": [
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 1,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "V",
+                "n": 1
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 1
+              },
+              {
+                "key": "pad",
+                "type": "s",
+                "n": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 346
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 1,
+        "decodedRows": 1,
+        "decodedValues": [
+          ""
+        ],
+        "columnValues": [
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 1,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "V",
+                "n": 1
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 1
+              },
+              {
+                "key": "pad",
+                "type": "s",
+                "n": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 346
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "ordinary-nonempty-strings",
+      "branch": "early-join-nonempty-first-control",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "columnValues": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 385
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "columnValues": [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 385
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "postscan-mixed-empty-nonempty",
+      "branch": "post-scan-all-values",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "A",
+        "",
+        "B",
+        ""
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 5,
+        "decodedRows": 5,
+        "decodedValues": [
+          "",
+          "A",
+          "",
+          "B",
+          ""
+        ],
+        "columnValues": [
+          "",
+          "A",
+          "",
+          "B",
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 5,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 5
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 5
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 5,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 390
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 5,
+        "decodedRows": 5,
+        "decodedValues": [
+          "",
+          "A",
+          "",
+          "B",
+          ""
+        ],
+        "columnValues": [
+          "",
+          "A",
+          "",
+          "B",
+          ""
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 5,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 5
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 5
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 5,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 390
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "postscan-low-cardinality",
+      "branch": "post-scan-all-values",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "A",
+        "A",
+        "A"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "A",
+          "A",
+          "A",
+          null
+        ],
+        "columnValues": [
+          "A",
+          "A",
+          "A"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": false,
+          "mismatchCount": 2,
+          "firstMismatch": {
+            "row": 0,
+            "expected": "",
+            "actual": "A"
+          }
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": false,
+        "outputBytes": 387
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "",
+          "A",
+          "A",
+          "A"
+        ],
+        "columnValues": [
+          "",
+          "A",
+          "A",
+          "A"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 385
+      },
+      "outputBytesIdentical": false
+    },
+    {
+      "name": "dictionary-empty-first-control",
+      "branch": "dictionary-control",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "v1",
+        "v1",
+        "v1",
+        "v1",
+        "v1",
+        "v1",
+        "v1"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "D",
+                "n": 8,
+                "distinct": 2
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 387
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "D",
+                "n": 8,
+                "distinct": 2
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 387
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "cardinality-sweep-2-distinct",
+      "branch": "cardinality-2",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "v1",
+        "v1",
+        "v1",
+        "v1",
+        "v1",
+        "v1",
+        "v1"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "D",
+                "n": 8,
+                "distinct": 2
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 387
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "D",
+                "n": 8,
+                "distinct": 2
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 387
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "cardinality-sweep-3-distinct",
+      "branch": "cardinality-3",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "v1",
+        "v2",
+        "v1",
+        "v1",
+        "v1",
+        "v1",
+        "v1"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "v1",
+          "v2",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          null
+        ],
+        "columnValues": [
+          "v1",
+          "v2",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": false,
+          "mismatchCount": 4,
+          "firstMismatch": {
+            "row": 0,
+            "expected": "",
+            "actual": "v1"
+          }
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": false,
+        "outputBytes": 409
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v2",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v2",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 407
+      },
+      "outputBytesIdentical": false
+    },
+    {
+      "name": "cardinality-sweep-4-distinct",
+      "branch": "cardinality-4",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "v1",
+        "v2",
+        "v3",
+        "v1",
+        "v1",
+        "v1",
+        "v1"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "v1",
+          "v2",
+          "v3",
+          "v1",
+          "v1",
+          "v1",
+          "v1",
+          null
+        ],
+        "columnValues": [
+          "v1",
+          "v2",
+          "v3",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": false,
+          "mismatchCount": 5,
+          "firstMismatch": {
+            "row": 0,
+            "expected": "",
+            "actual": "v1"
+          }
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": false,
+        "outputBytes": 409
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v1",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 403
+      },
+      "outputBytesIdentical": false
+    },
+    {
+      "name": "cardinality-sweep-5-distinct",
+      "branch": "cardinality-5",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "v1",
+        "v2",
+        "v3",
+        "v4",
+        "v1",
+        "v1",
+        "v1"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 407
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v1",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 407
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "cardinality-sweep-6-distinct",
+      "branch": "cardinality-6",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "v1",
+        "v2",
+        "v3",
+        "v4",
+        "v5",
+        "v1",
+        "v1"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v1",
+          "v1",
+          null
+        ],
+        "columnValues": [
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": false,
+          "mismatchCount": 7,
+          "firstMismatch": {
+            "row": 0,
+            "expected": "",
+            "actual": "v1"
+          }
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": false,
+        "outputBytes": 408
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v1",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v1",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 407
+      },
+      "outputBytesIdentical": false
+    },
+    {
+      "name": "cardinality-sweep-7-distinct",
+      "branch": "cardinality-7",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "v1",
+        "v2",
+        "v3",
+        "v4",
+        "v5",
+        "v6",
+        "v1"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v6",
+          "v1",
+          null
+        ],
+        "columnValues": [
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v6",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": false,
+          "mismatchCount": 8,
+          "firstMismatch": {
+            "row": 0,
+            "expected": "",
+            "actual": "v1"
+          }
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": false,
+        "outputBytes": 407
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v6",
+          "v1"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v6",
+          "v1"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 406
+      },
+      "outputBytesIdentical": false
+    },
+    {
+      "name": "cardinality-sweep-8-distinct",
+      "branch": "cardinality-8",
+      "mode": "optimized-flat",
+      "expectedValues": [
+        "",
+        "v1",
+        "v2",
+        "v3",
+        "v4",
+        "v5",
+        "v6",
+        "v7"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v6",
+          "v7",
+          null
+        ],
+        "columnValues": [
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v6",
+          "v7"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": false,
+          "mismatchCount": 8,
+          "firstMismatch": {
+            "row": 0,
+            "expected": "",
+            "actual": "v1"
+          }
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": false,
+        "outputBytes": 406
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 8,
+        "decodedRows": 8,
+        "decodedValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v6",
+          "v7"
+        ],
+        "columnValues": [
+          "",
+          "v1",
+          "v2",
+          "v3",
+          "v4",
+          "v5",
+          "v6",
+          "v7"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 8,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 8
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 8
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 8,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 404
+      },
+      "outputBytesIdentical": false
+    },
+    {
+      "name": "javascript-flat-fallback-control",
+      "branch": "javascript-flat-fallback",
+      "mode": "fallback",
+      "expectedValues": [
+        "",
+        "A",
+        "B",
+        "C"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "",
+          "A",
+          "B",
+          "C"
+        ],
+        "columnValues": [
+          "",
+          "A",
+          "B",
+          "C"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 386
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "",
+          "A",
+          "B",
+          "C"
+        ],
+        "columnValues": [
+          "",
+          "A",
+          "B",
+          "C"
+        ],
+        "stats": [
+          {
+            "kind": "f",
+            "rows": 4,
+            "table": 0,
+            "keys": [
+              {
+                "key": "id",
+                "type": "B",
+                "n": 4
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "n": 4
+              },
+              {
+                "key": "pad",
+                "type": "D",
+                "n": 4,
+                "distinct": 1
+              }
+            ]
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": true,
+        "columnValuesEqual": true,
+        "outputBytes": 386
+      },
+      "outputBytesIdentical": true
+    },
+    {
+      "name": "nested-block-control",
+      "branch": "nested-block",
+      "mode": "nested",
+      "expectedValues": [
+        "",
+        "A",
+        "B",
+        "C"
+      ],
+      "vendorBefore": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "",
+          "A",
+          "B",
+          "C"
+        ],
+        "columnValues": [],
+        "stats": [
+          {
+            "kind": "n",
+            "rows": 4,
+            "table": 0
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": false,
+        "columnValuesEqual": null,
+        "outputBytes": 437
+      },
+      "fixedAfter": {
+        "footerAccepted": true,
+        "footerRows": 4,
+        "decodedRows": 4,
+        "decodedValues": [
+          "",
+          "A",
+          "B",
+          "C"
+        ],
+        "columnValues": [],
+        "stats": [
+          {
+            "kind": "n",
+            "rows": 4,
+            "table": 0
+          }
+        ],
+        "rowComparison": {
+          "equal": true,
+          "mismatchCount": 0,
+          "firstMismatch": null
+        },
+        "columnValuesChecked": false,
+        "columnValuesEqual": null,
+        "outputBytes": 437
+      },
+      "outputBytesIdentical": true
+    }
+  ]
+}

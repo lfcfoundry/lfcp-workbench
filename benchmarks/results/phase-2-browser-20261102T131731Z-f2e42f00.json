@@ -1,0 +1,102 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "startedAt": "2026-11-02T13:17:31.208Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:17:31.215Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "userAgentClientHints": {
+      "architecture": "",
+      "brands": [
+        {
+          "brand": "Not:A-Brand",
+          "version": "8"
+        },
+        {
+          "brand": "Chromium",
+          "version": "156"
+        },
+        {
+          "brand": "Google Chrome",
+          "version": "156"
+        }
+      ],
+      "mobile": true,
+      "model": "Android phone",
+      "platform": "Android",
+      "platformVersion": "(withheld)",
+      "uaFullVersion": "156.0.8078.73"
+    },
+    "language": "en-US",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "available": true,
+      "usageBytes": 173592,
+      "quotaBytes": 10737591832
+    },
+    "worker": true,
+    "file": true,
+    "streams": true,
+    "memory": {
+      "api": "performance.memory (non-standard; main realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "memoryMeasureUserAgentSpecific": false,
+    "lfcp": {
+      "available": true,
+      "version": null,
+      "init": "passed"
+    },
+    "lfcpVersion": "0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "name": "cooperative-cancel-progress",
+      "trigger": "after-progress-read-parse-checkpoint",
+      "format": "JSONL",
+      "inputBytes": 16777188,
+      "rows": 466033,
+      "fields": 3,
+      "lfcpVersion": "0.4.19 / API 0",
+      "status": "pass",
+      "errorKind": "cancelled",
+      "error": "Import cancelled.",
+      "cancelRequested": true,
+      "cancelPoint": {
+        "bytesRead": 65536,
+        "rows": 1820
+      },
+      "newOutputs": [],
+      "incompleteOutputCleanup": true
+    },
+    {
+      "name": "cooperative-cancel-opfs-write",
+      "trigger": "while-opfs-write-awaits",
+      "format": "JSONL",
+      "inputBytes": 16777188,
+      "rows": 466033,
+      "fields": 3,
+      "lfcpVersion": "0.4.19 / API 0",
+      "status": "pass",
+      "errorKind": "cancelled",
+      "error": "Import cancelled.",
+      "cancelRequested": true,
+      "cancelPoint": {
+        "stage": "opfs-write",
+        "partBytes": 291,
+        "outputBytesBeforeWrite": 0
+      },
+      "newOutputs": [],
+      "incompleteOutputCleanup": true
+    }
+  ],
+  "localReport": {
+    "optedIn": true,
+    "target": "same-origin loopback only"
+  }
+}

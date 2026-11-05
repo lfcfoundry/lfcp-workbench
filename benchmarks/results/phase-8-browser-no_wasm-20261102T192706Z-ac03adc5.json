@@ -1,0 +1,59 @@
+{
+  "schema": "lfcp-workbench-phase8-browser-qualification/v1",
+  "capturedAt": "2026-11-02T19:27:05.943Z",
+  "policyId": "no_wasm",
+  "csp": "default-src 'none'; script-src 'self'; style-src 'self'; worker-src blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "browser": {
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "userAgentData": {
+      "architecture": "",
+      "brands": [
+        {
+          "brand": "Not:A-Brand",
+          "version": "8"
+        },
+        {
+          "brand": "Chromium",
+          "version": "156"
+        },
+        {
+          "brand": "Google Chrome",
+          "version": "156"
+        }
+      ],
+      "mobile": true,
+      "model": "Android phone",
+      "platform": "Android",
+      "platformVersion": "(withheld)"
+    },
+    "platform": "Linux armv81"
+  },
+  "capabilities": {
+    "secureContext": true,
+    "wasm": true,
+    "worker": true,
+    "streams": true
+  },
+  "package": {
+    "version": "0.4.19",
+    "apiVersion": 0
+  },
+  "results": [
+    {
+      "name": "wasm-initialization-blocked-without-wasm-unsafe-eval",
+      "status": "pass",
+      "expectedPolicyBlock": true,
+      "error": "WebAssembly.instantiate(): Compiling or instantiating WebAssembly module violates the following Content Security policy directive because 'unsafe-eval' is not an allowed source of script in the following Content Security Policy directive: \"script-src 'self'\"."
+    }
+  ],
+  "workerTrace": [],
+  "result": "pass",
+  "summary": {
+    "tests": 1,
+    "passed": 1,
+    "failed": 0,
+    "workersCreated": 0,
+    "initializedWorkers": 0,
+    "workerJobsCompleted": 0
+  }
+}

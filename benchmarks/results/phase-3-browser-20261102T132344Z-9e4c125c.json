@@ -1,0 +1,56 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "phase": 3,
+  "suite": "opfs-browser-close-interruption-verify",
+  "startedAt": "2026-11-02T13:23:44.368Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:23:44.369Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "status": "measured-approximate-origin-estimate",
+      "usageBytes": 173906,
+      "quotaBytes": 10737592146
+    },
+    "storagePersisted": false,
+    "fileSystemHandleMove": false,
+    "fileSystemWritableStream": true,
+    "pageMemory": {
+      "api": "performance.memory (non-standard; page realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "userAgentSpecificMemory": false,
+    "deviceMemoryGiB": 8,
+    "worker": true,
+    "streams": true,
+    "lfcpVersion": "LFC-pack 0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "status": "observed",
+      "outputName": "phase3-abrupt-restart-20261102-phase3a-fdd25c2d-d960-48be-bd6d-c50e89784ddc.json.lfc",
+      "stageBeforeClose": "finalize",
+      "visibleBytesBeforeClose": 0,
+      "workerReportedBytesBeforeClose": 15772,
+      "entryPresentAfterRestart": true,
+      "bytesAfterRestart": 0,
+      "trailingMarker": "",
+      "readerAccepted": false,
+      "readerError": "not an LFC-pack file: too short",
+      "classification": "incomplete-or-unfinalized-reader-rejected",
+      "generatedOutputRemoved": true
+    }
+  ],
+  "notes": [
+    "This abrupt browser process close was performed with a test Worker gated before writable.close(). Classification is based on the pinned reader plus row-count check; a trailing LFC1 marker alone is not accepted as completion."
+  ],
+  "lifecycleId": "restart-20261102-phase3a",
+  "restartConfirmedByProcedure": true,
+  "finishedAt": "2026-11-02T13:23:44.386Z"
+}

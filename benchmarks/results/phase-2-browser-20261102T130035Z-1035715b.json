@@ -1,0 +1,355 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "startedAt": "2026-11-02T13:00:33.093Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:00:33.099Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "userAgentClientHints": {
+      "architecture": "",
+      "brands": [
+        {
+          "brand": "Not:A-Brand",
+          "version": "8"
+        },
+        {
+          "brand": "Chromium",
+          "version": "156"
+        },
+        {
+          "brand": "Google Chrome",
+          "version": "156"
+        }
+      ],
+      "mobile": true,
+      "model": "Android phone",
+      "platform": "Android",
+      "platformVersion": "(withheld)",
+      "uaFullVersion": "156.0.8078.73"
+    },
+    "language": "en-US",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "available": true,
+      "usageBytes": 50907,
+      "quotaBytes": 10737469147
+    },
+    "worker": true,
+    "file": true,
+    "streams": true,
+    "memory": {
+      "api": "performance.memory (non-standard; main realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "memoryMeasureUserAgentSpecific": false,
+    "lfcp": {
+      "available": true,
+      "version": null,
+      "init": "passed"
+    },
+    "lfcpVersion": "0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "name": "resource-262144",
+      "format": "JSONL",
+      "requestedSourceBytes": 262144,
+      "fields": 3,
+      "status": "pass",
+      "lfcpVersion": "0.4.19 / API 0",
+      "inputBytes": 262116,
+      "rowsExpected": 7281,
+      "inputFields": 3,
+      "storageBefore": {
+        "available": true,
+        "usageBytes": 50907,
+        "quotaBytes": 10737469147
+      },
+      "storageWithSource": {
+        "available": true,
+        "usageBytes": 313225,
+        "quotaBytes": 10737731465
+      },
+      "mainRealmMemoryBefore": {
+        "api": "performance.memory (non-standard; main realm)",
+        "usedHeapBytes": 10000000,
+        "totalHeapBytes": 10000000,
+        "heapLimitBytes": 3140000000
+      },
+      "userAgentMemoryBefore": {
+        "status": "not exposed"
+      },
+      "importWallMs": 134.20000004768372,
+      "parsingMs": 18.40000009536743,
+      "lfcpEncodingMs": 21.699999809265137,
+      "opfsWriteMs": 4.700000286102295,
+      "workerReadMs": 11.900000095367432,
+      "workerMetrics": {
+        "readMs": 11.900000095367432,
+        "parseMs": 18.40000009536743,
+        "encodeMs": 21.699999809265137,
+        "opfsWriteMs": 4.700000286102295,
+        "readCalls": 4,
+        "maxInputChunkBytes": 65536,
+        "maxPendingRecordChars": 35,
+        "maxQueuedLineChars": 262116,
+        "outputParts": 2,
+        "maxOutputPartBytes": 419
+      },
+      "mainRealmMemoryAfter": {
+        "api": "performance.memory (non-standard; main realm)",
+        "usedHeapBytes": 10000000,
+        "totalHeapBytes": 10000000,
+        "heapLimitBytes": 3140000000
+      },
+      "observedPeakMainRealmHeapBytes": 10000000,
+      "mainRealmHeapSampleCount": 4,
+      "mainRealmHeapSamplingIntervalMs": 50,
+      "userAgentMemoryAfter": {
+        "status": "not exposed"
+      },
+      "storageAfterImport": {
+        "available": true,
+        "usageBytes": 314215,
+        "quotaBytes": 10737732455
+      },
+      "outputBytes": 708,
+      "outputName": "phase2-resource-262144-637e2da2-4c4d-4cf2-b0eb-83ccf8ee71fe.json.lfc",
+      "compressionRatio": 0.0027010941720459645,
+      "readerRows": 7281,
+      "lfcpBlockCount": 1,
+      "decodedFirstRows": [
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        },
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        },
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        }
+      ],
+      "footerCorruptionRejected": true,
+      "passAssertions": {
+        "rowCount": true,
+        "multipleBlocksWhenLarge": true,
+        "footerCheck": true
+      },
+      "storageAfterCleanup": {
+        "available": true,
+        "usageBytes": 51897,
+        "quotaBytes": 10737470137
+      }
+    },
+    {
+      "name": "resource-4194304",
+      "format": "JSONL",
+      "requestedSourceBytes": 4194304,
+      "fields": 3,
+      "status": "pass",
+      "lfcpVersion": "0.4.19 / API 0",
+      "inputBytes": 4194288,
+      "rowsExpected": 116508,
+      "inputFields": 3,
+      "storageBefore": {
+        "available": true,
+        "usageBytes": 51897,
+        "quotaBytes": 10737470137
+      },
+      "storageWithSource": {
+        "available": true,
+        "usageBytes": 4246389,
+        "quotaBytes": 10741664629
+      },
+      "mainRealmMemoryBefore": {
+        "api": "performance.memory (non-standard; main realm)",
+        "usedHeapBytes": 10000000,
+        "totalHeapBytes": 10000000,
+        "heapLimitBytes": 3140000000
+      },
+      "userAgentMemoryBefore": {
+        "status": "not exposed"
+      },
+      "importWallMs": 548.8000001907349,
+      "parsingMs": 309.00000166893005,
+      "lfcpEncodingMs": 78.19999980926514,
+      "opfsWriteMs": 71.39999985694885,
+      "workerReadMs": 149.79999828338623,
+      "workerMetrics": {
+        "readMs": 149.79999828338623,
+        "parseMs": 309.00000166893005,
+        "encodeMs": 78.19999980926514,
+        "opfsWriteMs": 71.39999985694885,
+        "readCalls": 64,
+        "maxInputChunkBytes": 65536,
+        "maxPendingRecordChars": 35,
+        "maxQueuedLineChars": 262152,
+        "outputParts": 17,
+        "maxOutputPartBytes": 523
+      },
+      "mainRealmMemoryAfter": {
+        "api": "performance.memory (non-standard; main realm)",
+        "usedHeapBytes": 10000000,
+        "totalHeapBytes": 10000000,
+        "heapLimitBytes": 3140000000
+      },
+      "observedPeakMainRealmHeapBytes": 10000000,
+      "mainRealmHeapSampleCount": 12,
+      "mainRealmHeapSamplingIntervalMs": 50,
+      "userAgentMemoryAfter": {
+        "status": "not exposed"
+      },
+      "storageAfterImport": {
+        "available": true,
+        "usageBytes": 4251852,
+        "quotaBytes": 10741670092
+      },
+      "outputBytes": 5179,
+      "outputName": "phase2-resource-4194304-fe998641-0bcb-41fa-b686-e42e0e0576f9.json.lfc",
+      "compressionRatio": 0.001234774531458021,
+      "readerRows": 116508,
+      "lfcpBlockCount": 16,
+      "decodedFirstRows": [
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        },
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        },
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        }
+      ],
+      "footerCorruptionRejected": true,
+      "passAssertions": {
+        "rowCount": true,
+        "multipleBlocksWhenLarge": true,
+        "footerCheck": true
+      },
+      "storageAfterCleanup": {
+        "available": true,
+        "usageBytes": 57360,
+        "quotaBytes": 10737475600
+      }
+    },
+    {
+      "name": "resource-16777216",
+      "format": "JSONL",
+      "requestedSourceBytes": 16777216,
+      "fields": 3,
+      "status": "pass",
+      "lfcpVersion": "0.4.19 / API 0",
+      "inputBytes": 16777188,
+      "rowsExpected": 466033,
+      "inputFields": 3,
+      "storageBefore": {
+        "available": true,
+        "usageBytes": 57360,
+        "quotaBytes": 10737475600
+      },
+      "storageWithSource": {
+        "available": true,
+        "usageBytes": 16834754,
+        "quotaBytes": 10754252994
+      },
+      "mainRealmMemoryBefore": {
+        "api": "performance.memory (non-standard; main realm)",
+        "usedHeapBytes": 10000000,
+        "totalHeapBytes": 10000000,
+        "heapLimitBytes": 3140000000
+      },
+      "userAgentMemoryBefore": {
+        "status": "not exposed"
+      },
+      "importWallMs": 1340.2999999523163,
+      "parsingMs": 835.5000007152557,
+      "lfcpEncodingMs": 185.49999904632568,
+      "opfsWriteMs": 147.900000333786,
+      "workerReadMs": 449.8999991416931,
+      "workerMetrics": {
+        "readMs": 449.8999991416931,
+        "parseMs": 835.5000007152557,
+        "encodeMs": 185.49999904632568,
+        "opfsWriteMs": 147.900000333786,
+        "readCalls": 256,
+        "maxInputChunkBytes": 65536,
+        "maxPendingRecordChars": 35,
+        "maxQueuedLineChars": 262152,
+        "outputParts": 65,
+        "maxOutputPartBytes": 684
+      },
+      "mainRealmMemoryAfter": {
+        "api": "performance.memory (non-standard; main realm)",
+        "usedHeapBytes": 10000000,
+        "totalHeapBytes": 10000000,
+        "heapLimitBytes": 3140000000
+      },
+      "observedPeakMainRealmHeapBytes": 10000000,
+      "mainRealmHeapSampleCount": 28,
+      "mainRealmHeapSamplingIntervalMs": 50,
+      "userAgentMemoryAfter": {
+        "status": "not exposed"
+      },
+      "storageAfterImport": {
+        "available": true,
+        "usageBytes": 16854348,
+        "quotaBytes": 10754272588
+      },
+      "outputBytes": 19308,
+      "outputName": "phase2-resource-16777216-74344885-d1b5-44eb-af21-0e8f6e266373.json.lfc",
+      "compressionRatio": 0.0011508484020087276,
+      "readerRows": 466033,
+      "lfcpBlockCount": 64,
+      "decodedFirstRows": [
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        },
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        },
+        {
+          "id": 1,
+          "group": "alpha",
+          "value": 17
+        }
+      ],
+      "footerCorruptionRejected": true,
+      "passAssertions": {
+        "rowCount": true,
+        "multipleBlocksWhenLarge": true,
+        "footerCheck": true
+      },
+      "storageAfterCleanup": {
+        "available": true,
+        "usageBytes": 76954,
+        "quotaBytes": 10737495194
+      }
+    }
+  ],
+  "localReport": {
+    "optedIn": true,
+    "target": "same-origin loopback only",
+    "status": "sending"
+  }
+}

@@ -1,0 +1,2693 @@
+{
+  "schema": "lfcp-workbench-variable-string-investigation/v1",
+  "generatedAt": "2026-11-02T19:36:30.439Z",
+  "runtime": {
+    "node": "v26.13.0",
+    "platform": "android",
+    "arch": "arm64"
+  },
+  "library": {
+    "package": "LFC-pack",
+    "version": "0.4.19",
+    "apiVersion": 0,
+    "path": "/data/data/com.termux/files/home/lfcfoundry/lfcp-workbench/experiments/fixes/lfc-pack-0.4.19-string-writer/lfc-pack-fixed.js"
+  },
+  "source": {
+    "repository": "JS-modules",
+    "version": "0.4.19 / API 0",
+    "commit": "6e16aa8044d0a05bafa7c756c949f3537c23e92a",
+    "blob": "dae1cf4a7d9f6f568ea05447f57e9158e7396091"
+  },
+  "result": "pass",
+  "failedChecks": 0,
+  "failures": [],
+  "cases": [
+    {
+      "name": "phase3-length-cycle-literal-values",
+      "inputBytes": 5538,
+      "lfcpBytes": 364,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 6,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 6,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 6,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackText",
+          "status": "pass",
+          "rowCount": 6,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 6,
+        "footerRows": 6,
+        "returnedRows": 6,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 6,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 6
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 6
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 6,
+        "decoded": 6
+      }
+    },
+    {
+      "name": "writer-api-comparison",
+      "inputBytes": 79,
+      "packRowsEqualsPack": true,
+      "packRowsEqualsPackStream": true,
+      "checks": []
+    },
+    {
+      "name": "minimal-packRows",
+      "inputBytes": 79,
+      "lfcpBytes": 329,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackText",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "minimal-pack",
+      "inputBytes": 79,
+      "lfcpBytes": 329,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "minimal-packStream",
+      "inputBytes": 79,
+      "lfcpBytes": 329,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "control-javascript-flat-writer",
+      "inputBytes": 79,
+      "lfcpBytes": 329,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "control-nested-block-writer",
+      "inputBytes": 79,
+      "lfcpBytes": 413,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "n",
+          "rows": 4,
+          "table": 0
+        }
+      ]
+    },
+    {
+      "name": "control-three-rows-under-fast-path-size-guard",
+      "inputBytes": 59,
+      "lfcpBytes": 324,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 3,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 3,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 3,
+        "footerRows": 3,
+        "returnedRows": 3,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 3,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 3
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "control-two-rows-over-fast-path-size-guard",
+      "inputBytes": 108,
+      "lfcpBytes": 356,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 2,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 2,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 2,
+        "footerRows": 2,
+        "returnedRows": 2,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 2,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 2
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 2
+            },
+            {
+              "key": "pad",
+              "type": "s",
+              "n": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trigger-three-rows-over-fast-path-size-guard",
+      "inputBytes": 161,
+      "lfcpBytes": 359,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 3,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 3,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 3,
+        "footerRows": 3,
+        "returnedRows": 3,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 3,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 3
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 3
+            },
+            {
+              "key": "pad",
+              "type": "s",
+              "n": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "trigger-one-column-flat-block",
+      "inputBytes": 108,
+      "lfcpBytes": 288,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "trigger-body-in-multiple-column-flat-block",
+      "inputBytes": 195,
+      "lfcpBytes": 397,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "tag",
+              "type": "D",
+              "n": 4,
+              "distinct": 1
+            },
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            },
+            {
+              "key": "pad",
+              "type": "D",
+              "n": 4,
+              "distinct": 1
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-1",
+      "inputBytes": 79,
+      "lfcpBytes": 329,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-7",
+      "inputBytes": 97,
+      "lfcpBytes": 346,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-8",
+      "inputBytes": 100,
+      "lfcpBytes": 349,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-9",
+      "inputBytes": 103,
+      "lfcpBytes": 347,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-39",
+      "inputBytes": 193,
+      "lfcpBytes": 349,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-40",
+      "inputBytes": 196,
+      "lfcpBytes": 347,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-41",
+      "inputBytes": 199,
+      "lfcpBytes": 347,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-255",
+      "inputBytes": 841,
+      "lfcpBytes": 352,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-256",
+      "inputBytes": 844,
+      "lfcpBytes": 350,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-257",
+      "inputBytes": 847,
+      "lfcpBytes": 349,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-1023",
+      "inputBytes": 3145,
+      "lfcpBytes": 355,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-1024",
+      "inputBytes": 3148,
+      "lfcpBytes": 355,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-1025",
+      "inputBytes": 3151,
+      "lfcpBytes": 355,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-4095",
+      "inputBytes": 12361,
+      "lfcpBytes": 356,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-4096",
+      "inputBytes": 12364,
+      "lfcpBytes": 353,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "ascii-length-boundary-4097",
+      "inputBytes": 12367,
+      "lfcpBytes": 355,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "s-type-first-empty-then-unique",
+      "inputBytes": 79,
+      "lfcpBytes": 329,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "s-type-first-empty-with-repeats",
+      "inputBytes": 79,
+      "lfcpBytes": 327,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "s-type-first-empty-repeated-pattern-control",
+      "inputBytes": 79,
+      "lfcpBytes": 326,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "s-type-empty-middle-control",
+      "inputBytes": 79,
+      "lfcpBytes": 326,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "s-type-two-leading-empty-control",
+      "inputBytes": 78,
+      "lfcpBytes": 327,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "dictionary-type-empty-control",
+      "inputBytes": 159,
+      "lfcpBytes": 351,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "D",
+              "n": 8,
+              "distinct": 2
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "cardinality-8-rows-2-distinct-values",
+      "inputBytes": 166,
+      "lfcpBytes": 347,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "D",
+              "n": 8,
+              "distinct": 2
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "cardinality-8-rows-3-distinct-values",
+      "inputBytes": 166,
+      "lfcpBytes": 344,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "cardinality-8-rows-4-distinct-values",
+      "inputBytes": 166,
+      "lfcpBytes": 344,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "cardinality-8-rows-5-distinct-values",
+      "inputBytes": 166,
+      "lfcpBytes": 346,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "cardinality-8-rows-6-distinct-values",
+      "inputBytes": 166,
+      "lfcpBytes": 341,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "cardinality-8-rows-7-distinct-values",
+      "inputBytes": 166,
+      "lfcpBytes": 347,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "cardinality-8-rows-8-distinct-values",
+      "inputBytes": 166,
+      "lfcpBytes": 346,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "all-empty-string-frequency-control",
+      "inputBytes": 76,
+      "lfcpBytes": 343,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "D",
+              "n": 4,
+              "distinct": 1
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "row-count-12-unique-ascii-control",
+      "inputBytes": 241,
+      "lfcpBytes": 351,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 12,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 12,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 12,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 12,
+        "footerRows": 12,
+        "returnedRows": 12,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 12,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 12
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 12
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 12,
+        "decoded": 12
+      }
+    },
+    {
+      "name": "utf8-character-versus-byte-control",
+      "inputBytes": 83,
+      "lfcpBytes": 330,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 4,
+        "decoded": 4
+      }
+    },
+    {
+      "name": "null-value-control",
+      "inputBytes": 80,
+      "lfcpBytes": 347,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "j",
+              "n": 4,
+              "nulls": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "missing-property-control",
+      "inputBytes": 69,
+      "lfcpBytes": 326,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 4,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 4,
+        "footerRows": 4,
+        "returnedRows": 4,
+        "blocks": 1,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "packStream-two-blocks-empty-first-per-block",
+      "inputBytes": 158,
+      "lfcpBytes": 511,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 2,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        },
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    },
+    {
+      "name": "parallel-writer-comparison",
+      "inputBytes": 158,
+      "packStreamEqualsPackParallel": true,
+      "checks": []
+    },
+    {
+      "name": "packParallel-two-blocks-empty-first-per-block",
+      "inputBytes": 158,
+      "lfcpBytes": 511,
+      "checks": [
+        {
+          "label": "unpackRows",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpack",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        },
+        {
+          "label": "unpackColumns:body",
+          "status": "pass",
+          "rowCount": 8,
+          "mismatchCount": 0
+        }
+      ],
+      "footerAndCounts": {
+        "footerAccepted": true,
+        "expectedRows": 8,
+        "footerRows": 8,
+        "returnedRows": 8,
+        "blocks": 2,
+        "formatMajor": 1,
+        "formatMinor": 0
+      },
+      "blockStats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        },
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "columnLengths": {
+        "expected": 8,
+        "decoded": 8
+      }
+    }
+  ]
+}

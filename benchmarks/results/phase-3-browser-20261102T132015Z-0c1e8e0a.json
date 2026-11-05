@@ -1,0 +1,59 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "phase": 3,
+  "suite": "opfs-completed-file-restart-prepare",
+  "startedAt": "2026-11-02T13:20:15.664Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:20:15.672Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "status": "measured-approximate-origin-estimate",
+      "usageBytes": 173592,
+      "quotaBytes": 10737591832
+    },
+    "storagePersisted": false,
+    "fileSystemHandleMove": false,
+    "fileSystemWritableStream": true,
+    "pageMemory": {
+      "api": "performance.memory (non-standard; page realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "userAgentSpecificMemory": false,
+    "deviceMemoryGiB": 8,
+    "worker": true,
+    "streams": true,
+    "lfcpVersion": "LFC-pack 0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "status": "pass",
+      "stage": "prepared-before-restart",
+      "datasetName": "phase3-restart-restart-20261102-phase3a-3448ffd8-ee94-4360-b992-701f85836ae9.json.lfc",
+      "datasetSizeBytes": 963,
+      "rowCount": 256,
+      "fields": 4,
+      "blockCount": 1,
+      "footerReaderAccepted": true,
+      "footerCorruptionRejected": true,
+      "OPFSIdentity": {
+        "origin": "http://127.0.0.1:8080",
+        "directory": "lfcfoundry-data-workbench",
+        "name": "phase3-restart-restart-20261102-phase3a-3448ffd8-ee94-4360-b992-701f85836ae9.json.lfc",
+        "lastModified": 1793625615807
+      },
+      "retainedForRestart": true
+    }
+  ],
+  "notes": [
+    "This is only the pre-restart half. Close/restart Chrome without clearing site data, then open the same origin with run=persistence-verify and the same lifecycleId."
+  ],
+  "lifecycleId": "restart-20261102-phase3a",
+  "finishedAt": "2026-11-02T13:20:15.842Z"
+}

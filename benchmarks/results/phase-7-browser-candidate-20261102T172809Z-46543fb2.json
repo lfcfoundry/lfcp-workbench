@@ -1,0 +1,228 @@
+{
+  "schema": "lfcp-workbench-phase7-browser-candidate/v1",
+  "capturedAt": "2026-11-02T17:28:09.162Z",
+  "browser": {
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "language": "en-US",
+    "userAgentData": {
+      "architecture": "",
+      "brands": [
+        {
+          "brand": "Not:A-Brand",
+          "version": "8"
+        },
+        {
+          "brand": "Chromium",
+          "version": "156"
+        },
+        {
+          "brand": "Google Chrome",
+          "version": "156"
+        }
+      ],
+      "mobile": true,
+      "model": "Android phone",
+      "platform": "Android",
+      "platformVersion": "(withheld)"
+    }
+  },
+  "capabilities": {
+    "secureContext": true,
+    "wasm": true,
+    "workers": true,
+    "streams": true,
+    "hardwareConcurrency": 8
+  },
+  "package": {
+    "version": "0.4.19",
+    "apiVersion": 0
+  },
+  "results": [
+    {
+      "name": "pinned-vendor-negative-control",
+      "status": "known-mismatch-reproduced",
+      "expectedRows": 4,
+      "decodedRows": 4,
+      "actualBody": [
+        "A",
+        "B",
+        "C",
+        null
+      ]
+    },
+    {
+      "name": "empty-first-early-join",
+      "status": "pass",
+      "rows": 4,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 386,
+      "values": 4
+    },
+    {
+      "name": "empty-middle",
+      "status": "pass",
+      "rows": 4,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 383,
+      "values": 4
+    },
+    {
+      "name": "empty-final",
+      "status": "pass",
+      "rows": 4,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 389,
+      "values": 4
+    },
+    {
+      "name": "consecutive-empties-postscan-join",
+      "status": "pass",
+      "rows": 6,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 392,
+      "values": 6
+    },
+    {
+      "name": "all-empty",
+      "status": "pass",
+      "rows": 4,
+      "blocks": 1,
+      "bodyType": "D",
+      "bytes": 381,
+      "values": 4
+    },
+    {
+      "name": "single-empty",
+      "status": "pass",
+      "rows": 1,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 346,
+      "values": 1
+    },
+    {
+      "name": "ordinary-nonempty",
+      "status": "pass",
+      "rows": 4,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 385,
+      "values": 4
+    },
+    {
+      "name": "mixed-empty-postscan-join",
+      "status": "pass",
+      "rows": 5,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 390,
+      "values": 5
+    },
+    {
+      "name": "low-cardinality-postscan-join",
+      "status": "pass",
+      "rows": 4,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 385,
+      "values": 4
+    },
+    {
+      "name": "dictionary-control",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 1,
+      "bodyType": "D",
+      "bytes": 387,
+      "values": 8
+    },
+    {
+      "name": "cardinality-2",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 1,
+      "bodyType": "D",
+      "bytes": 387,
+      "values": 8
+    },
+    {
+      "name": "cardinality-3",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 407,
+      "values": 8
+    },
+    {
+      "name": "cardinality-4",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 403,
+      "values": 8
+    },
+    {
+      "name": "cardinality-5",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 407,
+      "values": 8
+    },
+    {
+      "name": "cardinality-6",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 407,
+      "values": 8
+    },
+    {
+      "name": "cardinality-7",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 406,
+      "values": 8
+    },
+    {
+      "name": "cardinality-8",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 1,
+      "bodyType": "s",
+      "bytes": 404,
+      "values": 8
+    },
+    {
+      "name": "packStream-small-chunks",
+      "status": "pass",
+      "rows": 4,
+      "blocks": 1,
+      "inputChunkBytes": 13
+    },
+    {
+      "name": "packParallel-two-workers-multiblock",
+      "status": "pass",
+      "rows": 8,
+      "blocks": 2,
+      "workersRequested": 2
+    }
+  ],
+  "summary": {
+    "tests": 20,
+    "passed": 19,
+    "vendorKnownFailures": 1
+  },
+  "result": "pass"
+}

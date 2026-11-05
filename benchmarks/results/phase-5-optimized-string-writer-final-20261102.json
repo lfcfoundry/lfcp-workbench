@@ -1,0 +1,3535 @@
+{
+  "schema": "lfcp-workbench-optimized-string-writer-diagnostics/v1",
+  "generatedAt": "2026-11-02T14:58:48.409Z",
+  "runtime": {
+    "node": "v26.13.0",
+    "platform": "android",
+    "arch": "arm64"
+  },
+  "source": {
+    "package": "LFC-pack 0.4.19 / API 0",
+    "jsModulesReference": "6e16aa8044d0a05bafa7c756c949f3537c23e92a",
+    "jsModulesBlob": "dae1cf4a7d9f6f568ea05447f57e9158e7396091",
+    "sourceFileSha256": "8c312582c7c739fa43b9df82a418a9ac6cdebfcb27cc32ed2e92642dc646c259",
+    "flatscanSourceSha256": "14d8f0c3cd4c841404be5275a2472528e58abd21f3d74173ec69095963adcb60"
+  },
+  "testSummary": {
+    "cases": 12,
+    "reproducedFailures": 8,
+    "passingControls": 4,
+    "byteComparisonsPassed": true
+  },
+  "cases": [
+    {
+      "name": "minimal-four-row-fast-writer",
+      "mode": "fast",
+      "status": "reproduced-mismatch",
+      "inputBytes": 79,
+      "lfcpBytes": 325,
+      "outputSha256": "9e2bd976b7e8b3ebe2f4b459a6aa3ad87d76899a27e6e7b7c8a71630329d99ef",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 4,
+        "blocks": 1,
+        "size": 325,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 4,
+      "mismatches": [
+        {
+          "row": 0,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 0,
+            "utf8Bytes": 0,
+            "value": ""
+          },
+          "actual": {
+            "type": "string",
+            "characters": 1,
+            "utf8Bytes": 1,
+            "value": "A"
+          }
+        },
+        {
+          "row": 1,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 1,
+            "utf8Bytes": 1,
+            "value": "A"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 1,
+            "utf8Bytes": 1,
+            "value": "B"
+          }
+        },
+        {
+          "row": 2,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 1,
+            "utf8Bytes": 1,
+            "value": "B"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 1,
+            "utf8Bytes": 1,
+            "value": "C"
+          }
+        },
+        {
+          "row": 3,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 1,
+            "utf8Bytes": 1,
+            "value": "C"
+          },
+          "actual": {
+            "type": "undefined"
+          }
+        }
+      ],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 4,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 1,
+                "value": "A"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 55,
+                "byteLength": 1,
+                "value": "B"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 75,
+                "byteLength": 1,
+                "value": "C"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 0,
+            "resultWords": [
+              5,
+              0,
+              1,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 3,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "A"
+              },
+              {
+                "code": 2,
+                "cellIndex": 5,
+                "value": "B"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              2
+            ],
+            "helperProcessedRows": 3,
+            "highCardinalityThreshold": 3,
+            "output": {
+              "byteLength": 5,
+              "firstHex": "4100420043",
+              "lastHex": "4100420043"
+            },
+            "nulParts": [
+              {
+                "characters": 1,
+                "utf8Bytes": 1,
+                "value": "A"
+              },
+              {
+                "characters": 1,
+                "utf8Bytes": 1,
+                "value": "B"
+              },
+              {
+                "characters": 1,
+                "utf8Bytes": 1,
+                "value": "C"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 4,
+            "uniqueCountEstimate": null,
+            "dictionaryCellIndexes": [],
+            "codes": null,
+            "sOnly": true,
+            "selected": {
+              "type": "s",
+              "valueCount": 4,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 5,
+                  "storedLength": 5,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 5,
+                    "firstHex": "4100420043",
+                    "lastHex": "4100420043"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 4,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 4,
+                "frames": [
+                  [
+                    1,
+                    1,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 4,
+                "frames": [
+                  [
+                    5,
+                    5,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 100,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              1,
+              5
+            ],
+            "blockBytes": 162
+          }
+        }
+      ],
+      "encodingBranch": "more-than-half-distinct all-values join"
+    },
+    {
+      "name": "six-row-mixed-length-fast-writer",
+      "mode": "fast",
+      "status": "reproduced-mismatch",
+      "inputBytes": 5538,
+      "lfcpBytes": 369,
+      "outputSha256": "95745e351699ad47a3d50983ea134fe8e42eaba700daf8583621da9c8f58610d",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 6,
+        "blocks": 1,
+        "size": 369,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 6,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 6
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 6
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 6,
+      "mismatches": [
+        {
+          "row": 0,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 0,
+            "utf8Bytes": 0,
+            "value": ""
+          },
+          "actual": {
+            "type": "string",
+            "characters": 8,
+            "utf8Bytes": 8,
+            "value": "VTx8vKxt"
+          }
+        },
+        {
+          "row": 1,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 8,
+            "utf8Bytes": 8,
+            "value": "VTx8vKxt"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 40,
+            "utf8Bytes": 40,
+            "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        },
+        {
+          "row": 2,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 40,
+            "utf8Bytes": 40,
+            "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 256,
+            "utf8Bytes": 256,
+            "value": "BBBBBBBBBBBBBBBBBBBBBBBB…(256 chars)…BBBBBBBB"
+          }
+        },
+        {
+          "row": 3,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 256,
+            "utf8Bytes": 256,
+            "value": "BBBBBBBBBBBBBBBBBBBBBBBB…(256 chars)…BBBBBBBB"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 1024,
+            "utf8Bytes": 1024,
+            "value": "CCCCCCCCCCCCCCCCCCCCCCCC…(1024 chars)…CCCCCCCC"
+          }
+        },
+        {
+          "row": 4,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 1024,
+            "utf8Bytes": 1024,
+            "value": "CCCCCCCCCCCCCCCCCCCCCCCC…(1024 chars)…CCCCCCCC"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 4096,
+            "utf8Bytes": 4096,
+            "value": "DDDDDDDDDDDDDDDDDDDDDDDD…(4096 chars)…DDDDDDDD"
+          }
+        },
+        {
+          "row": 5,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 4096,
+            "utf8Bytes": 4096,
+            "value": "DDDDDDDDDDDDDDDDDDDDDDDD…(4096 chars)…DDDDDDDD"
+          },
+          "actual": {
+            "type": "undefined"
+          }
+        }
+      ],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 6,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 8,
+                "value": "VTx8vKxt"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 62,
+                "byteLength": 40,
+                "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 121,
+                "byteLength": 256,
+                "value": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+              },
+              {
+                "cellIndex": 9,
+                "inputOffset": 396,
+                "byteLength": 1024,
+                "value": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+              },
+              {
+                "cellIndex": 11,
+                "inputOffset": 1439,
+                "byteLength": 4096,
+                "value": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 0,
+            "resultWords": [
+              5428,
+              0,
+              1,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 4,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "VTx8vKxt"
+              },
+              {
+                "code": 2,
+                "cellIndex": 5,
+                "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+              },
+              {
+                "code": 3,
+                "cellIndex": 7,
+                "value": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "helperProcessedRows": 4,
+            "highCardinalityThreshold": 4,
+            "output": {
+              "byteLength": 5428,
+              "firstHex": "56547838764b78740041414141414141",
+              "lastHex": "4444444444444444"
+            },
+            "nulParts": [
+              {
+                "characters": 8,
+                "utf8Bytes": 8,
+                "value": "VTx8vKxt"
+              },
+              {
+                "characters": 40,
+                "utf8Bytes": 40,
+                "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+              },
+              {
+                "characters": 256,
+                "utf8Bytes": 256,
+                "value": "BBBBBBBBBBBBBBBBBBBBBBBB…(256 chars)…BBBBBBBB"
+              },
+              {
+                "characters": 1024,
+                "utf8Bytes": 1024,
+                "value": "CCCCCCCCCCCCCCCCCCCCCCCC…(1024 chars)…CCCCCCCC"
+              },
+              {
+                "characters": 4096,
+                "utf8Bytes": 4096,
+                "value": "DDDDDDDDDDDDDDDDDDDDDDDD…(4096 chars)…DDDDDDDD"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 6,
+            "uniqueCountEstimate": null,
+            "dictionaryCellIndexes": [],
+            "codes": null,
+            "sOnly": true,
+            "selected": {
+              "type": "s",
+              "valueCount": 6,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 5428,
+                  "storedLength": 40,
+                  "compressed": true,
+                  "sample": {
+                    "byteLength": 40,
+                    "firstHex": "28b52ffd603414f50000805654783876",
+                    "lastHex": "31ff0af329ac4402"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 6,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 6,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 6,
+                "frames": [
+                  [
+                    5428,
+                    40,
+                    1
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 106,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              3,
+              40
+            ],
+            "blockBytes": 205
+          }
+        }
+      ],
+      "encodingBranch": "more-than-half-distinct all-values join"
+    },
+    {
+      "name": "eight-row-cardinality-2",
+      "mode": "fast",
+      "status": "round-trip-pass",
+      "inputBytes": 166,
+      "lfcpBytes": 347,
+      "outputSha256": "6f283132f809ef4f2a4e7e953c53c0ab6ef6c5eb5f1367074fc24374659729af",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 8,
+        "blocks": 1,
+        "size": 347,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "D",
+              "n": 8,
+              "distinct": 2
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 0,
+      "mismatches": [],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 56,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 77,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 9,
+                "inputOffset": 98,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 11,
+                "inputOffset": 119,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 13,
+                "inputOffset": 140,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 15,
+                "inputOffset": 161,
+                "byteLength": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 2,
+            "resultWords": [
+              3,
+              0,
+              0,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 2,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "v1"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "helperProcessedRows": 8,
+            "highCardinalityThreshold": 5,
+            "output": {
+              "byteLength": 3,
+              "firstHex": "007631",
+              "lastHex": "007631"
+            },
+            "nulParts": [
+              {
+                "characters": 0,
+                "utf8Bytes": 0,
+                "value": ""
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "uniqueCountEstimate": 2,
+            "dictionaryCellIndexes": [
+              1,
+              3
+            ],
+            "codes": [
+              0,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "sOnly": false,
+            "selected": {
+              "type": "D",
+              "valueCount": 8,
+              "params": {
+                "w": 1,
+                "wide": false
+              },
+              "distinctStats": {
+                "distinct": 2
+              },
+              "frames": [
+                {
+                  "rawLength": 3,
+                  "storedLength": 3,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 3,
+                    "firstHex": "007631",
+                    "lastHex": "007631"
+                  }
+                },
+                {
+                  "rawLength": 1,
+                  "storedLength": 1,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 1,
+                    "firstHex": "fe",
+                    "lastHex": "fe"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 8,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "D",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ],
+                  [
+                    1,
+                    1,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 123,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              3,
+              3,
+              1
+            ],
+            "blockBytes": 186
+          }
+        }
+      ],
+      "encodingBranch": "dictionary labels and indices"
+    },
+    {
+      "name": "eight-row-cardinality-3",
+      "mode": "fast",
+      "status": "reproduced-mismatch",
+      "inputBytes": 166,
+      "lfcpBytes": 343,
+      "outputSha256": "ce1bd2d9ddcf324540389e843051326f382a7eaabb6fc938335ee55476ac530c",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 8,
+        "blocks": 1,
+        "size": 343,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 4,
+      "mismatches": [
+        {
+          "row": 0,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 0,
+            "utf8Bytes": 0,
+            "value": ""
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 1,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          }
+        },
+        {
+          "row": 2,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 7,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "undefined"
+          }
+        }
+      ],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 56,
+                "byteLength": 2,
+                "value": "v2"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 77,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 9,
+                "inputOffset": 98,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 11,
+                "inputOffset": 119,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 13,
+                "inputOffset": 140,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 15,
+                "inputOffset": 161,
+                "byteLength": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 3,
+            "resultWords": [
+              20,
+              0,
+              0,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 3,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "v1"
+              },
+              {
+                "code": 2,
+                "cellIndex": 5,
+                "value": "v2"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              2,
+              1,
+              1,
+              1,
+              1,
+              1
+            ],
+            "helperProcessedRows": 8,
+            "highCardinalityThreshold": 5,
+            "output": {
+              "byteLength": 20,
+              "firstHex": "76310076320076310076310076310076",
+              "lastHex": "7631007631007631"
+            },
+            "nulParts": [
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v2"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "uniqueCountEstimate": 3,
+            "dictionaryCellIndexes": [
+              1,
+              3,
+              5
+            ],
+            "codes": null,
+            "sOnly": false,
+            "selected": {
+              "type": "s",
+              "valueCount": 8,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 20,
+                  "storedLength": 20,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 20,
+                    "firstHex": "76310076320076310076310076310076",
+                    "lastHex": "7631007631007631"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 8,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    20,
+                    20,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 101,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              3,
+              20
+            ],
+            "blockBytes": 180
+          }
+        }
+      ],
+      "encodingBranch": "more-than-quarter-distinct all-values join"
+    },
+    {
+      "name": "eight-row-cardinality-4",
+      "mode": "fast",
+      "status": "reproduced-mismatch",
+      "inputBytes": 166,
+      "lfcpBytes": 342,
+      "outputSha256": "0950a936d2d5edd110da3a261881023ad6b09e27d82622e1b4d2cb36a74f9bec",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 8,
+        "blocks": 1,
+        "size": 342,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 5,
+      "mismatches": [
+        {
+          "row": 0,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 0,
+            "utf8Bytes": 0,
+            "value": ""
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 1,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          }
+        },
+        {
+          "row": 2,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v3"
+          }
+        },
+        {
+          "row": 3,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v3"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 7,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "undefined"
+          }
+        }
+      ],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 56,
+                "byteLength": 2,
+                "value": "v2"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 77,
+                "byteLength": 2,
+                "value": "v3"
+              },
+              {
+                "cellIndex": 9,
+                "inputOffset": 98,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 11,
+                "inputOffset": 119,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 13,
+                "inputOffset": 140,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 15,
+                "inputOffset": 161,
+                "byteLength": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 4,
+            "resultWords": [
+              20,
+              0,
+              0,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 4,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "v1"
+              },
+              {
+                "code": 2,
+                "cellIndex": 5,
+                "value": "v2"
+              },
+              {
+                "code": 3,
+                "cellIndex": 7,
+                "value": "v3"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              2,
+              3,
+              1,
+              1,
+              1,
+              1
+            ],
+            "helperProcessedRows": 8,
+            "highCardinalityThreshold": 5,
+            "output": {
+              "byteLength": 20,
+              "firstHex": "76310076320076330076310076310076",
+              "lastHex": "7631007631007631"
+            },
+            "nulParts": [
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v2"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v3"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "uniqueCountEstimate": 4,
+            "dictionaryCellIndexes": [
+              1,
+              3,
+              5,
+              7
+            ],
+            "codes": null,
+            "sOnly": false,
+            "selected": {
+              "type": "s",
+              "valueCount": 8,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 20,
+                  "storedLength": 20,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 20,
+                    "firstHex": "76310076320076330076310076310076",
+                    "lastHex": "7631007631007631"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 8,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    20,
+                    20,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 101,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              3,
+              20
+            ],
+            "blockBytes": 180
+          }
+        }
+      ],
+      "encodingBranch": "more-than-quarter-distinct all-values join"
+    },
+    {
+      "name": "eight-row-cardinality-5",
+      "mode": "fast",
+      "status": "round-trip-pass",
+      "inputBytes": 166,
+      "lfcpBytes": 346,
+      "outputSha256": "27265607d7a962fa4cd6eb2f87c3a4a4816655d7167f7d9fe14afacd8732dd4d",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 8,
+        "blocks": 1,
+        "size": 346,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 0,
+      "mismatches": [],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 56,
+                "byteLength": 2,
+                "value": "v2"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 77,
+                "byteLength": 2,
+                "value": "v3"
+              },
+              {
+                "cellIndex": 9,
+                "inputOffset": 98,
+                "byteLength": 2,
+                "value": "v4"
+              },
+              {
+                "cellIndex": 11,
+                "inputOffset": 119,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 13,
+                "inputOffset": 140,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 15,
+                "inputOffset": 161,
+                "byteLength": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 0,
+            "resultWords": [
+              20,
+              0,
+              0,
+              0
+            ],
+            "outLengthValid": false,
+            "dictionaryCountObserved": 5,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "v1"
+              },
+              {
+                "code": 2,
+                "cellIndex": 5,
+                "value": "v2"
+              },
+              {
+                "code": 3,
+                "cellIndex": 7,
+                "value": "v3"
+              },
+              {
+                "code": 4,
+                "cellIndex": 9,
+                "value": "v4"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1,
+              1,
+              1
+            ],
+            "helperProcessedRows": 8,
+            "highCardinalityThreshold": 5,
+            "output": {
+              "byteLength": 0,
+              "firstHex": "",
+              "lastHex": ""
+            },
+            "nulParts": [
+              {
+                "characters": 0,
+                "utf8Bytes": 0,
+                "value": ""
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.rawjoin.output",
+          "detail": {
+            "key": "body",
+            "byteLength": 39,
+            "sample": {
+              "byteLength": 39,
+              "firstHex": "5b22222c227631222c227632222c2276",
+              "lastHex": "31222c227631225d"
+            },
+            "jsonText": "[\"\",\"v1\",\"v2\",\"v3\",\"v4\",\"v1\",\"v1\",\"v1\"]"
+          }
+        },
+        {
+          "stage": "javascript.string-encoding",
+          "detail": {
+            "valueCount": 8,
+            "values": [
+              {
+                "value": "",
+                "jsCharacters": 0,
+                "utf8Bytes": 0
+              },
+              {
+                "value": "v1",
+                "jsCharacters": 2,
+                "utf8Bytes": 2
+              },
+              {
+                "value": "v2",
+                "jsCharacters": 2,
+                "utf8Bytes": 2
+              },
+              {
+                "value": "v3",
+                "jsCharacters": 2,
+                "utf8Bytes": 2
+              },
+              {
+                "value": "v4",
+                "jsCharacters": 2,
+                "utf8Bytes": 2
+              },
+              {
+                "value": "v1",
+                "jsCharacters": 2,
+                "utf8Bytes": 2
+              },
+              {
+                "value": "v1",
+                "jsCharacters": 2,
+                "utf8Bytes": 2
+              },
+              {
+                "value": "v1",
+                "jsCharacters": 2,
+                "utf8Bytes": 2
+              }
+            ],
+            "sjInput": false,
+            "firstSeenLabels": [
+              "",
+              "v1",
+              "v2",
+              "v3",
+              "v4"
+            ],
+            "indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1,
+              1,
+              1
+            ],
+            "selected": {
+              "type": "s",
+              "valueCount": 8,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 21,
+                  "storedLength": 21,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 21,
+                    "firstHex": "00763100763200763300763400763100",
+                    "lastHex": "7631007631007631"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "dictionaryCellIndexes": [],
+            "codes": null,
+            "sOnly": false,
+            "selected": {
+              "type": "s",
+              "valueCount": 8,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 21,
+                  "storedLength": 21,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 21,
+                    "firstHex": "00763100763200763300763400763100",
+                    "lastHex": "7631007631007631"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 8,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    21,
+                    21,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 103,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              3,
+              21
+            ],
+            "blockBytes": 183
+          }
+        }
+      ],
+      "encodingBranch": "fallback after strdict; 5 distinct values"
+    },
+    {
+      "name": "eight-row-cardinality-6",
+      "mode": "fast",
+      "status": "reproduced-mismatch",
+      "inputBytes": 166,
+      "lfcpBytes": 342,
+      "outputSha256": "742aa1391d61216b570912517d239e95535c03d69f527cdb4a11eac279b39aab",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 8,
+        "blocks": 1,
+        "size": 342,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 7,
+      "mismatches": [
+        {
+          "row": 0,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 0,
+            "utf8Bytes": 0,
+            "value": ""
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 1,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          }
+        },
+        {
+          "row": 2,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v3"
+          }
+        },
+        {
+          "row": 3,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v3"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v4"
+          }
+        },
+        {
+          "row": 4,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v4"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v5"
+          }
+        },
+        {
+          "row": 5,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v5"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 7,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "undefined"
+          }
+        }
+      ],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 56,
+                "byteLength": 2,
+                "value": "v2"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 77,
+                "byteLength": 2,
+                "value": "v3"
+              },
+              {
+                "cellIndex": 9,
+                "inputOffset": 98,
+                "byteLength": 2,
+                "value": "v4"
+              },
+              {
+                "cellIndex": 11,
+                "inputOffset": 119,
+                "byteLength": 2,
+                "value": "v5"
+              },
+              {
+                "cellIndex": 13,
+                "inputOffset": 140,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 15,
+                "inputOffset": 161,
+                "byteLength": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 0,
+            "resultWords": [
+              20,
+              0,
+              1,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 5,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "v1"
+              },
+              {
+                "code": 2,
+                "cellIndex": 5,
+                "value": "v2"
+              },
+              {
+                "code": 3,
+                "cellIndex": 7,
+                "value": "v3"
+              },
+              {
+                "code": 4,
+                "cellIndex": 9,
+                "value": "v4"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ],
+            "helperProcessedRows": 5,
+            "highCardinalityThreshold": 5,
+            "output": {
+              "byteLength": 20,
+              "firstHex": "76310076320076330076340076350076",
+              "lastHex": "7635007631007631"
+            },
+            "nulParts": [
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v2"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v3"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v4"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v5"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "uniqueCountEstimate": null,
+            "dictionaryCellIndexes": [],
+            "codes": null,
+            "sOnly": true,
+            "selected": {
+              "type": "s",
+              "valueCount": 8,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 20,
+                  "storedLength": 20,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 20,
+                    "firstHex": "76310076320076330076340076350076",
+                    "lastHex": "7635007631007631"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 8,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    20,
+                    20,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 101,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              3,
+              20
+            ],
+            "blockBytes": 180
+          }
+        }
+      ],
+      "encodingBranch": "more-than-half-distinct all-values join"
+    },
+    {
+      "name": "eight-row-cardinality-7",
+      "mode": "fast",
+      "status": "reproduced-mismatch",
+      "inputBytes": 166,
+      "lfcpBytes": 343,
+      "outputSha256": "5eb7c9f38600d703a4ea68e377f94bbc92e7e8b14a1ad32317878d1b0ebbf552",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 8,
+        "blocks": 1,
+        "size": 343,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 8,
+      "mismatches": [
+        {
+          "row": 0,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 0,
+            "utf8Bytes": 0,
+            "value": ""
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 1,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          }
+        },
+        {
+          "row": 2,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v3"
+          }
+        },
+        {
+          "row": 3,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v3"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v4"
+          }
+        },
+        {
+          "row": 4,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v4"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v5"
+          }
+        },
+        {
+          "row": 5,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v5"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v6"
+          }
+        },
+        {
+          "row": 6,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v6"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 7,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "undefined"
+          }
+        }
+      ],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 56,
+                "byteLength": 2,
+                "value": "v2"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 77,
+                "byteLength": 2,
+                "value": "v3"
+              },
+              {
+                "cellIndex": 9,
+                "inputOffset": 98,
+                "byteLength": 2,
+                "value": "v4"
+              },
+              {
+                "cellIndex": 11,
+                "inputOffset": 119,
+                "byteLength": 2,
+                "value": "v5"
+              },
+              {
+                "cellIndex": 13,
+                "inputOffset": 140,
+                "byteLength": 2,
+                "value": "v6"
+              },
+              {
+                "cellIndex": 15,
+                "inputOffset": 161,
+                "byteLength": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 0,
+            "resultWords": [
+              20,
+              0,
+              1,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 5,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "v1"
+              },
+              {
+                "code": 2,
+                "cellIndex": 5,
+                "value": "v2"
+              },
+              {
+                "code": 3,
+                "cellIndex": 7,
+                "value": "v3"
+              },
+              {
+                "code": 4,
+                "cellIndex": 9,
+                "value": "v4"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ],
+            "helperProcessedRows": 5,
+            "highCardinalityThreshold": 5,
+            "output": {
+              "byteLength": 20,
+              "firstHex": "76310076320076330076340076350076",
+              "lastHex": "7635007636007631"
+            },
+            "nulParts": [
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v2"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v3"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v4"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v5"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v6"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "uniqueCountEstimate": null,
+            "dictionaryCellIndexes": [],
+            "codes": null,
+            "sOnly": true,
+            "selected": {
+              "type": "s",
+              "valueCount": 8,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 20,
+                  "storedLength": 20,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 20,
+                    "firstHex": "76310076320076330076340076350076",
+                    "lastHex": "7635007636007631"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 8,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    20,
+                    20,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 101,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              3,
+              20
+            ],
+            "blockBytes": 180
+          }
+        }
+      ],
+      "encodingBranch": "more-than-half-distinct all-values join"
+    },
+    {
+      "name": "eight-row-cardinality-8",
+      "mode": "fast",
+      "status": "reproduced-mismatch",
+      "inputBytes": 166,
+      "lfcpBytes": 342,
+      "outputSha256": "570b94d85755ca58bc1e2f09f2df561375662a78b10e5d045a114bc5c8272448",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 8,
+        "blocks": 1,
+        "size": 342,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 8,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 8
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 8
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 8,
+      "mismatches": [
+        {
+          "row": 0,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 0,
+            "utf8Bytes": 0,
+            "value": ""
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          }
+        },
+        {
+          "row": 1,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v1"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          }
+        },
+        {
+          "row": 2,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v2"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v3"
+          }
+        },
+        {
+          "row": 3,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v3"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v4"
+          }
+        },
+        {
+          "row": 4,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v4"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v5"
+          }
+        },
+        {
+          "row": 5,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v5"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v6"
+          }
+        },
+        {
+          "row": 6,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v6"
+          },
+          "actual": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v7"
+          }
+        },
+        {
+          "row": 7,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 2,
+            "utf8Bytes": 2,
+            "value": "v7"
+          },
+          "actual": {
+            "type": "undefined"
+          }
+        }
+      ],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 2,
+                "value": "v1"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 56,
+                "byteLength": 2,
+                "value": "v2"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 77,
+                "byteLength": 2,
+                "value": "v3"
+              },
+              {
+                "cellIndex": 9,
+                "inputOffset": 98,
+                "byteLength": 2,
+                "value": "v4"
+              },
+              {
+                "cellIndex": 11,
+                "inputOffset": 119,
+                "byteLength": 2,
+                "value": "v5"
+              },
+              {
+                "cellIndex": 13,
+                "inputOffset": 140,
+                "byteLength": 2,
+                "value": "v6"
+              },
+              {
+                "cellIndex": 15,
+                "inputOffset": 161,
+                "byteLength": 2,
+                "value": "v7"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 0,
+            "resultWords": [
+              20,
+              0,
+              1,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 5,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "v1"
+              },
+              {
+                "code": 2,
+                "cellIndex": 5,
+                "value": "v2"
+              },
+              {
+                "code": 3,
+                "cellIndex": 7,
+                "value": "v3"
+              },
+              {
+                "code": 4,
+                "cellIndex": 9,
+                "value": "v4"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ],
+            "helperProcessedRows": 5,
+            "highCardinalityThreshold": 5,
+            "output": {
+              "byteLength": 20,
+              "firstHex": "76310076320076330076340076350076",
+              "lastHex": "7635007636007637"
+            },
+            "nulParts": [
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v1"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v2"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v3"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v4"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v5"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v6"
+              },
+              {
+                "characters": 2,
+                "utf8Bytes": 2,
+                "value": "v7"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 8,
+            "uniqueCountEstimate": null,
+            "dictionaryCellIndexes": [],
+            "codes": null,
+            "sOnly": true,
+            "selected": {
+              "type": "s",
+              "valueCount": 8,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 20,
+                  "storedLength": 20,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 20,
+                    "firstHex": "76310076320076330076340076350076",
+                    "lastHex": "7635007636007637"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 8,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    3,
+                    3,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 8,
+                "frames": [
+                  [
+                    20,
+                    20,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 101,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              3,
+              20
+            ],
+            "blockBytes": 180
+          }
+        }
+      ],
+      "encodingBranch": "more-than-half-distinct all-values join"
+    },
+    {
+      "name": "four-row-low-cardinality-all-values-branch",
+      "mode": "fast",
+      "status": "reproduced-mismatch",
+      "inputBytes": 79,
+      "lfcpBytes": 324,
+      "outputSha256": "22af8e47faf7534ecc66162e3a31780302ffd2a8d7cb361bf62cb5ea2b3c4153",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 4,
+        "blocks": 1,
+        "size": 324,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 2,
+      "mismatches": [
+        {
+          "row": 0,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 0,
+            "utf8Bytes": 0,
+            "value": ""
+          },
+          "actual": {
+            "type": "string",
+            "characters": 1,
+            "utf8Bytes": 1,
+            "value": "A"
+          }
+        },
+        {
+          "row": 3,
+          "column": "body",
+          "expected": {
+            "type": "string",
+            "characters": 1,
+            "utf8Bytes": 1,
+            "value": "A"
+          },
+          "actual": {
+            "type": "undefined"
+          }
+        }
+      ],
+      "relevantEvents": [
+        {
+          "stage": "fast.strdict.input",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 4,
+            "values": [
+              {
+                "cellIndex": 1,
+                "inputOffset": 16,
+                "byteLength": 0,
+                "value": ""
+              },
+              {
+                "cellIndex": 3,
+                "inputOffset": 35,
+                "byteLength": 1,
+                "value": "A"
+              },
+              {
+                "cellIndex": 5,
+                "inputOffset": 55,
+                "byteLength": 1,
+                "value": "A"
+              },
+              {
+                "cellIndex": 7,
+                "inputOffset": 75,
+                "byteLength": 1,
+                "value": "A"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.strdict.output",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "returnDistinct": 2,
+            "resultWords": [
+              5,
+              0,
+              0,
+              0
+            ],
+            "outLengthValid": true,
+            "dictionaryCountObserved": 2,
+            "dictionary": [
+              {
+                "code": 0,
+                "cellIndex": 1,
+                "value": ""
+              },
+              {
+                "code": 1,
+                "cellIndex": 3,
+                "value": "A"
+              }
+            ],
+            "codes": [
+              0,
+              1,
+              1,
+              1
+            ],
+            "helperProcessedRows": 4,
+            "highCardinalityThreshold": 3,
+            "output": {
+              "byteLength": 5,
+              "firstHex": "4100410041",
+              "lastHex": "4100410041"
+            },
+            "nulParts": [
+              {
+                "characters": 1,
+                "utf8Bytes": 1,
+                "value": "A"
+              },
+              {
+                "characters": 1,
+                "utf8Bytes": 1,
+                "value": "A"
+              },
+              {
+                "characters": 1,
+                "utf8Bytes": 1,
+                "value": "A"
+              }
+            ]
+          }
+        },
+        {
+          "stage": "fast.column-selection",
+          "detail": {
+            "key": "body",
+            "columnIndex": 1,
+            "stringCount": 4,
+            "uniqueCountEstimate": 2,
+            "dictionaryCellIndexes": [
+              1,
+              3
+            ],
+            "codes": null,
+            "sOnly": false,
+            "selected": {
+              "type": "s",
+              "valueCount": 4,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 5,
+                  "storedLength": 5,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 5,
+                    "firstHex": "4100410041",
+                    "lastHex": "4100410041"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "fast.block-assembled",
+          "detail": {
+            "rows": 4,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 4,
+                "frames": [
+                  [
+                    1,
+                    1,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 4,
+                "frames": [
+                  [
+                    5,
+                    5,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 100,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              1,
+              5
+            ],
+            "blockBytes": 162
+          }
+        }
+      ],
+      "encodingBranch": "more-than-quarter-distinct all-values join"
+    },
+    {
+      "name": "same-four-row-javascript-flat-fallback",
+      "mode": "javascript-flat",
+      "status": "round-trip-pass",
+      "inputBytes": 79,
+      "lfcpBytes": 329,
+      "outputSha256": "981b2953f4b3934c414ba8266476859a9d21370f4f1fbf0302c26d7bbcc2adaa",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 4,
+        "blocks": 1,
+        "size": 329,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "f",
+          "rows": 4,
+          "table": 0,
+          "keys": [
+            {
+              "key": "id",
+              "type": "B",
+              "n": 4
+            },
+            {
+              "key": "body",
+              "type": "s",
+              "n": 4
+            }
+          ]
+        }
+      ],
+      "mismatchCount": 0,
+      "mismatches": [],
+      "relevantEvents": [
+        {
+          "stage": "javascript.string-encoding",
+          "detail": {
+            "valueCount": 4,
+            "values": [
+              {
+                "value": "",
+                "jsCharacters": 0,
+                "utf8Bytes": 0
+              },
+              {
+                "value": "A",
+                "jsCharacters": 1,
+                "utf8Bytes": 1
+              },
+              {
+                "value": "B",
+                "jsCharacters": 1,
+                "utf8Bytes": 1
+              },
+              {
+                "value": "C",
+                "jsCharacters": 1,
+                "utf8Bytes": 1
+              }
+            ],
+            "sjInput": false,
+            "firstSeenLabels": [
+              "",
+              "A",
+              "B"
+            ],
+            "indices": [
+              0,
+              1,
+              2,
+              null
+            ],
+            "selected": {
+              "type": "s",
+              "valueCount": 4,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 6,
+                  "storedLength": 6,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 6,
+                    "firstHex": "004100420043",
+                    "lastHex": "004100420043"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "javascript.flat-column",
+          "detail": {
+            "key": "body",
+            "source": [
+              {
+                "value": "",
+                "jsCharacters": 0,
+                "utf8Bytes": 0
+              },
+              {
+                "value": "A",
+                "jsCharacters": 1,
+                "utf8Bytes": 1
+              },
+              {
+                "value": "B",
+                "jsCharacters": 1,
+                "utf8Bytes": 1
+              },
+              {
+                "value": "C",
+                "jsCharacters": 1,
+                "utf8Bytes": 1
+              }
+            ],
+            "encoded": {
+              "type": "s",
+              "valueCount": 4,
+              "params": {},
+              "frames": [
+                {
+                  "rawLength": 6,
+                  "storedLength": 6,
+                  "compressed": false,
+                  "sample": {
+                    "byteLength": 6,
+                    "firstHex": "004100420043",
+                    "lastHex": "004100420043"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "stage": "javascript.block-assembled",
+          "detail": {
+            "rows": 4,
+            "blockKind": "f",
+            "keys": [
+              "id",
+              "body"
+            ],
+            "columns": [
+              {
+                "key": "id",
+                "type": "B",
+                "declaredValues": 4,
+                "frames": [
+                  [
+                    1,
+                    1,
+                    0
+                  ]
+                ]
+              },
+              {
+                "key": "body",
+                "type": "s",
+                "declaredValues": 4,
+                "frames": [
+                  [
+                    6,
+                    6,
+                    0
+                  ]
+                ]
+              }
+            ],
+            "headerBytes": 41,
+            "compressedMetaBytes": 101,
+            "compressedPresenceBytes": 11,
+            "columnFrameBytes": [
+              1,
+              6
+            ],
+            "blockBytes": 164
+          }
+        }
+      ],
+      "encodingBranch": "not-observed"
+    },
+    {
+      "name": "same-four-row-nested-control",
+      "mode": "nested",
+      "status": "round-trip-pass",
+      "inputBytes": 79,
+      "lfcpBytes": 413,
+      "outputSha256": "5501e65405876744ac3ca5bad8626921a009b1afd60edefc81b2130bd75a42e2",
+      "vendorAndDiagnosticBytesEqual": true,
+      "diagnosticHookOnAndOffBytesEqual": true,
+      "footerAccepted": true,
+      "info": {
+        "rows": 4,
+        "blocks": 1,
+        "size": 413,
+        "major": 1,
+        "minor": 0
+      },
+      "stats": [
+        {
+          "kind": "n",
+          "rows": 4,
+          "table": 0
+        }
+      ],
+      "mismatchCount": 0,
+      "mismatches": [],
+      "relevantEvents": [],
+      "encodingBranch": "not-observed"
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "schema": "lfcp-workbench-phase7-node-regression/v1",
+  "generatedAt": "2026-11-02T17:29:39.281Z",
+  "runtime": {
+    "node": "v26.13.0",
+    "platform": "android",
+    "arch": "arm64"
+  },
+  "runs": [
+    {
+      "name": "pinned-vendor",
+      "exitCode": 1,
+      "result": "fail",
+      "cases": 49,
+      "failedChecks": 98,
+      "library": "/data/data/com.termux/files/home/lfcfoundry/lfcp-workbench/vendor/lfcp/0.4.19/lfc-pack.js",
+      "representativeFailures": [
+        {
+          "case": "phase3-length-cycle-literal-values",
+          "check": "unpackRows",
+          "mismatchCount": 6,
+          "firstMismatch": {
+            "row": 0,
+            "column": "body",
+            "expected": {
+              "type": "string",
+              "characters": 0,
+              "utf8Bytes": 0,
+              "preview": ""
+            },
+            "actual": {
+              "type": "string",
+              "characters": 8,
+              "utf8Bytes": 8,
+              "preview": "VTx8vKxt"
+            }
+          },
+          "lastMismatch": {
+            "row": 5,
+            "column": "body",
+            "expected": {
+              "type": "string",
+              "characters": 4096,
+              "utf8Bytes": 4096,
+              "preview": "DDDDDDDDDDDDDDDDDDDD…DDDDDDDD"
+            },
+            "actual": {
+              "type": "undefined"
+            }
+          }
+        },
+        {
+          "case": "phase3-length-cycle-literal-values",
+          "check": "unpack",
+          "mismatchCount": 6,
+          "firstMismatch": {
+            "row": 0,
+            "column": "body",
+            "expected": {
+              "type": "string",
+              "characters": 0,
+              "utf8Bytes": 0,
+              "preview": ""
+            },
+            "actual": {
+              "type": "string",
+              "characters": 8,
+              "utf8Bytes": 8,
+              "preview": "VTx8vKxt"
+            }
+          },
+          "lastMismatch": {
+            "row": 5,
+            "column": "body",
+            "expected": {
+              "type": "string",
+              "characters": 4096,
+              "utf8Bytes": 4096,
+              "preview": "DDDDDDDDDDDDDDDDDDDD…DDDDDDDD"
+            },
+            "actual": {
+              "type": "undefined"
+            }
+          }
+        },
+        {
+          "case": "phase3-length-cycle-literal-values",
+          "check": "unpackColumns:body",
+          "mismatchCount": 6,
+          "firstMismatch": {
+            "row": 0,
+            "column": "body",
+            "expected": {
+              "type": "string",
+              "characters": 0,
+              "utf8Bytes": 0,
+              "preview": ""
+            },
+            "actual": {
+              "type": "string",
+              "characters": 8,
+              "utf8Bytes": 8,
+              "preview": "VTx8vKxt"
+            }
+          },
+          "lastMismatch": {
+            "row": 5,
+            "column": "<row>",
+            "expected": {
+              "type": "object",
+              "keys": [
+                "body"
+              ]
+            },
+            "actual": {
+              "type": "undefined"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "corrected-candidate",
+      "exitCode": 0,
+      "result": "pass",
+      "cases": 49,
+      "failedChecks": 0,
+      "library": "/data/data/com.termux/files/home/lfcfoundry/lfcp-workbench/experiments/fixes/lfc-pack-0.4.19-string-writer/lfc-pack-fixed.js",
+      "representativeFailures": []
+    }
+  ]
+}

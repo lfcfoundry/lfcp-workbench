@@ -1,0 +1,1618 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "phase": 3,
+  "suite": "representative-resource-matrix",
+  "startedAt": "2026-11-02T13:24:33.117Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:24:33.135Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "status": "measured-approximate-origin-estimate",
+      "usageBytes": 173592,
+      "quotaBytes": 10737591832
+    },
+    "storagePersisted": false,
+    "fileSystemHandleMove": false,
+    "fileSystemWritableStream": true,
+    "pageMemory": {
+      "api": "performance.memory (non-standard; page realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "userAgentSpecificMemory": false,
+    "deviceMemoryGiB": 8,
+    "worker": true,
+    "streams": true,
+    "lfcpVersion": "LFC-pack 0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "workload": "mixed-length-text",
+      "requestedTargetBytes": 262144,
+      "seed": "LFCP-WB-PHASE3-V1/mixed-length-text/262144",
+      "trials": [
+        {
+          "trial": 1,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-262144-phase3-20261102132433-n3v4nbv-r1.jsonl",
+          "inputBytes": 258500,
+          "rows": 269,
+          "fields": 4,
+          "sourceChunkBytesMax": 35056,
+          "generationMs": 66.70000004768372,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 432378,
+            "quotaBytes": 10737850618
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 133.29999995231628,
+          "workerMetrics": {
+            "readMs": 9.400000095367432,
+            "parseMs": 4,
+            "encodeMs": 37.69999980926514,
+            "opfsWriteMs": 6.700000286102295,
+            "readCalls": 4,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4172,
+            "maxQueuedLineChars": 258500,
+            "outputParts": 2,
+            "maxOutputPartBytes": 180412,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 3,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 9.400000095367432,
+          "parsingMs": 4,
+          "encodingMs": 37.69999980926514,
+          "opfsWriteMs": 6.700000286102295,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 4,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 613602,
+            "quotaBytes": 10738031842
+          },
+          "outputName": "phase3-mixed-length-text-262144-phase3-20261102132433-n3v4nbv-r1-0a01ceda-2214-49bd-b4bc-1ad171f2e77d.json.lfc",
+          "outputBytes": 180858,
+          "inputOverOutputRatio": 1.4292981233896205,
+          "outputOverInputFraction": 0.6996441005802708,
+          "decodeValidationMs": 19,
+          "decoding": {
+            "fileBytes": 180858,
+            "lastModified": 1793625873387,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 269,
+              "blocks": 1,
+              "size": 180858,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 269,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              134,
+              268
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "coastal",
+                  "body": "",
+                  "note": "scheduled follow-up"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "coastal",
+                  "body": "VTx8vKxt",
+                  "note": "scheduled follow-up"
+                },
+                "fullDecodeDiagnostic": {
+                  "fullDecodeRows": 269,
+                  "fullDecodeFirstRow": {
+                    "id": 1,
+                    "category": "coastal",
+                    "body": "VTx8vKxt",
+                    "note": "scheduled follow-up"
+                  },
+                  "fullDecodeFirstRowMatches": false
+                }
+              },
+              {
+                "row": 134,
+                "expected": {
+                  "id": 135,
+                  "category": "east",
+                  "body": "hEKM5nVAt9OWYbR7FebcAkYqKRyVmY3LcbQAOdKm",
+                  "note": "invoice reconciled"
+                },
+                "actual": {
+                  "id": 135,
+                  "category": "east",
+                  "body": "AztxPfruysCByEQAatHpLf0pT0lhplQfwTHbaH1VCpElRmkSX0QLRyof5v7XT2QJChY6kCKxvKxQjNpMcj64wiJQkMbUxjmzwc9LZx6Jj12PmHW8KjUgGZffqcOjiU0BbTdeL6BtxVwKHvpdLzYk7pkOUNLTw0lVO2MVaYsnI7feuQ0GbsLiFdkIIW1oEx0Qek7RPWrwEg5nCX2XI9KTi5jIgkbWKM37ZFSocIIqDx0Y85jxK8gVfGEb2wHJLCGO",
+                  "note": "invoice reconciled"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 268,
+                "expected": {
+                  "id": 269,
+                  "category": "coastal",
+                  "body": "ywCningai8Itgh2xf5Xd1tz3431l3RT0MFi3VqVqUudENdoJZ80S7B6bk8Je9SYf6Oo1BHrZTe8QeTxkNxRkRe4ivDnk0gyr9EC9H43YLryaAND2pPGIyLUYC5VbI9mU0SAaa15UX2QUuSCgNkZWZSkE5UwSG6yDTBphwb1wFATVQ0KZ8QBlQ4dSdZFZrhvzzyDkqFI8rg7IjMnKwrtEdM6eU3JkEd677R88T7OWAHYnrFKy78lmpMXMRVMsk3xu4HgO04ujXplRVuv4deWwHDkoE5Z4ar6ISiHaPv57VbKpgbwWrr0lTo0MRgN2SXM55sb6qKO5ao37Ehf6B3JRpEkqvlJyxssaswwGgr4Fz8kGoFplbTeytiI83DnOTYRnaoYVXIFFYfIZdSRBwS5hWmU29EhdYZ94aECtQR6AwKDm4RrvNlfi2083ArdWLduG0Evm5PuHLcnVzRZ2ZEYvMeFlFfwIGn6mSPnc8gic2HgFHxHkLw8cH1NTQyhWplx4EBbW2yV2ceskiWXt16MIvLOplq1Oz9D3PXb6pd9ztJMVtiftB67AhfOrq7MbJiJvIvX6H4oA2JEKh4pAvUAFD1yHklZ5EhTP1NKttQVxK2d1zGadvVbcgubbna6p51m63d5nU8s40hA1WK3LFTePqtYNU3AqnjkeJ3JvevGyuHzgstobwyMWti84WSZRkJ09yU8JOrKfF9es6vIPVIIJWHDGZKU7sYl6WwrvpASnT3L3vOabGtP5Z153VYGG1WAPfkHmUUCBN0BmrieLr1sZoKmHyI24SKmrovQjp0jytaAMPxMG324xPovAQaEV2GBEDdD4Cfkoreo9NwgGWbQ7k5WBWcCRwjcYWVbklemMtbv7vMKFpYnjcc1nx3ZCtW2ucpjA8lE2atKsOlu0IIOIubmVEzlJsyFA8Oxf40NVgblvAwjk8FY2UG6vkS3qf3heu8qcWG7nGegMj4WSDAGJYLKo0qmW4WRYnq3yYFLnKvDyeCOqCgqNZ66bTlCcNj5T",
+                  "note": "manual check completed"
+                },
+                "actual": {
+                  "id": 269,
+                  "category": "coastal",
+                  "note": "manual check completed"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 1,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 613602,
+            "quotaBytes": 10738031842
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-262144-phase3-20261102132433-n3v4nbv-r1-0a01ceda-2214-49bd-b4bc-1ad171f2e77d.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        },
+        {
+          "trial": 2,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-262144-phase3-20261102132433-2a5a5sx-r2.jsonl",
+          "inputBytes": 258500,
+          "rows": 269,
+          "fields": 4,
+          "sourceChunkBytesMax": 35056,
+          "generationMs": 29.59999990463257,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 432378,
+            "quotaBytes": 10737850618
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 93.40000009536743,
+          "workerMetrics": {
+            "readMs": 5.200000047683716,
+            "parseMs": 3.8000001907348633,
+            "encodeMs": 25.699999809265137,
+            "opfsWriteMs": 3.5,
+            "readCalls": 4,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4172,
+            "maxQueuedLineChars": 258500,
+            "outputParts": 2,
+            "maxOutputPartBytes": 180412,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 2,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 5.200000047683716,
+          "parsingMs": 3.8000001907348633,
+          "encodingMs": 25.699999809265137,
+          "opfsWriteMs": 3.5,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 3,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 613601,
+            "quotaBytes": 10738031841
+          },
+          "outputName": "phase3-mixed-length-text-262144-phase3-20261102132433-2a5a5sx-r2-fd4ced0b-57d2-434d-b555-c6e5739aa55e.json.lfc",
+          "outputBytes": 180857,
+          "inputOverOutputRatio": 1.4293060263080777,
+          "outputOverInputFraction": 0.6996402321083172,
+          "decodeValidationMs": 9.300000190734863,
+          "decoding": {
+            "fileBytes": 180857,
+            "lastModified": 1793625873563,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 269,
+              "blocks": 1,
+              "size": 180857,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 269,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              134,
+              268
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "coastal",
+                  "body": "",
+                  "note": "scheduled follow-up"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "coastal",
+                  "body": "VTx8vKxt",
+                  "note": "scheduled follow-up"
+                },
+                "fullDecodeDiagnostic": {
+                  "fullDecodeRows": 269,
+                  "fullDecodeFirstRow": {
+                    "id": 1,
+                    "category": "coastal",
+                    "body": "VTx8vKxt",
+                    "note": "scheduled follow-up"
+                  },
+                  "fullDecodeFirstRowMatches": false
+                }
+              },
+              {
+                "row": 134,
+                "expected": {
+                  "id": 135,
+                  "category": "east",
+                  "body": "hEKM5nVAt9OWYbR7FebcAkYqKRyVmY3LcbQAOdKm",
+                  "note": "invoice reconciled"
+                },
+                "actual": {
+                  "id": 135,
+                  "category": "east",
+                  "body": "AztxPfruysCByEQAatHpLf0pT0lhplQfwTHbaH1VCpElRmkSX0QLRyof5v7XT2QJChY6kCKxvKxQjNpMcj64wiJQkMbUxjmzwc9LZx6Jj12PmHW8KjUgGZffqcOjiU0BbTdeL6BtxVwKHvpdLzYk7pkOUNLTw0lVO2MVaYsnI7feuQ0GbsLiFdkIIW1oEx0Qek7RPWrwEg5nCX2XI9KTi5jIgkbWKM37ZFSocIIqDx0Y85jxK8gVfGEb2wHJLCGO",
+                  "note": "invoice reconciled"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 268,
+                "expected": {
+                  "id": 269,
+                  "category": "coastal",
+                  "body": "ywCningai8Itgh2xf5Xd1tz3431l3RT0MFi3VqVqUudENdoJZ80S7B6bk8Je9SYf6Oo1BHrZTe8QeTxkNxRkRe4ivDnk0gyr9EC9H43YLryaAND2pPGIyLUYC5VbI9mU0SAaa15UX2QUuSCgNkZWZSkE5UwSG6yDTBphwb1wFATVQ0KZ8QBlQ4dSdZFZrhvzzyDkqFI8rg7IjMnKwrtEdM6eU3JkEd677R88T7OWAHYnrFKy78lmpMXMRVMsk3xu4HgO04ujXplRVuv4deWwHDkoE5Z4ar6ISiHaPv57VbKpgbwWrr0lTo0MRgN2SXM55sb6qKO5ao37Ehf6B3JRpEkqvlJyxssaswwGgr4Fz8kGoFplbTeytiI83DnOTYRnaoYVXIFFYfIZdSRBwS5hWmU29EhdYZ94aECtQR6AwKDm4RrvNlfi2083ArdWLduG0Evm5PuHLcnVzRZ2ZEYvMeFlFfwIGn6mSPnc8gic2HgFHxHkLw8cH1NTQyhWplx4EBbW2yV2ceskiWXt16MIvLOplq1Oz9D3PXb6pd9ztJMVtiftB67AhfOrq7MbJiJvIvX6H4oA2JEKh4pAvUAFD1yHklZ5EhTP1NKttQVxK2d1zGadvVbcgubbna6p51m63d5nU8s40hA1WK3LFTePqtYNU3AqnjkeJ3JvevGyuHzgstobwyMWti84WSZRkJ09yU8JOrKfF9es6vIPVIIJWHDGZKU7sYl6WwrvpASnT3L3vOabGtP5Z153VYGG1WAPfkHmUUCBN0BmrieLr1sZoKmHyI24SKmrovQjp0jytaAMPxMG324xPovAQaEV2GBEDdD4Cfkoreo9NwgGWbQ7k5WBWcCRwjcYWVbklemMtbv7vMKFpYnjcc1nx3ZCtW2ucpjA8lE2atKsOlu0IIOIubmVEzlJsyFA8Oxf40NVgblvAwjk8FY2UG6vkS3qf3heu8qcWG7nGegMj4WSDAGJYLKo0qmW4WRYnq3yYFLnKvDyeCOqCgqNZ66bTlCcNj5T",
+                  "note": "manual check completed"
+                },
+                "actual": {
+                  "id": 269,
+                  "category": "coastal",
+                  "note": "manual check completed"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 1,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 613601,
+            "quotaBytes": 10738031841
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-262144-phase3-20261102132433-2a5a5sx-r2-fd4ced0b-57d2-434d-b555-c6e5739aa55e.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        },
+        {
+          "trial": 3,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-262144-phase3-20261102132433-k581dz7-r3.jsonl",
+          "inputBytes": 258500,
+          "rows": 269,
+          "fields": 4,
+          "sourceChunkBytesMax": 35056,
+          "generationMs": 36.299999952316284,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 432378,
+            "quotaBytes": 10737850618
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 133.70000004768372,
+          "workerMetrics": {
+            "readMs": 8.399999856948853,
+            "parseMs": 5,
+            "encodeMs": 31.799999713897705,
+            "opfsWriteMs": 4.5,
+            "readCalls": 4,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4172,
+            "maxQueuedLineChars": 258500,
+            "outputParts": 2,
+            "maxOutputPartBytes": 180412,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 3,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 8.399999856948853,
+          "parsingMs": 5,
+          "encodingMs": 31.799999713897705,
+          "opfsWriteMs": 4.5,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 4,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 613603,
+            "quotaBytes": 10738031843
+          },
+          "outputName": "phase3-mixed-length-text-262144-phase3-20261102132433-k581dz7-r3-ce5e4605-5578-462a-b192-c93547fbf05b.json.lfc",
+          "outputBytes": 180859,
+          "inputOverOutputRatio": 1.4292902205585567,
+          "outputOverInputFraction": 0.6996479690522244,
+          "decodeValidationMs": 23.700000047683716,
+          "decoding": {
+            "fileBytes": 180859,
+            "lastModified": 1793625873779,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 269,
+              "blocks": 1,
+              "size": 180859,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 269,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              134,
+              268
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "coastal",
+                  "body": "",
+                  "note": "scheduled follow-up"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "coastal",
+                  "body": "VTx8vKxt",
+                  "note": "scheduled follow-up"
+                },
+                "fullDecodeDiagnostic": {
+                  "fullDecodeRows": 269,
+                  "fullDecodeFirstRow": {
+                    "id": 1,
+                    "category": "coastal",
+                    "body": "VTx8vKxt",
+                    "note": "scheduled follow-up"
+                  },
+                  "fullDecodeFirstRowMatches": false
+                }
+              },
+              {
+                "row": 134,
+                "expected": {
+                  "id": 135,
+                  "category": "east",
+                  "body": "hEKM5nVAt9OWYbR7FebcAkYqKRyVmY3LcbQAOdKm",
+                  "note": "invoice reconciled"
+                },
+                "actual": {
+                  "id": 135,
+                  "category": "east",
+                  "body": "AztxPfruysCByEQAatHpLf0pT0lhplQfwTHbaH1VCpElRmkSX0QLRyof5v7XT2QJChY6kCKxvKxQjNpMcj64wiJQkMbUxjmzwc9LZx6Jj12PmHW8KjUgGZffqcOjiU0BbTdeL6BtxVwKHvpdLzYk7pkOUNLTw0lVO2MVaYsnI7feuQ0GbsLiFdkIIW1oEx0Qek7RPWrwEg5nCX2XI9KTi5jIgkbWKM37ZFSocIIqDx0Y85jxK8gVfGEb2wHJLCGO",
+                  "note": "invoice reconciled"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 268,
+                "expected": {
+                  "id": 269,
+                  "category": "coastal",
+                  "body": "ywCningai8Itgh2xf5Xd1tz3431l3RT0MFi3VqVqUudENdoJZ80S7B6bk8Je9SYf6Oo1BHrZTe8QeTxkNxRkRe4ivDnk0gyr9EC9H43YLryaAND2pPGIyLUYC5VbI9mU0SAaa15UX2QUuSCgNkZWZSkE5UwSG6yDTBphwb1wFATVQ0KZ8QBlQ4dSdZFZrhvzzyDkqFI8rg7IjMnKwrtEdM6eU3JkEd677R88T7OWAHYnrFKy78lmpMXMRVMsk3xu4HgO04ujXplRVuv4deWwHDkoE5Z4ar6ISiHaPv57VbKpgbwWrr0lTo0MRgN2SXM55sb6qKO5ao37Ehf6B3JRpEkqvlJyxssaswwGgr4Fz8kGoFplbTeytiI83DnOTYRnaoYVXIFFYfIZdSRBwS5hWmU29EhdYZ94aECtQR6AwKDm4RrvNlfi2083ArdWLduG0Evm5PuHLcnVzRZ2ZEYvMeFlFfwIGn6mSPnc8gic2HgFHxHkLw8cH1NTQyhWplx4EBbW2yV2ceskiWXt16MIvLOplq1Oz9D3PXb6pd9ztJMVtiftB67AhfOrq7MbJiJvIvX6H4oA2JEKh4pAvUAFD1yHklZ5EhTP1NKttQVxK2d1zGadvVbcgubbna6p51m63d5nU8s40hA1WK3LFTePqtYNU3AqnjkeJ3JvevGyuHzgstobwyMWti84WSZRkJ09yU8JOrKfF9es6vIPVIIJWHDGZKU7sYl6WwrvpASnT3L3vOabGtP5Z153VYGG1WAPfkHmUUCBN0BmrieLr1sZoKmHyI24SKmrovQjp0jytaAMPxMG324xPovAQaEV2GBEDdD4Cfkoreo9NwgGWbQ7k5WBWcCRwjcYWVbklemMtbv7vMKFpYnjcc1nx3ZCtW2ucpjA8lE2atKsOlu0IIOIubmVEzlJsyFA8Oxf40NVgblvAwjk8FY2UG6vkS3qf3heu8qcWG7nGegMj4WSDAGJYLKo0qmW4WRYnq3yYFLnKvDyeCOqCgqNZ66bTlCcNj5T",
+                  "note": "manual check completed"
+                },
+                "actual": {
+                  "id": 269,
+                  "category": "coastal",
+                  "note": "manual check completed"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 1,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 613603,
+            "quotaBytes": 10738031843
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-262144-phase3-20261102132433-k581dz7-r3-ce5e4605-5578-462a-b192-c93547fbf05b.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        }
+      ]
+    },
+    {
+      "workload": "mixed-length-text",
+      "requestedTargetBytes": 4194304,
+      "seed": "LFCP-WB-PHASE3-V1/mixed-length-text/4194304",
+      "trials": [
+        {
+          "trial": 1,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-4194304-phase3-20261102132433-8mv1kie-r1.jsonl",
+          "inputBytes": 4190351,
+          "rows": 4307,
+          "fields": 4,
+          "sourceChunkBytesMax": 35117,
+          "generationMs": 537.9000000953674,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 4364231,
+            "quotaBytes": 10741782471
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 507.7000000476837,
+          "workerMetrics": {
+            "readMs": 118.89999961853027,
+            "parseMs": 30.40000009536743,
+            "encodeMs": 193.20000004768372,
+            "opfsWriteMs": 66.1000006198883,
+            "readCalls": 64,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4173,
+            "maxQueuedLineChars": 263052,
+            "outputParts": 17,
+            "maxOutputPartBytes": 183491,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 10,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 118.89999961853027,
+          "parsingMs": 30.40000009536743,
+          "encodingMs": 193.20000004768372,
+          "opfsWriteMs": 66.1000006198883,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 12,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 7289769,
+            "quotaBytes": 10744708009
+          },
+          "outputName": "phase3-mixed-length-text-4194304-phase3-20261102132433-8mv1kie-r1-fe86ea2c-1cee-435e-b798-7cd57cd368ca.json.lfc",
+          "outputBytes": 2925170,
+          "inputOverOutputRatio": 1.4325153751747761,
+          "outputOverInputFraction": 0.6980727867426858,
+          "decodeValidationMs": 120.5,
+          "decoding": {
+            "fileBytes": 2925170,
+            "lastModified": 1793625874915,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 4307,
+              "blocks": 16,
+              "size": 2925170,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 4307,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              2153,
+              4306
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "east",
+                  "body": "",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "east",
+                  "body": "pnjb4RUo",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": {
+                  "fullDecodeRows": 4307,
+                  "fullDecodeFirstRow": {
+                    "id": 1,
+                    "category": "east",
+                    "body": "pnjb4RUo",
+                    "note": "account verified"
+                  },
+                  "fullDecodeFirstRowMatches": false
+                }
+              },
+              {
+                "row": 2153,
+                "expected": {
+                  "id": 2154,
+                  "category": "west",
+                  "body": "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",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 2154,
+                  "category": "west",
+                  "body": "",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 4306,
+                "expected": {
+                  "id": 4307,
+                  "category": "north",
+                  "body": "T8eigwENaTaXsIYxMkCc80Wd5iwLDYGkHQCFETY81sHPSXu4AONHJ2n6uQD3DhjsChVslarbOs2eE0Xjvc2XaBIOGPjkvbitJIOTeghszcggNAONGdPTpOnta68GHHfaDf21sOLOA2wGkg1IANdg4hwSXlzsBKDfePUtqO9nDvTAa4lnT3y0AYmwjCECwMv5nPnEoYVNlWnkkdJaTDVJMREMPZ09MpDYH1Y0nq7jqduBRawN9e4YE5GOSsnZfGWLhHFZYIW0tDQRbimyRjEI3L5DQhFxF7PNDV9WqyNbtLFYPeYwZzTvIObobnrOrEROu70W0hF1mWHbtNkps6YlQMo1XOrJ2QU5Jf7Rlmx9lzp2GZUxvcqfVYKqXmLw52sAk9LapqpMHbftCtGleuoHm18JPHuqUF21zJC2oD0oobINlZbEUccSbeAR8MIFcmm3OIlsiBui7FyjtotPT8QpD9BMHQaMabgBGGE0uhl6EOFAg7OusdvDMFQgEtliwmCMpWXLmGAyjW5Uw8HA1LPCwKovBhp1r1pZsFbBnLjopi3vbsmD5NcsLJRqdlMBymy0xR0pOgkk7bbLh86kNP7j06XiSDkkm8pPrIIWzwC76zMOnVmFYA4kmyJP3DNRwiw41hQX89DFleBLPjOtnOWeUGosCFkTaQxaFPZ4Fxb9t7t6T2VOvPrYikMFtPbkCKZ2glloiak7QyR8rVqU3MOe9Z2xBqXZUOjxEYXvhM3VTRSakl5K63wLyPJWEeKtm8SEsOwP7tnJBKStsWERghoQXNwAR1cNs1WI787xMTNvxEuuOlLBokDaGGprqUsofsMBJYAimePkzYglHZZ0MUjrA6VECYEbGLWoVV8t8cXHvHF3wk3ITD1BmZynspe6xGH6qxNscLGvqLItCTPwQWed4yNGIO0CAM6YX0ocxZO5iRrgRoOehJ68NK036FVTs53AsIqRYLONM4oIh6aZBPCTKUW4zX0mOs5c5cVoR4yCWvvwFEKYDCBGYGRmfwdNJfXs",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 4307,
+                  "category": "north",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 16,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 7289769,
+            "quotaBytes": 10744708009
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-4194304-phase3-20261102132433-8mv1kie-r1-fe86ea2c-1cee-435e-b798-7cd57cd368ca.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        },
+        {
+          "trial": 2,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-4194304-phase3-20261102132435-q5ffb1j-r2.jsonl",
+          "inputBytes": 4190351,
+          "rows": 4307,
+          "fields": 4,
+          "sourceChunkBytesMax": 35117,
+          "generationMs": 704.1000001430511,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 4364231,
+            "quotaBytes": 10741782471
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 498.90000009536743,
+          "workerMetrics": {
+            "readMs": 130.60000085830688,
+            "parseMs": 31.59999990463257,
+            "encodeMs": 195.30000114440918,
+            "opfsWriteMs": 70.1999990940094,
+            "readCalls": 64,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4173,
+            "maxQueuedLineChars": 263052,
+            "outputParts": 17,
+            "maxOutputPartBytes": 183491,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 10,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 130.60000085830688,
+          "parsingMs": 31.59999990463257,
+          "encodingMs": 195.30000114440918,
+          "opfsWriteMs": 70.1999990940094,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 11,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 7289771,
+            "quotaBytes": 10744708011
+          },
+          "outputName": "phase3-mixed-length-text-4194304-phase3-20261102132435-q5ffb1j-r2-186f0611-f833-4132-8c59-f40c9e73a877.json.lfc",
+          "outputBytes": 2925172,
+          "inputOverOutputRatio": 1.4325143957346782,
+          "outputOverInputFraction": 0.698073264029672,
+          "decodeValidationMs": 74.89999985694885,
+          "decoding": {
+            "fileBytes": 2925172,
+            "lastModified": 1793625876315,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 4307,
+              "blocks": 16,
+              "size": 2925172,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 4307,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              2153,
+              4306
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "east",
+                  "body": "",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "east",
+                  "body": "pnjb4RUo",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": {
+                  "fullDecodeRows": 4307,
+                  "fullDecodeFirstRow": {
+                    "id": 1,
+                    "category": "east",
+                    "body": "pnjb4RUo",
+                    "note": "account verified"
+                  },
+                  "fullDecodeFirstRowMatches": false
+                }
+              },
+              {
+                "row": 2153,
+                "expected": {
+                  "id": 2154,
+                  "category": "west",
+                  "body": "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",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 2154,
+                  "category": "west",
+                  "body": "",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 4306,
+                "expected": {
+                  "id": 4307,
+                  "category": "north",
+                  "body": "T8eigwENaTaXsIYxMkCc80Wd5iwLDYGkHQCFETY81sHPSXu4AONHJ2n6uQD3DhjsChVslarbOs2eE0Xjvc2XaBIOGPjkvbitJIOTeghszcggNAONGdPTpOnta68GHHfaDf21sOLOA2wGkg1IANdg4hwSXlzsBKDfePUtqO9nDvTAa4lnT3y0AYmwjCECwMv5nPnEoYVNlWnkkdJaTDVJMREMPZ09MpDYH1Y0nq7jqduBRawN9e4YE5GOSsnZfGWLhHFZYIW0tDQRbimyRjEI3L5DQhFxF7PNDV9WqyNbtLFYPeYwZzTvIObobnrOrEROu70W0hF1mWHbtNkps6YlQMo1XOrJ2QU5Jf7Rlmx9lzp2GZUxvcqfVYKqXmLw52sAk9LapqpMHbftCtGleuoHm18JPHuqUF21zJC2oD0oobINlZbEUccSbeAR8MIFcmm3OIlsiBui7FyjtotPT8QpD9BMHQaMabgBGGE0uhl6EOFAg7OusdvDMFQgEtliwmCMpWXLmGAyjW5Uw8HA1LPCwKovBhp1r1pZsFbBnLjopi3vbsmD5NcsLJRqdlMBymy0xR0pOgkk7bbLh86kNP7j06XiSDkkm8pPrIIWzwC76zMOnVmFYA4kmyJP3DNRwiw41hQX89DFleBLPjOtnOWeUGosCFkTaQxaFPZ4Fxb9t7t6T2VOvPrYikMFtPbkCKZ2glloiak7QyR8rVqU3MOe9Z2xBqXZUOjxEYXvhM3VTRSakl5K63wLyPJWEeKtm8SEsOwP7tnJBKStsWERghoQXNwAR1cNs1WI787xMTNvxEuuOlLBokDaGGprqUsofsMBJYAimePkzYglHZZ0MUjrA6VECYEbGLWoVV8t8cXHvHF3wk3ITD1BmZynspe6xGH6qxNscLGvqLItCTPwQWed4yNGIO0CAM6YX0ocxZO5iRrgRoOehJ68NK036FVTs53AsIqRYLONM4oIh6aZBPCTKUW4zX0mOs5c5cVoR4yCWvvwFEKYDCBGYGRmfwdNJfXs",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 4307,
+                  "category": "north",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 16,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 7289771,
+            "quotaBytes": 10744708011
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-4194304-phase3-20261102132435-q5ffb1j-r2-186f0611-f833-4132-8c59-f40c9e73a877.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        },
+        {
+          "trial": 3,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-4194304-phase3-20261102132436-7tgb8xa-r3.jsonl",
+          "inputBytes": 4190351,
+          "rows": 4307,
+          "fields": 4,
+          "sourceChunkBytesMax": 35117,
+          "generationMs": 518.5,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 4364231,
+            "quotaBytes": 10741782471
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 474.39999985694885,
+          "workerMetrics": {
+            "readMs": 120.19999980926514,
+            "parseMs": 28.000000715255737,
+            "encodeMs": 188.99999976158142,
+            "opfsWriteMs": 64.20000004768372,
+            "readCalls": 64,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4173,
+            "maxQueuedLineChars": 263052,
+            "outputParts": 17,
+            "maxOutputPartBytes": 183491,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 10,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 120.19999980926514,
+          "parsingMs": 28.000000715255737,
+          "encodingMs": 188.99999976158142,
+          "opfsWriteMs": 64.20000004768372,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 11,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 7289769,
+            "quotaBytes": 10744708009
+          },
+          "outputName": "phase3-mixed-length-text-4194304-phase3-20261102132436-7tgb8xa-r3-69b4f9c4-028b-48ef-9e93-cff6e160073b.json.lfc",
+          "outputBytes": 2925170,
+          "inputOverOutputRatio": 1.4325153751747761,
+          "outputOverInputFraction": 0.6980727867426858,
+          "decodeValidationMs": 87.89999985694885,
+          "decoding": {
+            "fileBytes": 2925170,
+            "lastModified": 1793625877479,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 4307,
+              "blocks": 16,
+              "size": 2925170,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 4307,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              2153,
+              4306
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "east",
+                  "body": "",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "east",
+                  "body": "pnjb4RUo",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": {
+                  "fullDecodeRows": 4307,
+                  "fullDecodeFirstRow": {
+                    "id": 1,
+                    "category": "east",
+                    "body": "pnjb4RUo",
+                    "note": "account verified"
+                  },
+                  "fullDecodeFirstRowMatches": false
+                }
+              },
+              {
+                "row": 2153,
+                "expected": {
+                  "id": 2154,
+                  "category": "west",
+                  "body": "ZPPWR0M1DUtADnZbhUJAS9VTF4EpLhwy7GUsgiGs9vETQfpF8C8kdSfyYULrB2quTTeNKdi5ElQTC0euMKQaAaaCWW3pNIHNeotc6hSY31upglZW4EwQt2iMeA682QoGpjO4L6HvQHElU98xAD96UyeMODPhOlkxMgc72Dn5tQISLfP3kmQ5tpoTk1hVmgtZa3bRbHBIgb3FFFjLUIYpD2IdEYWfFSIE6H7rrkkdq70hnUZ1oi72XJHm7j4prc9hkvJqMYFl9lawFB48mRGPADIcAxOzmbgnV6FOo0bxV31jUCmOF7EOq9G79VC03Nti18b7ZinGWsDHs4KgSh3Xi6E6NmXGPIbF95eG1IXvHl47O2UTSUBHRS9RPOUEFMOlH9SwESxq4s4hgaog1ODCWJwYQUW4FoS3seBMovGt94lTLPjocdLZSOnp5NFGEnsCG15AUH9yOj9d15voXmJKulNi6x6zP5kBrYBTUTNDU3jUHrl11gfktXLPgOxeeCs7Cg0KesV8sfb7bPcQxKGJikXawnZT2GmCzwYb73fwWd3asHilw0gXLQDfsfG02xWAwXsBtyNNkWIFw6NdxQLE1CqSEAwdg65Y1QBxINs3oOjoSQdxzEufLTj1rGid08TRsWHeajwKyhFbu8xzAOzH47M11hGXEaiF0JxTL5ueiA4RXNqpXOb65ww6VydLy2a2HNKXwRYdoRxiS8Yv4eUHKl22Dmz9jSTEDoc2QMl8DDUWVnUR3jEE6yT1uZFyvDuGVDJRqsgwIKeWjoLsk0dw4JYuao3HvZgs2xqC8UWe7VfvTBYPDZf5yHncWt5sDN96Y4jSBzFBf9ZPsqbczu9lSitPS3jz9uK05yjAX8tNQM83YGdp3sQJa0vQ5tBB6TRl9hb8f7SNmOUFbOgkpstzHUev2IKFwvNAOa2Ecz2lVhLuHVxOPKE48Yj7YE5vZIt7WoKyoB4PtAUQnImvl8n2oMCMzIcySMYpKYSb2IlRvpbXJhEJhpBvbC4c2BdKGw2yVBq251yXsUECzkFivd06SsHbD4gxw2jYBaWTGPgJVGst0auut5Sf2x5PWp0oCQ15Kdo5H47z5uln0D096235qIPbDh5PCzzHMdb5V71Bxe0CL6sY7SNfyRWmyEujDgnGYmHu4CIZv8DsbDgj9tN11sEFlOa8FXDt7bdcEmxJBLATl0WVFiy1pXkuyIWxLSSZznt6Ixc9J8BtW34PXedxxfFxNxruo66Cac7CzFjyPRhqBWnbOi9jBcOXRGA8ntLILXzUGSEcvyC1eOURJzYvEKz1udg58rXWq3uLqrUkDtQVYf2JTwGNDBHAtSeMNvdmJd3WvGQcieoqdEa5IJmRpnV3QwX8CcONuOBGz32t494Im0gUPrrRQKOfuJyfibyyQC1y7INCv7t5fPTtC16U3Ydm0AlaDfVzCQw5gnveDoXK5FQ09CncR1w4xdjiRglNujOQU3F92v9or3WS6kScMSCTfuupEgwpInHCufh4iqorGdYHkl9GzO7Ez8pUUtcYRLjTUShCG9UyL1kfUqchjNizWB5TrnmFJrroxRHAMbgbIqYp0uma5PiR4erDB4Qz4sfOf5pQGYXdu2nycNQLp3kldTJ4bA546KXZpVBrm54XD8wWWQQ2sFE0nZdbAaulHsNJy3Xq9UiD42yfVpix6Ni13Lg90IoWs6G5fkPt3orXkGEzClcGQMHrJZWogJOkBY9zMZd8IokFSR76fjda30DQG5nZNcgpiQ2linD3rERj0zZNQ448vAEtx8vTd1boukEasxXU5ea6OWlQoSeuog7N90TQndZDaH7F7wgsTGN3hkkvhMEtNNlIOyAUqUOHai8PJIkdAR4FzrFolf1TGxoJBMootRyB4JAAzjAwZiQxsZc5v1RirbQJmmKxL0aK5etRbwTBfFFlGtqW0zDgNRTFimsrqzDNFukIx2NFq4VZ5cbL2EwbyDU10uNgeKChu7sfDxodjRVLZjBDHijwEpOrxW7DJfx71LbF7IrmHC0DyItAVYqsC3lqBDmfNErWAmWKZn7LquyC9m0QYb8c9yR93F3J5bP3lXi6frQxwb5FIVTw9VrOQcVNmPmcCExZBy3hZo4VxMjQSIStONzHwcAU7UUJKgnDBNgQfyr5DruyAMz8grEAmfNKYgwzMT4Oqu8anQv6gLk8LMyzGX5Y5lfU1vVhuMdZdHI84ndi1NpzHQKyCsVJUVRKUskZtuGFsoNTtiQmWuphxg88FwSiU7wrFnrfpcl8ZvnNcFjfNmFm5oSHVDQaXOzLziIEZ4U33fx9GFctPUlhkqeyXbuAIY2sjqQX5YBH0cnT01ElkyjDdpimQHZGUneOlbYILRSBNqI464MMkAiLKi0emPH0TvHBsXIkjAeq9WY4pJuih9Q2BL8r8Zm9wAMeRCyFlLGH7mJSshgMBISDBznLL5m70MB4GzdUVpSeho7BQjeGcCbRmOoBQkFzTItdWITGkDbYXaYHZHICOeOOdMvMNs5z9TN5gUVyXoKMCwcd6xrz7y9pSBJqShFu3qNcjwgrrqE3zbNSdqOAQgpM9czhr5mim9P7MTiWtJvSJ00dyIrF5t0i9M4gpXmh6PrBNgrHxMeearF83pxQzsrLdyKxOJ2odi3pEHD8NlYsmhrFxPvcYtUL4UhC1u5Duie6qmPlYdWblaM1pZ3tspD76cVCjDuh9vV7JNIcuf5pAxIUm7WiS9m1FPu7FkfiC3DGlBJefKYRg08ySUukYCtTRegFqEW434jjavYdgXK4ueOoaBAHJqyOpIfEZ0b0TNS3srJSZf2mqDF9swQIVDA1UjEDRQzjhsytw5RfOclSF6z9r4Y375DK5WzmcMWYlaROLP9I3jS5aIgaNKTORheeIVRpI4JpQySSq1AfAbl6M7aYVh4ftwvNnvnp9wcHmaayPaSTVYEm3Wc4ZFUqsUAZ3fDKvxrSbaMqCABG3UmVtFMm7DtUSrvVaZYrl7e7vcP2icMNObmJTvCSnPoWog4e3ZTZKZJSX2G4TcZRRIi1YQaXqfGRrCoRFaHTVPkg4aqekefj33pypdEjeOe5tkpll7kCiO9oLSb0zUhBI3vu1GMStPlMNaN2hZ1tCftCQYFxg91rqXXyA4OlVWR33J1RAUEH3cifJhl9sZ4eU046IQqUhC4xixqVLygRkWIe5MDCiImQG1Ozh6FEkTfash0POwZ0udT7K4DENoycB8XIj5hFIOeNUDAbC1eEb6sTWGZ5XwXURLbD1fWxvmdz7B7vOwnjZzRBRWhyAw6fvtyCld7UTZqXHUOwl7lwI1nUeegPsoDyIPuiK5C2aUf5gKbPpcawdEMLyR1CKcLAdDaaPhXl2Mcyk77PqsggnmxermzV8Dp0DPejQMGmboc3aICNIxB69UVMO0CXLWKWRRpdWzLDBiixYEG9nkuxjXkpwczKSHALO3scj2kg8ksBtL3VYAaR7K9uOxMy0htdkxoRTsIHY158LYKsFPWBbk6k413SxrVfIOSl60avv76Glwp3lgETvZpmG0D3SiamWzoSpHewDYdUTGHYdfAXIT3qXOeHFWBUE2M7yjucOsZJqPTyZzADu9HTBYuPIfVIo73OpZCOAt9GX3XDVbHnCejsLHre0VNrwj3EqrVownE0xNroAeDeUbkRlGZzKDIFVlVStNrXz3wQp0PXN6HNqNK4UoJed9ZdIrfEOIptfFWPGMowXQedRwOXUbejiA07EFZl1LN6MdNWzfgWYJaraWTSG4279uRRE0gPjFrIAo4AEfxJuOHVfffgFjUfdncNLY6MYFZ3UKrQEVKTQg9SB30FfhZGHayvK0pHh02x2A5NmycyN4lzldsZO8dJhkdr4Fbxc3REwaFG5ZPdjZ6MUyiTsAUwN5AoSOY2XVQD9MUjAmiptyzbKZsPkvnVblaxa8g9sW0NPtp8WeJUeWuj6lSR7ulIBlO6kYAff9mVk69Rj6nfLDjbdv8GlJkA0ZwvhKO9zhuVokNHAdyDAwBHnJQ9lINKpfoEq5jacZM8AnxFrZEclMir8vfBT1ZAfsw89WlaCeeUvdAVo2G4mC4DMPXzd0H1b39Acrrn",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 2154,
+                  "category": "west",
+                  "body": "",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 4306,
+                "expected": {
+                  "id": 4307,
+                  "category": "north",
+                  "body": "T8eigwENaTaXsIYxMkCc80Wd5iwLDYGkHQCFETY81sHPSXu4AONHJ2n6uQD3DhjsChVslarbOs2eE0Xjvc2XaBIOGPjkvbitJIOTeghszcggNAONGdPTpOnta68GHHfaDf21sOLOA2wGkg1IANdg4hwSXlzsBKDfePUtqO9nDvTAa4lnT3y0AYmwjCECwMv5nPnEoYVNlWnkkdJaTDVJMREMPZ09MpDYH1Y0nq7jqduBRawN9e4YE5GOSsnZfGWLhHFZYIW0tDQRbimyRjEI3L5DQhFxF7PNDV9WqyNbtLFYPeYwZzTvIObobnrOrEROu70W0hF1mWHbtNkps6YlQMo1XOrJ2QU5Jf7Rlmx9lzp2GZUxvcqfVYKqXmLw52sAk9LapqpMHbftCtGleuoHm18JPHuqUF21zJC2oD0oobINlZbEUccSbeAR8MIFcmm3OIlsiBui7FyjtotPT8QpD9BMHQaMabgBGGE0uhl6EOFAg7OusdvDMFQgEtliwmCMpWXLmGAyjW5Uw8HA1LPCwKovBhp1r1pZsFbBnLjopi3vbsmD5NcsLJRqdlMBymy0xR0pOgkk7bbLh86kNP7j06XiSDkkm8pPrIIWzwC76zMOnVmFYA4kmyJP3DNRwiw41hQX89DFleBLPjOtnOWeUGosCFkTaQxaFPZ4Fxb9t7t6T2VOvPrYikMFtPbkCKZ2glloiak7QyR8rVqU3MOe9Z2xBqXZUOjxEYXvhM3VTRSakl5K63wLyPJWEeKtm8SEsOwP7tnJBKStsWERghoQXNwAR1cNs1WI787xMTNvxEuuOlLBokDaGGprqUsofsMBJYAimePkzYglHZZ0MUjrA6VECYEbGLWoVV8t8cXHvHF3wk3ITD1BmZynspe6xGH6qxNscLGvqLItCTPwQWed4yNGIO0CAM6YX0ocxZO5iRrgRoOehJ68NK036FVTs53AsIqRYLONM4oIh6aZBPCTKUW4zX0mOs5c5cVoR4yCWvvwFEKYDCBGYGRmfwdNJfXs",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 4307,
+                  "category": "north",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 16,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 7289769,
+            "quotaBytes": 10744708009
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-4194304-phase3-20261102132436-7tgb8xa-r3-69b4f9c4-028b-48ef-9e93-cff6e160073b.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        }
+      ]
+    },
+    {
+      "workload": "mixed-length-text",
+      "requestedTargetBytes": 16777216,
+      "seed": "LFCP-WB-PHASE3-V1/mixed-length-text/16777216",
+      "trials": [
+        {
+          "trial": 1,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-16777216-phase3-20261102132437-u88gw6j-r1.jsonl",
+          "inputBytes": 16777107,
+          "rows": 17224,
+          "fields": 4,
+          "sourceChunkBytesMax": 35162,
+          "generationMs": 2360.399999856949,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 16950989,
+            "quotaBytes": 10754369229
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 2965.7000000476837,
+          "workerMetrics": {
+            "readMs": 897.5999970436096,
+            "parseMs": 189.90000367164612,
+            "encodeMs": 1217.199999332428,
+            "opfsWriteMs": 472.0000009536743,
+            "readCalls": 256,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4174,
+            "maxQueuedLineChars": 263354,
+            "outputParts": 65,
+            "maxOutputPartBytes": 183483,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 59,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 897.5999970436096,
+          "parsingMs": 189.90000367164612,
+          "encodingMs": 1217.199999332428,
+          "opfsWriteMs": 472.0000009536743,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 61,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 28654594,
+            "quotaBytes": 10766072834
+          },
+          "outputName": "phase3-mixed-length-text-16777216-phase3-20261102132437-u88gw6j-r1-21ceb617-b157-4109-ab46-1eddf3de2d72.json.lfc",
+          "outputBytes": 11703235,
+          "inputOverOutputRatio": 1.433544400330336,
+          "outputOverInputFraction": 0.6975716969558577,
+          "decodeValidationMs": 176.79999995231628,
+          "decoding": {
+            "fileBytes": 11703235,
+            "lastModified": 1793625882999,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 17224,
+              "blocks": 64,
+              "size": 11703235,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 17224,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              8611,
+              17223
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "central",
+                  "body": "",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "central",
+                  "body": "bfXEI8qy",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 8611,
+                "expected": {
+                  "id": 8612,
+                  "category": "south",
+                  "body": "zXXvYkRy",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 8612,
+                  "category": "south",
+                  "body": "hd2HLMoE5UYckt1gQl2K8INXAeAmSJqm7oGAwzxk",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 17223,
+                "expected": {
+                  "id": 17224,
+                  "category": "south",
+                  "body": "R86FBvkofU8OCiH02tBn2ZR0yBDKNGlqo4VFU2LfzC2ZCTo2JL0j8grFfeNKW9KHnUeZFUC4IaxkERnDZ7eMrv0qxOAO8WXQyzkLhPaIKbQbvD8tCEFpoB2mNrII4zBE9JjGLPVGywzPt0abetTjaZ6rZDYrO7fsHmSqsQCyLVfwLglmS30FTInzzrDdvUMfeAuFqojG14ri6vyYmaMpzNryEpuXDAqdMRdESIdKv0SS6cjL3Rv9OEIS67xZsY5v",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 17224,
+                  "category": "south",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 64,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 28654594,
+            "quotaBytes": 10766072834
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-16777216-phase3-20261102132437-u88gw6j-r1-21ceb617-b157-4109-ab46-1eddf3de2d72.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        },
+        {
+          "trial": 2,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-16777216-phase3-20261102132443-0owhz0g-r2.jsonl",
+          "inputBytes": 16777107,
+          "rows": 17224,
+          "fields": 4,
+          "sourceChunkBytesMax": 35162,
+          "generationMs": 2135.2000000476837,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 16950989,
+            "quotaBytes": 10754369229
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 2111.7000000476837,
+          "workerMetrics": {
+            "readMs": 634.300000667572,
+            "parseMs": 136.49999618530273,
+            "encodeMs": 887.4999992847443,
+            "opfsWriteMs": 310.60000133514404,
+            "readCalls": 256,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4174,
+            "maxQueuedLineChars": 263354,
+            "outputParts": 65,
+            "maxOutputPartBytes": 183483,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 42,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 634.300000667572,
+          "parsingMs": 136.49999618530273,
+          "encodingMs": 887.4999992847443,
+          "opfsWriteMs": 310.60000133514404,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 44,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 28654597,
+            "quotaBytes": 10766072837
+          },
+          "outputName": "phase3-mixed-length-text-16777216-phase3-20261102132443-0owhz0g-r2-99c97495-ae0a-4e39-b901-f6ade24fa213.json.lfc",
+          "outputBytes": 11703238,
+          "inputOverOutputRatio": 1.4335440328565479,
+          "outputOverInputFraction": 0.6975718757709538,
+          "decodeValidationMs": 193.10000014305115,
+          "decoding": {
+            "fileBytes": 11703238,
+            "lastModified": 1793625887519,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 17224,
+              "blocks": 64,
+              "size": 11703238,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 17224,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              8611,
+              17223
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "central",
+                  "body": "",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "central",
+                  "body": "bfXEI8qy",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 8611,
+                "expected": {
+                  "id": 8612,
+                  "category": "south",
+                  "body": "zXXvYkRy",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 8612,
+                  "category": "south",
+                  "body": "hd2HLMoE5UYckt1gQl2K8INXAeAmSJqm7oGAwzxk",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 17223,
+                "expected": {
+                  "id": 17224,
+                  "category": "south",
+                  "body": "R86FBvkofU8OCiH02tBn2ZR0yBDKNGlqo4VFU2LfzC2ZCTo2JL0j8grFfeNKW9KHnUeZFUC4IaxkERnDZ7eMrv0qxOAO8WXQyzkLhPaIKbQbvD8tCEFpoB2mNrII4zBE9JjGLPVGywzPt0abetTjaZ6rZDYrO7fsHmSqsQCyLVfwLglmS30FTInzzrDdvUMfeAuFqojG14ri6vyYmaMpzNryEpuXDAqdMRdESIdKv0SS6cjL3Rv9OEIS67xZsY5v",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 17224,
+                  "category": "south",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 64,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 28654597,
+            "quotaBytes": 10766072837
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-16777216-phase3-20261102132443-0owhz0g-r2-99c97495-ae0a-4e39-b901-f6ade24fa213.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        },
+        {
+          "trial": 3,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-16777216-phase3-20261102132447-9czeorr-r3.jsonl",
+          "inputBytes": 16777107,
+          "rows": 17224,
+          "fields": 4,
+          "sourceChunkBytesMax": 35162,
+          "generationMs": 2641.0999999046326,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 16950989,
+            "quotaBytes": 10754369229
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 2483.7000000476837,
+          "workerMetrics": {
+            "readMs": 797.7999997138977,
+            "parseMs": 154.69999814033508,
+            "encodeMs": 1017.6999979019165,
+            "opfsWriteMs": 375.60000133514404,
+            "readCalls": 256,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4174,
+            "maxQueuedLineChars": 263354,
+            "outputParts": 65,
+            "maxOutputPartBytes": 183483,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 50,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 797.7999997138977,
+          "parsingMs": 154.69999814033508,
+          "encodingMs": 1017.6999979019165,
+          "opfsWriteMs": 375.60000133514404,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 51,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 28654596,
+            "quotaBytes": 10766072836
+          },
+          "outputName": "phase3-mixed-length-text-16777216-phase3-20261102132447-9czeorr-r3-4c39ea43-5a94-457d-92ae-bbbc476d7385.json.lfc",
+          "outputBytes": 11703237,
+          "inputOverOutputRatio": 1.4335441553477897,
+          "outputOverInputFraction": 0.6975718161659218,
+          "decodeValidationMs": 197.89999985694885,
+          "decoding": {
+            "fileBytes": 11703237,
+            "lastModified": 1793625892967,
+            "trailingMarker": "LFC1",
+            "info": {
+              "rows": 17224,
+              "blocks": 64,
+              "size": 11703237,
+              "major": 1,
+              "minor": 0
+            },
+            "decodedRowsAcrossPages": 17224,
+            "decodedAllRows": true,
+            "checkedSampleIndexes": [
+              0,
+              8611,
+              17223
+            ],
+            "valueMismatches": [
+              {
+                "row": 0,
+                "expected": {
+                  "id": 1,
+                  "category": "central",
+                  "body": "",
+                  "note": "shipment confirmed"
+                },
+                "actual": {
+                  "id": 1,
+                  "category": "central",
+                  "body": "bfXEI8qy",
+                  "note": "shipment confirmed"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 8611,
+                "expected": {
+                  "id": 8612,
+                  "category": "south",
+                  "body": "zXXvYkRy",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 8612,
+                  "category": "south",
+                  "body": "hd2HLMoE5UYckt1gQl2K8INXAeAmSJqm7oGAwzxk",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": null
+              },
+              {
+                "row": 17223,
+                "expected": {
+                  "id": 17224,
+                  "category": "south",
+                  "body": "R86FBvkofU8OCiH02tBn2ZR0yBDKNGlqo4VFU2LfzC2ZCTo2JL0j8grFfeNKW9KHnUeZFUC4IaxkERnDZ7eMrv0qxOAO8WXQyzkLhPaIKbQbvD8tCEFpoB2mNrII4zBE9JjGLPVGywzPt0abetTjaZ6rZDYrO7fsHmSqsQCyLVfwLglmS30FTInzzrDdvUMfeAuFqojG14ri6vyYmaMpzNryEpuXDAqdMRdESIdKv0SS6cjL3Rv9OEIS67xZsY5v",
+                  "note": "account verified"
+                },
+                "actual": {
+                  "id": 17224,
+                  "category": "south",
+                  "note": "account verified"
+                },
+                "fullDecodeDiagnostic": null
+              }
+            ],
+            "footerCorruptionRejected": true
+          },
+          "blockCount": 64,
+          "storageAfterDecode": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 28654596,
+            "quotaBytes": 10766072836
+          },
+          "assertions": {
+            "footerReaderAccepted": true,
+            "allRowsDecodedInPages": true,
+            "deterministicValuesAndOrderSamples": false,
+            "footerCorruptionRejected": true,
+            "outputBlockCountRecorded": true
+          },
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-16777216-phase3-20261102132447-9czeorr-r3-4c39ea43-5a94-457d-92ae-bbbc476d7385.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 173592,
+            "quotaBytes": 10737591832
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [],
+  "fixtureMethod": "Generated JSONL records from deterministic per-row xorshift32 seeds; source files written to OPFS in <=32 KiB encoded chunks; each requested target is rounded down to a complete JSONL record.",
+  "trialPolicy": {
+    "independentTrialsPerWorkloadAndSize": 3,
+    "sameSeedForRepeatability": true,
+    "targetInputBytes": [
+      262144,
+      4194304,
+      16777216
+    ],
+    "workloads": [
+      "mixed-length-text"
+    ],
+    "noParquetComparison": true
+  },
+  "memoryMeasurement": {
+    "pageHeap": "performance.memory sampled every 50 ms when exposed; page realm only.",
+    "workerHeap": "Worker instrumentation reports API exposure and sampled heap only when exposed.",
+    "processMemory": "Not inferred from page/worker values; Android process diagnostic access checked separately.",
+    "deviceMemory": "navigator.deviceMemory is a coarse browser hint, not measured free RAM."
+  },
+  "finishedAt": "2026-11-02T13:24:53.226Z"
+}

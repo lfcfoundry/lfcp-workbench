@@ -1,0 +1,85 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "startedAt": "2026-11-02T13:04:06.150Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:04:06.166Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "userAgentClientHints": {
+      "architecture": "",
+      "brands": [
+        {
+          "brand": "Not:A-Brand",
+          "version": "8"
+        },
+        {
+          "brand": "Chromium",
+          "version": "156"
+        },
+        {
+          "brand": "Google Chrome",
+          "version": "156"
+        }
+      ],
+      "mobile": true,
+      "model": "Android phone",
+      "platform": "Android",
+      "platformVersion": "(withheld)",
+      "uaFullVersion": "156.0.8078.73"
+    },
+    "language": "en-US",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "available": true,
+      "usageBytes": 135213,
+      "quotaBytes": 10737553453
+    },
+    "worker": true,
+    "file": true,
+    "streams": true,
+    "memory": {
+      "api": "performance.memory (non-standard; main realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "memoryMeasureUserAgentSpecific": false,
+    "lfcp": {
+      "available": true,
+      "version": null,
+      "init": "passed"
+    },
+    "lfcpVersion": "0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "name": "terminate-worker-during-opfs-write",
+      "format": "JSONL",
+      "requestedSourceBytes": 16777216,
+      "lfcpVersion": "0.4.19 / API 0",
+      "status": "pass",
+      "inputBytes": 16777188,
+      "rows": 466033,
+      "fields": 3,
+      "interruptedStage": "opfs-write",
+      "partBytes": 291,
+      "outputBytesBeforeWrite": 0,
+      "filesVisibleAfterTermination": [
+        {
+          "name": "phase2-interrupt-source-c1cf5032-f1cd-4c17-b425-d0abd0e4c4b6.json.lfc",
+          "bytes": 0,
+          "trailingMarker": "",
+          "classification": "incomplete-or-unfinalized"
+        }
+      ],
+      "testOutcome": "output entry observed; inspect its classification"
+    }
+  ],
+  "localReport": {
+    "optedIn": true,
+    "target": "same-origin loopback only"
+  }
+}
