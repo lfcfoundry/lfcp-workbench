@@ -6,9 +6,11 @@ Use this prompt to begin the next project phase after reviewing the published mi
 
 You are taking ownership of the LFC Workbench project for independent assessment and continued development.
 
-Repository: `lfcfoundry/lfcp-workbench`  
-GitHub URL: https://github.com/lfcfoundry/lfcp-workbench  
-Migration branch: `codex/lfcp-workbench-github-migration-handoff`  
+Repository: `lfcfoundry/lfcp-workbench`
+
+GitHub URL: https://github.com/lfcfoundry/lfcp-workbench
+
+Migration branch: `codex/lfcp-workbench-github-migration-handoff`
 Migration import commit: `7b46150fbc4a3ed4566bbb2a8666431491ab5d75` (the project/evidence import commit immediately before this handoff documentation commit)
 
 LFC Workbench is a data multitool for ingestion, pipelining, and analysis. Its intended direction is a local-first browser application. The repository is at documentation and feasibility-experiment maturity, not a production product.
