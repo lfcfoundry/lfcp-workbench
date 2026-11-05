@@ -20,6 +20,12 @@ const unit = spawnSync(process.execPath, [join(root, 'tests/adapters.test.mjs')]
 process.stdout.write(unit.stdout);
 record('adapters unit tests', unit.status === 0, unit.status === 0 ? '' : unit.stderr.trim().split('\n')[0]);
 
+for (const f of ['ingest.test.mjs', 'ingest-lfcp.test.mjs']) {
+  const r = spawnSync(process.execPath, [join(root, 'tests', f)], { encoding: 'utf8' });
+  process.stdout.write(r.stdout);
+  record(`ingest core: ${f}`, r.status === 0, r.status === 0 ? '' : (r.stderr.trim().split('\n').find((l) => /Error/.test(l)) || ''));
+}
+
 // 2. Vendor pin is unchanged
 const sha = createHash('sha256').update(readFileSync(join(root, 'vendor/lfcp/0.4.19/lfc-pack.js'))).digest('hex');
 record('vendor 0.4.19 sha256 unchanged', sha === '8c312582c7c739fa43b9df82a418a9ac6cdebfcb27cc32ed2e92642dc646c259');
