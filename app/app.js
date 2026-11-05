@@ -28,8 +28,10 @@
     if (r.message) { host.textContent = r.message; return; }
     host.innerHTML = (r.storage && r.storage.startsWith('memory') ? '<p class="bad">This browser has no persistent storage API here, so datasets are kept in memory and disappear when the tab closes.</p>' : '') + (r.datasets.length ? table(r.datasets.map((d) => ({ name: d.name, rows: d.rows, size: fmt(d.bytes), source: d.source })), ['name', 'rows', 'size', 'source']) : '<p>No datasets saved in this browser yet.</p>') +
       (r.incomplete.length ? '<p class="bad">Incomplete files (not usable): ' + r.incomplete.map((o) => esc(o.name)).join(', ') + '</p>' : '') +
+      r.datasets.map((d) => '<button data-open="' + esc(d.name) + '">Open ' + esc(d.name.slice(0, 24)) + '…</button>').join('') +
       r.datasets.map((d) => '<button data-del="' + esc(d.name) + '">Delete ' + esc(d.name.slice(0, 24)) + '…</button>').join('') +
       r.incomplete.map((o) => '<button data-del="' + esc(o.name) + '">Remove incomplete ' + esc(o.name.slice(0, 24)) + '…</button>').join('');
+    host.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openGrid(b.dataset.open)));
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => { await call({ type: 'delete', name: b.dataset.del }); refresh(); }));
   }
   async function runImport(file) {
@@ -41,6 +43,49 @@
     else status((res.type === 'cancelled' ? 'Cancelled. Nothing was kept.' : 'Import failed: ' + res.message), res.type !== 'cancelled');
     return res;
   }
+
+  // Grid: fixed-height rows, only the visible window is rendered; the worker holds the rows and answers page requests.
+  const ROW = 28, WINDOW = 60; const G = { cols: [], filters: {}, sort: null, count: 0, total: 0, start: -1, rows: [], numbers: [], busy: false, timer: 0 };
+  function renderRows() {
+    const sc = $('gridscroll'), first = Math.floor(sc.scrollTop / ROW), host = $('gridrows');
+    host.style.top = (Math.max(0, G.start) * ROW) + 'px';
+    host.innerHTML = G.rows.map((r) => '<div class="gr">' + r.map((v, i) => '<div class="gc' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? ' num' : '') + '" title="' + esc(v) + '" style="' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? 'text-align:right' : '') + '">' + esc(v) + '</div>').join('') + '</div>').join('');
+    return first;
+  }
+  async function loadWindow() {
+    const sc = $('gridscroll'), first = Math.max(0, Math.floor(sc.scrollTop / ROW) - 10);
+    if (G.start >= 0 && Math.abs(first - G.start) < 10 && G.rows.length) { $('gridhead').scrollLeft = sc.scrollLeft; return; }
+    const r = await call({ type: 'page', start: first, count: WINDOW });
+    G.start = r.start; G.rows = r.rows; G.numbers = r.numbers; renderRows(); $('gridhead').scrollLeft = sc.scrollLeft;
+  }
+  function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
+  async function applyQuery() {
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort });
+    G.count = r.count; G.total = r.total; G.start = -1; G.rows = [];
+    $('gridspace').style.height = (r.count * ROW) + 'px'; $('gridscroll').scrollTop = 0;
+    G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
+    gridInfo(); $('gridinfo').textContent += ' · ' + r.ms + ' ms'; await loadWindow();
+    return r;
+  }
+  function buildHead() {
+    $('gridhead').innerHTML = G.cols.map((c, i) => '<div class="hc"><button data-sort="' + i + '" title="Sort by ' + esc(c.name) + '">' + esc(c.name) + (G.sort && G.sort.col === c.name ? (G.sort.dir === 'asc' ? ' ▲' : ' ▼') : '') + '</button><input data-filter="' + i + '" placeholder="filter" aria-label="Filter ' + esc(c.name) + '" value="' + esc(G.filters[c.name] || '') + '"><div class="err" data-err="' + i + '"></div></div>').join('');
+    $('gridhead').querySelectorAll('[data-sort]').forEach((b) => b.addEventListener('click', () => {
+      const c = G.cols[+b.dataset.sort]; G.sort = G.sort && G.sort.col === c.name ? (G.sort.dir === 'asc' ? { col: c.name, dir: 'desc' } : null) : { col: c.name, dir: 'asc' };
+      buildHead(); applyQuery();
+    }));
+    $('gridhead').querySelectorAll('[data-filter]').forEach((inp) => inp.addEventListener('input', () => {
+      G.filters[G.cols[+inp.dataset.filter].name] = inp.value; clearTimeout(G.timer); G.timer = setTimeout(applyQuery, 200);
+    }));
+  }
+  async function openGrid(name) {
+    status('Opening ' + name + '…');
+    const r = await call({ type: 'open', name });
+    if (r.type === 'error') { status(r.message, true); return; }
+    Object.assign(G, { cols: r.columns, filters: {}, sort: null }); $('gridbox').hidden = false; $('gridtitle').textContent = 'Data: ' + r.name; buildHead(); await applyQuery(); status('Opened. Type in a filter box or click a column name.');
+    return r;
+  }
+  $('gridscroll').addEventListener('scroll', () => { if (!G.busy) { G.busy = true; requestAnimationFrame(async () => { G.busy = false; await loadWindow(); }); } });
+  $('closegrid').addEventListener('click', () => { $('gridbox').hidden = true; });
 
   // Self-test: messy generated CSV, imported in the worker, read back, compared row by row.
   async function selfTest() {
@@ -63,6 +108,18 @@
       add('types: id integer, score number, when date', d.columns[0].type === 'integer' && d.columns[2].type === 'number' && d.columns[3].type === 'date', d.columns.map((c) => c.type).join(','));
       const v = await call({ type: 'verify', name: d.name, expectJson: JSON.stringify(expected) });
       add('every value read back identical to the source', v.json === true, v.message || `${v.rows} rows read`);
+      const o = await openGrid(d.name);
+      add('grid opens with all rows', o && o.total === expected.length, o && String(o.total));
+      G.filters = { id: '>=19990' }; G.sort = { col: 'id', dir: 'desc' }; buildHead(); let q = await applyQuery();
+      add('numeric filter id>=19990 gives 10 rows', q.count === 10, String(q.count));
+      add('sorted high to low: first row id 19999', G.rows[0] && G.rows[0][0] === '19999', G.rows[0] && G.rows[0][0]);
+      G.filters = { name: 'xxxxxxxxxxxxxxxxxxxxxx' }; G.sort = { col: 'score', dir: 'asc' }; buildHead(); q = await applyQuery();
+      const want = expected.filter((r) => r.name.toLowerCase().includes('xxxxxxxxxxxxxxxxxxxxxx')).length;
+      add('text filter matches the source count', q.count === want, `${q.count} vs ${want}`);
+      add('empty scores sort last', !G.rows.length || G.rows[0][2] !== '', G.rows[0] && G.rows[0][2]);
+      G.filters = { id: '>abc' }; buildHead(); q = await applyQuery();
+      add('bad filter shows a message', !!q.errors.id, q.errors.id);
+      $('gridbox').hidden = true;
       await call({ type: 'delete', name: d.name }); refresh();
     }
     const ok = checks.every((c) => c.ok);

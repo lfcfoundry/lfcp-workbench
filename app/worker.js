@@ -37,6 +37,9 @@ self.onmessage = (e) => {
   else if (m.type === 'list') list(m);
   else if (m.type === 'delete') remove(m);
   else if (m.type === 'verify') verify(m);
+  else if (m.type === 'open') openView(m);
+  else if (m.type === 'query') queryView(m);
+  else if (m.type === 'page') pageView(m);
 };
 
 async function importFile(m) {
@@ -126,4 +129,32 @@ async function remove(m) {
     await store.setCatalog((await store.catalog()).filter((c) => c.name !== m.name));
     send('deleted', m.id, { name: m.name });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
+}
+
+// Grid view: one dataset held in memory (up to 64 MiB of LFCP), filtered and sorted without re-reading the file.
+let view = null, queryMod = null;
+async function openView(m) {
+  try {
+    await LfcPack.init({ readOnly: true });
+    queryMod ||= await import('../src/query/query.mjs');
+    const entry = (await store.catalog()).find((c) => c.name === m.name);
+    if (!entry) throw new Error('Dataset not found.');
+    const f = await store.file(m.name);
+    if (f.size > MAX_VERIFY) throw new Error('This dataset is over 64 MiB. The grid cannot open it yet: the reader needs the whole file in memory.');
+    const rows = LfcPack.unpackRows(new Uint8Array(await f.arrayBuffer()));
+    view = { name: m.name, rows, columns: entry.columns, indices: Uint32Array.from(rows, (_, i) => i) };
+    send('opened', m.id, { name: m.name, total: rows.length, columns: entry.columns });
+  } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
+}
+function queryView(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  const t0 = performance.now(), r = queryMod.runQuery(view.rows, view.columns, { filters: m.filters, sort: m.sort });
+  view.indices = r.indices;
+  send('queried', m.id, { count: r.indices.length, total: view.rows.length, errors: r.errors, ms: Math.round(performance.now() - t0) });
+}
+function pageView(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  const end = Math.min(view.indices.length, m.start + m.count), out = [];
+  for (let i = m.start; i < end; i++) { const r = view.rows[view.indices[i]]; out.push(view.columns.map((c) => r[c.name] ?? '')); }
+  send('paged', m.id, { start: m.start, rows: out, numbers: Array.from(view.indices.subarray(m.start, end), (i) => i + 1) });
 }
