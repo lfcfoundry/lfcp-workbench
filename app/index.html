@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="light dark">
+<title>LFCFoundry Workbench (import)</title>
+<link rel="stylesheet" href="app.css">
+<script defer src="app.js"></script>
+</head>
+<body>
+<header><h1>LFCFoundry Workbench</h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<main>
+  <section>
+    <h2>Import</h2>
+    <input id="file" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values">
+    <label>Delimiter <select id="delim"><option value="auto">Detect</option><option value=",">Comma</option><option value="&#9;">Tab</option><option value=";">Semicolon</option><option value="|">Bar</option></select></label>
+    <button id="go" disabled>Import</button> <button id="cancel" hidden>Cancel</button> <button id="selftest">Run self-test</button>
+    <progress id="prog" max="1" value="0" hidden></progress>
+    <p id="status" role="status">Choose a file, or run the self-test.</p>
+  </section>
+  <section id="result" hidden>
+    <h2>Result</h2>
+    <p id="summary"></p>
+    <h3>Columns</h3><div id="cols"></div>
+    <h3>First rows</h3><div id="preview"></div>
+    <button id="copy">Copy results</button> <span id="copied" role="status"></span>
+  </section>
+  <section>
+    <h2>Saved in this browser</h2><div id="saved">Loading…</div>
+  </section>
+</main>
+</body>
+</html>
