@@ -61,9 +61,10 @@
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
     const r = await call({ type: 'query', filters: G.filters, sort: G.sort });
-    G.count = r.count; G.total = r.total; G.start = -1; G.rows = [];
+    G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = (r.count * ROW) + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
+    if (r.errors['']) status(r.errors[''], true);
     gridInfo(); $('gridinfo').textContent += ' · ' + r.ms + ' ms'; await loadWindow();
     return r;
   }
@@ -110,8 +111,13 @@
       add('every value read back identical to the source', v.json === true, v.message || `${v.rows} rows read`);
       const o = await openGrid(d.name);
       add('grid opens with all rows', o && o.total === expected.length, o && String(o.total));
+      add('browsing decodes only the pages shown (no full decode yet)', G.lastQuery && G.lastQuery.decodedAll === false, G.rows.length + ' rows shown');
+      add('browsed first page equals source rows', JSON.stringify(G.rows[0]) === JSON.stringify(G.cols.map((c) => expected[0][c.name])) && G.rows.length === 60, G.rows.length + ' rows');
+      $('gridscroll').scrollTop = 15000 * 28; await new Promise((r) => setTimeout(r, 400));
+      add('scrolling to row 15000 shows the right rows', G.start > 0 && JSON.stringify(G.rows[10]) === JSON.stringify(G.cols.map((c) => expected[G.start + 10][c.name])), 'window starts at ' + G.start);
       G.filters = { id: '>=19990' }; G.sort = { col: 'id', dir: 'desc' }; buildHead(); let q = await applyQuery();
       add('numeric filter id>=19990 gives 10 rows', q.count === 10, String(q.count));
+      add('filtering decodes all rows once', q.decodedAll === true);
       add('sorted high to low: first row id 19999', G.rows[0] && G.rows[0][0] === '19999', G.rows[0] && G.rows[0][0]);
       G.filters = { name: 'xxxxxxxxxxxxxxxxxxxxxx' }; G.sort = { col: 'score', dir: 'asc' }; buildHead(); q = await applyQuery();
       const want = expected.filter((r) => r.name.toLowerCase().includes('xxxxxxxxxxxxxxxxxxxxxx')).length;

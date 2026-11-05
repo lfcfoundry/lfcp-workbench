@@ -131,7 +131,9 @@ async function remove(m) {
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
 
-// Grid view: one dataset held in memory (up to 64 MiB of LFCP), filtered and sorted without re-reading the file.
+// Grid view. Browsing (no filter, no sort) decodes only the blocks a page needs, so memory is the compressed file.
+// A filter or sort decodes every row once (cached), so it is limited by row count.
+const MAX_BROWSE = 256 * 1024 * 1024, MAX_DECODE_ROWS = 1000000;
 let view = null, queryMod = null;
 async function openView(m) {
   try {
@@ -140,21 +142,35 @@ async function openView(m) {
     const entry = (await store.catalog()).find((c) => c.name === m.name);
     if (!entry) throw new Error('Dataset not found.');
     const f = await store.file(m.name);
-    if (f.size > MAX_VERIFY) throw new Error('This dataset is over 64 MiB. The grid cannot open it yet: the reader needs the whole file in memory.');
-    const rows = LfcPack.unpackRows(new Uint8Array(await f.arrayBuffer()));
-    view = { name: m.name, rows, columns: entry.columns, indices: Uint32Array.from(rows, (_, i) => i) };
-    send('opened', m.id, { name: m.name, total: rows.length, columns: entry.columns });
+    if (f.size > MAX_BROWSE) throw new Error('This dataset is over 256 MiB. The data view cannot open it yet: the reader needs the whole file in memory.');
+    const bytes = new Uint8Array(await f.arrayBuffer()), total = LfcPack.info(bytes).rows;
+    view = { name: m.name, bytes, total, rows: null, columns: entry.columns, indices: null, filtered: false };
+    send('opened', m.id, { name: m.name, total, columns: entry.columns });
   } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
 }
 function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
-  const t0 = performance.now(), r = queryMod.runQuery(view.rows, view.columns, { filters: m.filters, sort: m.sort });
-  view.indices = r.indices;
-  send('queried', m.id, { count: r.indices.length, total: view.rows.length, errors: r.errors, ms: Math.round(performance.now() - t0) });
+  const t0 = performance.now(), plain = !m.sort && !Object.values(m.filters || {}).some(Boolean);
+  if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
+  if (!view.rows) {
+    if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + MAX_DECODE_ROWS.toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
+    view.rows = LfcPack.unpackRows(view.bytes);
+  }
+  const r = queryMod.runQuery(view.rows, view.columns, { filters: m.filters, sort: m.sort });
+  view.indices = r.indices; view.filtered = true;
+  send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: true });
 }
 function pageView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
-  const end = Math.min(view.indices.length, m.start + m.count), out = [];
-  for (let i = m.start; i < end; i++) { const r = view.rows[view.indices[i]]; out.push(view.columns.map((c) => r[c.name] ?? '')); }
-  send('paged', m.id, { start: m.start, rows: out, numbers: Array.from(view.indices.subarray(m.start, end), (i) => i + 1) });
+  let out, numbers;
+  if (!view.filtered) {
+    const n = Math.max(0, Math.min(m.count, view.total - m.start));
+    const objs = n ? LfcPack.unpackRows(view.bytes, { from: m.start, count: n }) : [];
+    out = objs.map((r) => view.columns.map((c) => r[c.name] ?? '')); numbers = objs.map((_, i) => m.start + i + 1);
+  } else {
+    const end = Math.min(view.indices.length, m.start + m.count); out = [];
+    for (let i = m.start; i < end; i++) { const r = view.rows[view.indices[i]]; out.push(view.columns.map((c) => r[c.name] ?? '')); }
+    numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
+  }
+  send('paged', m.id, { start: m.start, rows: out, numbers });
 }
