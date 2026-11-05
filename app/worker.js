@@ -8,9 +8,26 @@ let core = null;
 const send = (type, id, data) => self.postMessage(Object.assign({ type, id }, data));
 const loadCore = async () => (core ||= Object.assign({}, await import('../src/ingest/delimited.mjs'), await import('../src/ingest/infer.mjs')));
 const safe = (s) => String(s || 'dataset').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'dataset';
-async function dir() { return (await navigator.storage.getDirectory()).getDirectoryHandle(DIR, { create: true }); }
-async function readCatalog(d) { try { return JSON.parse(await (await (await d.getFileHandle(CATALOG)).getFile()).text()); } catch { return []; } }
-async function writeCatalog(d, list) { const w = await (await d.getFileHandle(CATALOG, { create: true })).createWritable(); await w.write(JSON.stringify(list)); await w.close(); }
+// Storage layer: OPFS when the browser has it, otherwise memory for this tab only (WebKitGTK 2.52.6 has no navigator.storage).
+const OPFS = !!(self.navigator && navigator.storage && navigator.storage.getDirectory);
+const MEM = { files: new Map(), catalog: [] };
+const STORAGE = OPFS ? 'browser storage (OPFS)' : 'memory, this tab only';
+const store = OPFS ? {
+  async dir() { return (await navigator.storage.getDirectory()).getDirectoryHandle(DIR, { create: true }); },
+  async create(name) { const h = await (await this.dir()).getFileHandle(name, { create: true }); const w = await h.createWritable({ keepExistingData: false }); return { write: (p) => w.write(p), close: () => w.close(), abort: () => w.abort() }; },
+  async file(name) { return (await (await this.dir()).getFileHandle(name)).getFile(); },
+  async remove(name) { try { await (await this.dir()).removeEntry(name); } catch {} },
+  async catalog() { try { return JSON.parse(await (await (await (await this.dir()).getFileHandle(CATALOG)).getFile()).text()); } catch { return []; } },
+  async setCatalog(list) { const w = await (await (await this.dir()).getFileHandle(CATALOG, { create: true })).createWritable(); await w.write(JSON.stringify(list)); await w.close(); },
+  async orphans(known) { const d = await this.dir(), out = []; for await (const [n, h] of d.entries()) if (h.kind === 'file' && n.endsWith('.json.lfc') && !known.has(n)) out.push({ name: n, bytes: (await h.getFile()).size }); return out; },
+} : {
+  async create(name) { const parts = []; return { write: async (p) => { parts.push(p.slice()); }, close: async () => { MEM.files.set(name, new Blob(parts)); }, abort: async () => {} }; },
+  async file(name) { const f = MEM.files.get(name); if (!f) throw new Error('Dataset not found.'); return f; },
+  async remove(name) { MEM.files.delete(name); },
+  async catalog() { return MEM.catalog.slice(); },
+  async setCatalog(list) { MEM.catalog = list.slice(); },
+  async orphans() { return []; },
+};
 const stop = (job) => { if (job.cancelled) { const e = new Error('Import cancelled.'); e.cancelled = true; throw e; } };
 
 self.onmessage = (e) => {
@@ -24,7 +41,7 @@ self.onmessage = (e) => {
 
 async function importFile(m) {
   const job = { cancelled: false }; jobs.set(m.id, job);
-  let d = null, name = null, writable = null, closed = false;
+  let name = null, writable = null, closed = false;
   const t0 = performance.now(), t = { readMs: 0, parseMs: 0, packMs: 0, writeMs: 0 };
   try {
     await Promise.all([loadCore(), LfcPack.init()]);
@@ -32,10 +49,8 @@ async function importFile(m) {
     const file = m.file; if (!file) throw new IngestError('No file was provided.');
     let delimiter = m.delimiter || 'auto';
     if (delimiter === 'auto') delimiter = detectDelimiter(new TextDecoder().decode(new Uint8Array(await file.slice(0, 65536).arrayBuffer())));
-    d = await dir();
     name = safe(file.name) + '-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
-    const handle = await d.getFileHandle(name, { create: true });
-    writable = await handle.createWritable({ keepExistingData: false });
+    writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: delimiter === '\t' ? 'tsv' : 'csv', sourceName: String(file.name).slice(0, 200), sourceBytes: file.size, tables: [{ name: 'rows', rows: 0, columns: [] }] };
     const packer = LfcPack.packStream({ blockBytes: 262144, share: true, meta });
     let headers = null, trackers = null, rows = 0, lines = [], queued = 0, outBytes = 0, lastProg = 0; const sample = [];
@@ -65,20 +80,20 @@ async function importFile(m) {
     await write(packer.finish());
     await writable.close(); closed = true; writable = null;
     // Complete only after the footer is validated, then recorded in the catalog.
-    const v = await validate(d, name, rows);
+    const v = await validate(name, rows);
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
     const cols = headers.map((h, i) => ({ name: h, type: trackers[i].type, nullable: trackers[i].nullable }));
-    const cat = await readCatalog(d); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now() }); await writeCatalog(d, cat);
-    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs) } } });
+    const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
+    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs) } } });
   } catch (err) {
     if (writable && !closed) { try { await writable.abort(); } catch {} }
-    if (name && d) { try { await d.removeEntry(name); } catch {} }
+    if (name) await store.remove(name);
     send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
   } finally { jobs.delete(m.id); }
 }
 
-async function validate(d, name, rows) {
-  const f = await (await d.getFileHandle(name)).getFile();
+async function validate(name, rows) {
+  const f = await store.file(name);
   if (f.size < 8) return { ok: false, reason: 'file too small' };
   if (new TextDecoder().decode(new Uint8Array(await f.slice(f.size - 4).arrayBuffer())) !== 'LFC1') return { ok: false, reason: 'end marker missing' };
   if (f.size > MAX_VERIFY) return { ok: true, level: 'end marker only (file over 64 MiB)' };
@@ -91,7 +106,7 @@ async function validate(d, name, rows) {
 async function verify(m) { // read a stored dataset back and compare every row with the expected records
   try {
     await LfcPack.init({ readOnly: true });
-    const f = await (await (await dir()).getFileHandle(m.name)).getFile();
+    const f = await store.file(m.name);
     const back = LfcPack.unpackRows(new Uint8Array(await f.arrayBuffer()));
     send('verified', m.id, { rows: back.length, json: m.expectJson ? JSON.stringify(back) === m.expectJson : null, firstRows: back.slice(0, 3) });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
@@ -99,17 +114,16 @@ async function verify(m) { // read a stored dataset back and compare every row w
 
 async function list(m) {
   try {
-    const d = await dir(), cat = await readCatalog(d), known = new Set(cat.map((c) => c.name)), orphans = [];
-    for await (const [n, h] of d.entries()) if (h.kind === 'file' && n.endsWith('.json.lfc') && !known.has(n)) orphans.push({ name: n, bytes: (await h.getFile()).size });
-    send('list', m.id, { datasets: cat.slice().reverse(), incomplete: orphans });
+    const cat = await store.catalog();
+    send('list', m.id, { datasets: cat.slice().reverse(), incomplete: await store.orphans(new Set(cat.map((c) => c.name))), storage: STORAGE });
   } catch (err) { send('list', m.id, { datasets: [], incomplete: [], message: String(err && err.message || err) }); }
 }
 
 async function remove(m) {
   try {
     if (!/^[\w.-]+\.json\.lfc$/.test(m.name)) throw new Error('Invalid dataset name.');
-    const d = await dir(); try { await d.removeEntry(m.name); } catch {}
-    await writeCatalog(d, (await readCatalog(d)).filter((c) => c.name !== m.name));
+    await store.remove(m.name);
+    await store.setCatalog((await store.catalog()).filter((c) => c.name !== m.name));
     send('deleted', m.id, { name: m.name });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }

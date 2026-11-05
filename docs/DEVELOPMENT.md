@@ -44,3 +44,9 @@ Migration verification on 2026-11-05:
 - The publication scan found no credential patterns, dependency caches, or files larger than 5 MiB. Five retained benchmark JSON files contain absolute Termux paths as execution metadata; those files were preserved without edits.
 
 No generated caches or dependency directories are required. Do not rewrite historical JSON records to normalize absolute local paths; those paths are part of the recorded execution metadata.
+
+## New code checks (added 2026.11.05, Claude branch)
+
+- `node tests/run.mjs`: Node pass/fail gate, about 5 seconds, 14 checks. Writes nothing into the repo.
+- `python3 tests/browser-run.py firefox|chromium|webkit`: opens `app/index.html?selftest=1&report=1` in one test browser (Firefox 158, ungoogled Chromium 155.0.8059.39, WebKitGTK 2.52.6 from the knowledge-base `browsers` branch), prints a plain-text result, exits 0 only on PASS. Needs `FIREFOX` and `CHROMIUM` set; webkit needs `xvfb-run`, `dbus-run-session` and `WebKitWebDriver`. Run one browser at a time. Pass/fail only; no speed claims.
+- Latest results: `/mnt/project-files/lfc-workbench/browser-results/` (all three PASS on 2026.11.05).
