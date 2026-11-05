@@ -27,6 +27,12 @@ record('vendor 0.4.19 sha256 unchanged', sha === '8c312582c7c739fa43b9df82a418a9
 const sha21 = createHash('sha256').update(readFileSync(join(root, 'vendor/lfcp/0.4.21/lfc-pack.js'))).digest('hex');
 record('vendor 0.4.21 sha256 matches PROVENANCE.md', readFileSync(join(root, 'vendor/lfcp/0.4.21/PROVENANCE.md'), 'utf8').includes(sha21));
 
+// 2b. Real ingest path (CSV -> packStream -> unpackRows) is lossless on 0.4.21; on 0.4.19 it must lose data for the documented trigger shapes
+const r21 = spawnSync(process.execPath, [join(root, 'tests/csv-roundtrip.test.mjs')], { encoding: 'utf8' });
+record('CSV ingest round trip lossless on 0.4.21', r21.status === 0, r21.stdout.trim().split('\n').pop());
+const r19 = spawnSync(process.execPath, [join(root, 'tests/csv-roundtrip.test.mjs'), join(root, 'vendor/lfcp/0.4.19/lfc-pack.js'), '--expect-loss'], { encoding: 'utf8' });
+record('CSV ingest round trip loses data on 0.4.19 (expected, proves the cases bite)', r19.status === 0 && /DATA DIFFERS/.test(r19.stdout));
+
 // 3. Defect probes on a temp copy. Expected results are documented: the fix
 //    candidate passes 19/19 and the pinned vendor shows 8 mismatching cases;
 //    the round-trip probe exits 1 with 98 failed checks (the known defect).
