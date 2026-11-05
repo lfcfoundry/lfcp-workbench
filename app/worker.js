@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.4.22/lfc-pack.js');
+importScripts('../vendor/lfcp/0.4.24/lfc-pack.js');
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024, MAX_VERIFY = 64 * 1024 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
