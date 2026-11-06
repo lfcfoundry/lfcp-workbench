@@ -1,8 +1,8 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.4.24/lfc-pack.js');
+importScripts('../vendor/lfcp/0.5.0/lfc-pack.js');
 
-const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024, MAX_VERIFY = 64 * 1024 * 1024;
+const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
 let core = null;
 const send = (type, id, data) => self.postMessage(Object.assign({ type, id }, data));
@@ -99,9 +99,8 @@ async function validate(name, rows) {
   const f = await store.file(name);
   if (f.size < 8) return { ok: false, reason: 'file too small' };
   if (new TextDecoder().decode(new Uint8Array(await f.slice(f.size - 4).arrayBuffer())) !== 'LFC1') return { ok: false, reason: 'end marker missing' };
-  if (f.size > MAX_VERIFY) return { ok: true, level: 'end marker only (file over 64 MiB)' };
   await LfcPack.init({ readOnly: true });
-  const info = LfcPack.info(new Uint8Array(await f.arrayBuffer()));
+  const info = (await LfcPack.open(f)).info; // reads only the trailer and footer, any file size
   if (info.rows !== rows) return { ok: false, reason: `footer says ${info.rows} rows, wrote ${rows}` };
   return { ok: true, level: 'end marker and footer row count' };
 }
@@ -131,9 +130,9 @@ async function remove(m) {
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
 
-// Grid view. Browsing (no filter, no sort) decodes only the blocks a page needs, so memory is the compressed file.
+// Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
-const MAX_BROWSE = 256 * 1024 * 1024, MAX_DECODE_ROWS = 1000000;
+const MAX_DECODE_ROWS = 1000000;
 let view = null, queryMod = null;
 async function openView(m) {
   try {
@@ -142,30 +141,29 @@ async function openView(m) {
     const entry = (await store.catalog()).find((c) => c.name === m.name);
     if (!entry) throw new Error('Dataset not found.');
     const f = await store.file(m.name);
-    if (f.size > MAX_BROWSE) throw new Error('This dataset is over 256 MiB. The data view cannot open it yet: the reader needs the whole file in memory.');
-    const bytes = new Uint8Array(await f.arrayBuffer()), total = LfcPack.info(bytes).rows;
-    view = { name: m.name, bytes, total, rows: null, columns: entry.columns, indices: null, filtered: false };
+    const R = await LfcPack.open(f), total = R.info.rows;
+    view = { name: m.name, R, total, rows: null, columns: entry.columns, indices: null, filtered: false };
     send('opened', m.id, { name: m.name, total, columns: entry.columns });
   } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
 }
-function queryView(m) {
+async function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   const t0 = performance.now(), plain = !m.sort && !Object.values(m.filters || {}).some(Boolean);
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
   if (!view.rows) {
     if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + MAX_DECODE_ROWS.toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
-    view.rows = LfcPack.unpackRows(view.bytes);
+    view.rows = await view.R.rows({ from: 0, count: view.total });
   }
   const r = queryMod.runQuery(view.rows, view.columns, { filters: m.filters, sort: m.sort });
   view.indices = r.indices; view.filtered = true;
   send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: true });
 }
-function pageView(m) {
+async function pageView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let out, numbers;
   if (!view.filtered) {
     const n = Math.max(0, Math.min(m.count, view.total - m.start));
-    const objs = n ? LfcPack.unpackRows(view.bytes, { from: m.start, count: n }) : [];
+    const objs = n ? await view.R.rows({ from: m.start, count: n }) : [];
     out = objs.map((r) => view.columns.map((c) => r[c.name] ?? '')); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
     const end = Math.min(view.indices.length, m.start + m.count); out = [];
