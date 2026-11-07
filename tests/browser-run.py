@@ -5,7 +5,8 @@
 import json, os, shutil, subprocess, sys, tempfile, time, urllib.request, urllib.error
 which = sys.argv[1]
 file_arg = next((a[7:] for a in sys.argv if a.startswith('--file=')), None)   # open a built single-file page from disk (file://) instead of the served one
-args = [a for a in sys.argv[2:] if not a.startswith('--file=')]
+http_arg = next((a[7:] for a in sys.argv if a.startswith('--http=')), None)   # serve a built single-file page over loopback http (like hosting) instead of file://
+args = [a for a in sys.argv[2:] if not a.startswith('--file=') and not a.startswith('--http=')]
 query = args[0] if len(args) > 0 else 'selftest=1'
 wait_s = int(args[1]) if len(args) > 1 else 90
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,7 +14,7 @@ if which == 'webkit' and os.environ.get('_WK_INNER') != '1':
     env = dict(os.environ, _WK_INNER='1', GTK_A11Y='none', WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS='1')
     sys.exit(subprocess.run(['xvfb-run', '-a', '-s', '-screen 0 1280x1024x24', 'dbus-run-session', '--', sys.executable, '-I', os.path.abspath(__file__)] + sys.argv[1:], env=env).returncode)
 port = 8800 + os.getpid() % 100
-url = ('file://%s?%s&report=1&port=%d' % (os.path.abspath(file_arg), query, port)) if file_arg else 'http://127.0.0.1:%d/app/index.html?%s&report=1' % (port, query)
+url = ('file://%s?%s&report=1&port=%d' % (os.path.abspath(file_arg), query, port)) if file_arg else ('http://127.0.0.1:%d/%s?%s&report=1&port=%d' % (port, http_arg, query, port)) if http_arg else 'http://127.0.0.1:%d/app/index.html?%s&report=1' % (port, query)
 log = tempfile.NamedTemporaryFile('w+', suffix='.log', delete=False)
 srv = subprocess.Popen(['node', os.path.join(root, 'tests/browser-serve.mjs'), str(port)], stdout=log, stderr=subprocess.STDOUT)
 prof = tempfile.mkdtemp(); proc = None; drv = None

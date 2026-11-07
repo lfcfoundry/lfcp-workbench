@@ -13,3 +13,6 @@ First page built on the new ingestion core in `../src/ingest/`, as a classic Wor
 **Limits today:** CSV and TSV only; no export yet; browsing holds only the footer and one block, but filter and sort decode every row (up to 1,000,000 rows); blank-line skipping means a file with only one column cannot hold an empty value on its own line.
 
 **Run it:** `python3 -m http.server 8080` from the repo root, then open `http://localhost:8080/app/index.html`. Browser checks: `python3 tests/browser-run.py firefox|chromium|webkit` (pass/fail, one browser at a time; see `docs/DEVELOPMENT.md`).
+
+## Export CSV
+The "Export CSV" button in the data view saves the rows now shown (filter and sort applied) as a CSV file named `<dataset>-view.csv`. Plain RFC 4180 with CRLF line ends, UTF-8, no byte-order mark, no spreadsheet-formula escaping, so our own reader gets back every value exactly. The file is built in the worker in batches of 5,000 rows and handed over as one Blob. Code: `src/export/csv.mjs`, `exportView` in `app/worker.js`. Checked by `tests/export.test.mjs` (Node) and one self-test check in the browser.
