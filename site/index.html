@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-3RfA5kyaUzyy1/2a9B08ovBnNzQrKE9tsfrXMc+hNVE=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-d+bdgDSEmL+pWaSJmPMamS4DTb//X4qzx4FUnFwwDAM=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -83,29 +83,44 @@ class DelimitedParser {
   }
   _newline(c) { this.line++; if (c === '\r') this.skipLF = true; this._endRecord(); }
   feed(text, final = false) {
-    let i = 0; const n = text.length;
+    // Fast path: plain stretches are copied with one slice instead of one character at a time. Same rules and errors as the character-by-character reader.
+    let i = 0; const n = text.length, D = this.d.charCodeAt(0), max = this.max;
     if (this.pendingQuote) { // a quote ended the previous chunk while inside quotes
       this.pendingQuote = false;
-      if (n && text[0] === '"') { this.field += '"'; i = 1; } else this.mode = 2;
+      if (n && text.charCodeAt(0) === 34) { this.field += '"'; i = 1; } else this.mode = 2;
     }
-    for (; i < n; i++) {
-      const c = text[i];
-      if (this.skipLF) { this.skipLF = false; if (c === '\n') continue; }
-      if (++this.chars > this.max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
-      if (this.mode === 1) {
-        if (c === '"') {
-          if (i + 1 < n) { if (text[i + 1] === '"') { this.field += '"'; i++; } else this.mode = 2; }
-          else if (final) this.mode = 2; else this.pendingQuote = true;
-        } else { if (c === '\n') this.line++; this.field += c; }
+    while (i < n) {
+      if (this.skipLF) { this.skipLF = false; if (text.charCodeAt(i) === 10) { i++; continue; } }
+      if (this.mode === 1) { // inside quotes: copy up to the next quote, counting line breaks
+        const q = text.indexOf('"', i), stop = q < 0 ? n : q;
+        if (stop > i) {
+          const seg = text.slice(i, stop);
+          for (let k = seg.indexOf('\n'); k >= 0; k = seg.indexOf('\n', k + 1)) this.line++;
+          this.field += seg; this.chars += stop - i;
+          if (this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+        }
+        if (q < 0) { i = n; break; }
+        if (++this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+        if (q + 1 < n) { if (text.charCodeAt(q + 1) === 34) { this.field += '"'; i = q + 2; } else { this.mode = 2; i = q + 1; } }
+        else { if (final) this.mode = 2; else this.pendingQuote = true; i = q + 1; }
         continue;
       }
-      if (c === this.d) { this._endField(); continue; }
-      if (c === '\n' || c === '\r') { this._newline(c); continue; }
-      if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
-      if (c === '"') {
+      let j = i; // modes 0 and 2: find the next delimiter, line break or quote
+      while (j < n) { const c = text.charCodeAt(j); if (c === D || c === 10 || c === 13 || c === 34) break; j++; }
+      if (j > i) {
+        if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
+        this.field += text.slice(i, j); this.chars += j - i;
+        if (this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+      }
+      if (j >= n) { i = n; break; }
+      if (++this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+      const c = text.charCodeAt(j); i = j + 1;
+      if (c === D) this._endField();
+      else if (c === 34) {
+        if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
         if (this.field.length) throw new IngestError('A quote may only start at the beginning of a field.', this.line);
         this.mode = 1; this.seen = true;
-      } else this.field += c;
+      } else this._newline(c === 13 ? '\r' : '\n');
     }
     if (final) {
       if (this.pendingQuote) { this.pendingQuote = false; this.mode = 2; }
@@ -148,14 +163,18 @@ const BOOL = /^(true|false)$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
 class TypeTracker {
-  constructor() { this.n = 0; this.empty = 0; this.int = true; this.num = true; this.bool = true; this.date = true; }
+  constructor() { this.n = 0; this.empty = 0; this.int = true; this.num = true; this.bool = true; this.date = true; this.okDates = new Set(); }
   add(v) {
     this.n++;
     if (v === '') { this.empty++; return; }
-    if (this.int && !INT.test(v)) this.int = false;
-    if (this.num && !NUM.test(v)) this.num = false;
+    // Same answers as testing every pattern on every value, with the repeated work skipped: an integer is always a number, and a date string that passed once passes again.
+    if (this.int && INT.test(v)) { /* integer: also a number, so the number test is skipped */ }
+    else { this.int = false; if (this.num && !NUM.test(v)) this.num = false; }
     if (this.bool && !BOOL.test(v)) this.bool = false;
-    if (this.date && !(DATE.test(v) && !Number.isNaN(Date.parse(v.replace(' ', 'T'))))) this.date = false;
+    if (this.date && !this.okDates.has(v)) {
+      if (DATE.test(v) && !Number.isNaN(Date.parse(v.replace(' ', 'T')))) { if (this.okDates.size < 4096) this.okDates.add(v); }
+      else this.date = false;
+    }
   }
   get type() {
     if (this.n === this.empty) return 'empty';
@@ -2707,29 +2726,44 @@ class DelimitedParser {
   }
   _newline(c) { this.line++; if (c === '\r') this.skipLF = true; this._endRecord(); }
   feed(text, final = false) {
-    let i = 0; const n = text.length;
+    // Fast path: plain stretches are copied with one slice instead of one character at a time. Same rules and errors as the character-by-character reader.
+    let i = 0; const n = text.length, D = this.d.charCodeAt(0), max = this.max;
     if (this.pendingQuote) { // a quote ended the previous chunk while inside quotes
       this.pendingQuote = false;
-      if (n && text[0] === '"') { this.field += '"'; i = 1; } else this.mode = 2;
+      if (n && text.charCodeAt(0) === 34) { this.field += '"'; i = 1; } else this.mode = 2;
     }
-    for (; i < n; i++) {
-      const c = text[i];
-      if (this.skipLF) { this.skipLF = false; if (c === '\n') continue; }
-      if (++this.chars > this.max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
-      if (this.mode === 1) {
-        if (c === '"') {
-          if (i + 1 < n) { if (text[i + 1] === '"') { this.field += '"'; i++; } else this.mode = 2; }
-          else if (final) this.mode = 2; else this.pendingQuote = true;
-        } else { if (c === '\n') this.line++; this.field += c; }
+    while (i < n) {
+      if (this.skipLF) { this.skipLF = false; if (text.charCodeAt(i) === 10) { i++; continue; } }
+      if (this.mode === 1) { // inside quotes: copy up to the next quote, counting line breaks
+        const q = text.indexOf('"', i), stop = q < 0 ? n : q;
+        if (stop > i) {
+          const seg = text.slice(i, stop);
+          for (let k = seg.indexOf('\n'); k >= 0; k = seg.indexOf('\n', k + 1)) this.line++;
+          this.field += seg; this.chars += stop - i;
+          if (this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+        }
+        if (q < 0) { i = n; break; }
+        if (++this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+        if (q + 1 < n) { if (text.charCodeAt(q + 1) === 34) { this.field += '"'; i = q + 2; } else { this.mode = 2; i = q + 1; } }
+        else { if (final) this.mode = 2; else this.pendingQuote = true; i = q + 1; }
         continue;
       }
-      if (c === this.d) { this._endField(); continue; }
-      if (c === '\n' || c === '\r') { this._newline(c); continue; }
-      if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
-      if (c === '"') {
+      let j = i; // modes 0 and 2: find the next delimiter, line break or quote
+      while (j < n) { const c = text.charCodeAt(j); if (c === D || c === 10 || c === 13 || c === 34) break; j++; }
+      if (j > i) {
+        if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
+        this.field += text.slice(i, j); this.chars += j - i;
+        if (this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+      }
+      if (j >= n) { i = n; break; }
+      if (++this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+      const c = text.charCodeAt(j); i = j + 1;
+      if (c === D) this._endField();
+      else if (c === 34) {
+        if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
         if (this.field.length) throw new IngestError('A quote may only start at the beginning of a field.', this.line);
         this.mode = 1; this.seen = true;
-      } else this.field += c;
+      } else this._newline(c === 13 ? '\r' : '\n');
     }
     if (final) {
       if (this.pendingQuote) { this.pendingQuote = false; this.mode = 2; }
@@ -2772,14 +2806,18 @@ const BOOL = /^(true|false)$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
 class TypeTracker {
-  constructor() { this.n = 0; this.empty = 0; this.int = true; this.num = true; this.bool = true; this.date = true; }
+  constructor() { this.n = 0; this.empty = 0; this.int = true; this.num = true; this.bool = true; this.date = true; this.okDates = new Set(); }
   add(v) {
     this.n++;
     if (v === '') { this.empty++; return; }
-    if (this.int && !INT.test(v)) this.int = false;
-    if (this.num && !NUM.test(v)) this.num = false;
+    // Same answers as testing every pattern on every value, with the repeated work skipped: an integer is always a number, and a date string that passed once passes again.
+    if (this.int && INT.test(v)) { /* integer: also a number, so the number test is skipped */ }
+    else { this.int = false; if (this.num && !NUM.test(v)) this.num = false; }
     if (this.bool && !BOOL.test(v)) this.bool = false;
-    if (this.date && !(DATE.test(v) && !Number.isNaN(Date.parse(v.replace(' ', 'T'))))) this.date = false;
+    if (this.date && !this.okDates.has(v)) {
+      if (DATE.test(v) && !Number.isNaN(Date.parse(v.replace(' ', 'T')))) { if (this.okDates.size < 4096) this.okDates.add(v); }
+      else this.date = false;
+    }
   }
   get type() {
     if (this.n === this.empty) return 'empty';
@@ -3119,7 +3157,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
     if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
-      const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes;
+      const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing;
       s = performance.now(); const o = await openGrid(d.name); T.openMs = Math.round(performance.now() - s);
       add('data view opens', o && o.total === g.rows, o && String(o.total));
       const same = (row, i) => JSON.stringify(row) === JSON.stringify(cells(i));
@@ -3134,6 +3172,8 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
       G.sort = { col: 'score', dir: 'asc' }; buildHead(); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s);
+      G.sort = { col: 'note', dir: 'asc' }; buildHead(); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
+      G.sort = { col: 'score', dir: 'asc' }; buildHead(); await applyQuery();
       add('sorting by score keeps empty scores last', q3.count === g.rows && G.rows[0] && G.rows[0][2] !== '', G.rows[0] && G.rows[0][2]);
       $('gridbox').hidden = true; await call({ type: 'delete', name: d.name });
     }

@@ -27,29 +27,44 @@ export class DelimitedParser {
   }
   _newline(c) { this.line++; if (c === '\r') this.skipLF = true; this._endRecord(); }
   feed(text, final = false) {
-    let i = 0; const n = text.length;
+    // Fast path: plain stretches are copied with one slice instead of one character at a time. Same rules and errors as the character-by-character reader.
+    let i = 0; const n = text.length, D = this.d.charCodeAt(0), max = this.max;
     if (this.pendingQuote) { // a quote ended the previous chunk while inside quotes
       this.pendingQuote = false;
-      if (n && text[0] === '"') { this.field += '"'; i = 1; } else this.mode = 2;
+      if (n && text.charCodeAt(0) === 34) { this.field += '"'; i = 1; } else this.mode = 2;
     }
-    for (; i < n; i++) {
-      const c = text[i];
-      if (this.skipLF) { this.skipLF = false; if (c === '\n') continue; }
-      if (++this.chars > this.max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
-      if (this.mode === 1) {
-        if (c === '"') {
-          if (i + 1 < n) { if (text[i + 1] === '"') { this.field += '"'; i++; } else this.mode = 2; }
-          else if (final) this.mode = 2; else this.pendingQuote = true;
-        } else { if (c === '\n') this.line++; this.field += c; }
+    while (i < n) {
+      if (this.skipLF) { this.skipLF = false; if (text.charCodeAt(i) === 10) { i++; continue; } }
+      if (this.mode === 1) { // inside quotes: copy up to the next quote, counting line breaks
+        const q = text.indexOf('"', i), stop = q < 0 ? n : q;
+        if (stop > i) {
+          const seg = text.slice(i, stop);
+          for (let k = seg.indexOf('\n'); k >= 0; k = seg.indexOf('\n', k + 1)) this.line++;
+          this.field += seg; this.chars += stop - i;
+          if (this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+        }
+        if (q < 0) { i = n; break; }
+        if (++this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+        if (q + 1 < n) { if (text.charCodeAt(q + 1) === 34) { this.field += '"'; i = q + 2; } else { this.mode = 2; i = q + 1; } }
+        else { if (final) this.mode = 2; else this.pendingQuote = true; i = q + 1; }
         continue;
       }
-      if (c === this.d) { this._endField(); continue; }
-      if (c === '\n' || c === '\r') { this._newline(c); continue; }
-      if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
-      if (c === '"') {
+      let j = i; // modes 0 and 2: find the next delimiter, line break or quote
+      while (j < n) { const c = text.charCodeAt(j); if (c === D || c === 10 || c === 13 || c === 34) break; j++; }
+      if (j > i) {
+        if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
+        this.field += text.slice(i, j); this.chars += j - i;
+        if (this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+      }
+      if (j >= n) { i = n; break; }
+      if (++this.chars > max) throw new IngestError('A record is over the 8 MiB limit.', this.startLine);
+      const c = text.charCodeAt(j); i = j + 1;
+      if (c === D) this._endField();
+      else if (c === 34) {
+        if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
         if (this.field.length) throw new IngestError('A quote may only start at the beginning of a field.', this.line);
         this.mode = 1; this.seen = true;
-      } else this.field += c;
+      } else this._newline(c === 13 ? '\r' : '\n');
     }
     if (final) {
       if (this.pendingQuote) { this.pendingQuote = false; this.mode = 2; }
