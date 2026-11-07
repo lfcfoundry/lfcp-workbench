@@ -2524,18 +2524,21 @@ self.onmessage = async (e) => {
 
 // Reads the file in slices, parses it, tracks column types and hands JSON-lines bytes to onBytes (awaited, so the consumer sets the pace).
 // Used twice: in a helper worker (parse on one thread while the import worker packs and writes on another), or inline when a helper cannot start.
+let scratch = new Uint8Array(0);
 async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t) {
   await loadCore();
   const { DelimitedParser, IngestError, cleanHeaders, TypeTracker } = core;
-  let headers = null, trackers = null, rows = 0, lines = [], queued = 0, lastProg = 0; const sample = [];
-  const flush = async () => { if (!lines.length) return; const bytes = enc.encode(lines.join('')); lines = []; queued = 0; await onBytes(bytes); };
+  let headers = null, trackers = null, rows = 0, pos = 0, queued = 0, lastProg = 0; const sample = [];
+  let acc = '', accN = 0;
+  const drain = () => { if (!accN) return; if (scratch.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(scratch.length * 2, pos + acc.length * 3)); n.set(scratch.subarray(0, pos)); scratch = n; } pos += enc.encodeInto(acc, scratch.subarray(pos)).written; queued += acc.length; acc = ''; accN = 0; };
+  const flush = async () => { drain(); if (!pos) return; const bytes = scratch.slice(0, pos); pos = 0; queued = 0; await onBytes(bytes); };
   const parser = new DelimitedParser(delimiter, (f, line) => {
     if (!headers) { headers = cleanHeaders(f); trackers = headers.map(() => new TypeTracker()); return; }
     if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
     const rec = Object.create(null);
     for (let i = 0; i < headers.length; i++) { rec[headers[i]] = f[i]; trackers[i].add(f[i]); }
     rows++; if (sample.length < 20) sample.push(rec);
-    const s = JSON.stringify(rec) + '\n'; lines.push(s); queued += s.length;
+    acc += JSON.stringify(rec) + '\n'; if (++accN >= 64) drain();
   });
   const dec = new TextDecoder('utf-8', { fatal: true });
   for (let off = 0; off < file.size; off += SLICE) {
