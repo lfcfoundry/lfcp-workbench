@@ -1,7 +1,7 @@
 'use strict';
 (function () {
   const $ = (id) => document.getElementById(id);
-  const worker = new Worker('./worker.js');
+  const worker = new Worker(window.__WORKER_URL || './worker.js');
   let seq = 0, active = null, last = null; const waiters = new Map();
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const fmt = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB';
@@ -57,7 +57,7 @@
   function renderRows() {
     const sc = $('gridscroll'), first = topIndex(), host = $('gridrows');
     host.style.top = (scaled() ? sc.scrollTop - (first - G.start) * ROW : Math.max(0, G.start) * ROW) + 'px';
-    host.innerHTML = G.rows.map((r) => '<div class="gr">' + r.map((v, i) => '<div class="gc' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? ' num' : '') + '" title="' + esc(v) + '" style="' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? 'text-align:right' : '') + '">' + esc(v) + '</div>').join('') + '</div>').join('');
+    host.innerHTML = G.rows.map((r) => '<div class="gr">' + r.map((v, i) => '<div class="gc' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? ' num' : '') + '" title="' + esc(v) + '">' + esc(v) + '</div>').join('') + '</div>').join('');
     return first;
   }
   async function loadWindow() {
@@ -104,7 +104,7 @@
       lines.push(`${i},${i < 2 ? '' : 'name ' + 'x'.repeat(i % 23)},${i % 7 ? (i % 100) + '.5' : ''},2026-11-${String(1 + i % 28).padStart(2, '0')},${i === 0 ? '' : i % 50 === 0 ? '"multi\nline, ""quoted"""' : 'note ' + i}\r\n`);
     }
     const file = new File(lines, 'selftest.csv', { type: 'text/csv' });
-    const { readRecords } = await import('../src/ingest/records.mjs');
+    const { readRecords } = (window.__M || await import('../src/ingest/records.mjs'));
     const expected = readRecords(lines.join('').replace(/^﻿/, '')).records;
     const res = await runImport(file);
     const checks = [];
@@ -148,7 +148,7 @@
   // Big-file check: generate about N MB of CSV, import it, open the data view, read the first, middle and last rows.
   async function bigTest(mb) {
     const t0 = performance.now(), checks = [], T = {}; const add = (name, ok, detail) => checks.push({ name, ok: !!ok, detail: detail || '' });
-    const { cells } = await import('./bigdata.mjs');
+    const { cells } = (window.__M || await import('./bigdata.mjs'));
     status('Generating about ' + mb + ' MB of CSV…'); let s = performance.now();
     const g = await call({ type: 'gen', mb }); T.generateMs = Math.round(performance.now() - s);
     add('file generated', g.type === 'generated', g.message || `${g.rows} rows, ${fmt(g.bytes)}, ${g.onDisk ? 'on disk (OPFS)' : 'in memory'}`);
@@ -183,7 +183,7 @@
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
     return L.join('\n');
   }
-  function reportBack() { if (/[?&]report=1/.test(location.search)) { try { fetch('/result', { method: 'POST', body: report() }); } catch {} } }
+  function reportBack() { if (/[?&]report=1/.test(location.search)) { try { const pm = /[?&]port=(\d+)/.exec(location.search); fetch((pm ? 'http://127.0.0.1:' + pm[1] : '') + '/result', { method: 'POST', body: report(), mode: pm ? 'no-cors' : 'same-origin' }); } catch {} } }
 
   $('file').addEventListener('change', () => { const f = $('file').files[0]; $('go').disabled = !f; if (f) status(fmt(f.size) + ' selected. No upload happens.'); });
   $('go').addEventListener('click', () => { const f = $('file').files[0]; if (f) runImport(f); });

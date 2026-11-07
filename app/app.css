@@ -13,4 +13,4 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 .hc input{width:100%;box-sizing:border-box;margin:.2rem 0 0;padding:.15rem .3rem;font-size:.85rem}.hc .err{color:var(--bad);font-size:.75rem}
 #gridscroll{position:relative;height:24rem;overflow:auto}#gridspace{width:1px}#gridrows{position:absolute;left:0;top:0}
 .gr{display:flex;height:28px;line-height:28px}.gc{flex:0 0 11rem;padding:0 .5rem;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:1px solid var(--line);font-size:.9rem}
-.gc.num{color:var(--mut)}.hint{color:var(--mut);font-size:.85rem}
+.gc.num{color:var(--mut);text-align:right}.hint{color:var(--mut);font-size:.85rem}

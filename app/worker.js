@@ -1,18 +1,18 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.5.0/lfc-pack.js');
+importScripts('../vendor/lfcp/0.5.0/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
 let core = null;
+const MODS = () => self.__M || null; // set by the single-file build, which inlines the ES modules
 const send = (type, id, data) => self.postMessage(Object.assign({ type, id }, data));
-const loadCore = async () => (core ||= Object.assign({}, await import('../src/ingest/delimited.mjs'), await import('../src/ingest/infer.mjs')));
+const loadCore = async () => (core ||= MODS() || Object.assign({}, await import('../src/ingest/delimited.mjs'), await import('../src/ingest/infer.mjs')));
 const safe = (s) => String(s || 'dataset').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'dataset';
 // Storage layer: OPFS when the browser has it, otherwise memory for this tab only (WebKitGTK 2.52.6 has no navigator.storage).
-const OPFS = !!(self.navigator && navigator.storage && navigator.storage.getDirectory);
+let OPFS = false, STORAGE = 'memory, this tab only';
 const MEM = { files: new Map(), catalog: [] };
-const STORAGE = OPFS ? 'browser storage (OPFS)' : 'memory, this tab only';
-const store = OPFS ? {
+const opfsStore = {
   async dir() { return (await navigator.storage.getDirectory()).getDirectoryHandle(DIR, { create: true }); },
   async create(name) { const h = await (await this.dir()).getFileHandle(name, { create: true }); const w = await h.createWritable({ keepExistingData: false }); return { write: (p) => w.write(p), close: () => w.close(), abort: () => w.abort() }; },
   async file(name) { return (await (await this.dir()).getFileHandle(name)).getFile(); },
@@ -20,7 +20,8 @@ const store = OPFS ? {
   async catalog() { try { return JSON.parse(await (await (await (await this.dir()).getFileHandle(CATALOG)).getFile()).text()); } catch { return []; } },
   async setCatalog(list) { const w = await (await (await this.dir()).getFileHandle(CATALOG, { create: true })).createWritable(); await w.write(JSON.stringify(list)); await w.close(); },
   async orphans(known) { const d = await this.dir(), out = []; for await (const [n, h] of d.entries()) if (h.kind === 'file' && n.endsWith('.json.lfc') && !known.has(n)) out.push({ name: n, bytes: (await h.getFile()).size }); return out; },
-} : {
+};
+const memStore = {
   async create(name) { const parts = []; return { write: async (p) => { parts.push(p.slice()); }, close: async () => { MEM.files.set(name, new Blob(parts)); }, abort: async () => {} }; },
   async file(name) { const f = MEM.files.get(name); if (!f) throw new Error('Dataset not found.'); return f; },
   async remove(name) { MEM.files.delete(name); },
@@ -28,10 +29,14 @@ const store = OPFS ? {
   async setCatalog(list) { MEM.catalog = list.slice(); },
   async orphans() { return []; },
 };
+let store = memStore;
+// Some contexts (WebKitGTK, pages opened from a file) have no usable OPFS: look once, fall back to memory.
+const storageReady = (async () => { try { await navigator.storage.getDirectory(); OPFS = true; STORAGE = 'browser storage (OPFS)'; store = opfsStore; } catch {} })();
 const stop = (job) => { if (job.cancelled) { const e = new Error('Import cancelled.'); e.cancelled = true; throw e; } };
 
-self.onmessage = (e) => {
+self.onmessage = async (e) => {
   const m = e.data || {};
+  await storageReady;
   if (m.type === 'cancel') { const j = jobs.get(m.id); if (j) j.cancelled = true; }
   else if (m.type === 'import') importFile(m);
   else if (m.type === 'list') list(m);
@@ -139,7 +144,7 @@ let view = null, queryMod = null;
 async function openView(m) {
   try {
     await LfcPack.init({ readOnly: true });
-    queryMod ||= await import('../src/query/query.mjs');
+    queryMod ||= MODS() || await import('../src/query/query.mjs');
     const entry = (await store.catalog()).find((c) => c.name === m.name);
     if (!entry) throw new Error('Dataset not found.');
     const f = await store.file(m.name);
@@ -178,7 +183,7 @@ async function pageView(m) {
 // Big-file check support: builds a deterministic CSV of about m.mb megabytes, on disk (OPFS) when available.
 async function genBig(m) {
   try {
-    const { HEADER, line } = await import('./bigdata.mjs'), target = m.mb * 1048576, parts = []; let w = null, bytes = 0, rows = 0, buf = [], bl = 0;
+    const { HEADER, line } = MODS() || await import('./bigdata.mjs'), target = m.mb * 1048576, parts = []; let w = null, bytes = 0, rows = 0, buf = [], bl = 0;
     if (OPFS) { const h = await (await store.dir()).getFileHandle('scratch-big.csv', { create: true }); w = await h.createWritable({ keepExistingData: false }); }
     const put = async (str) => { const b = enc.encode(str); bytes += b.byteLength; if (w) await w.write(b); else parts.push(b); };
     await put(HEADER);

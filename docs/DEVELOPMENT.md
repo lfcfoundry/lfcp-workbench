@@ -54,3 +54,7 @@ No generated caches or dependency directories are required. Do not rewrite histo
 ## Big-file check (added 2026.11.06)
 
 `python3 tests/browser-run.py firefox|chromium|webkit "bigtest=300" 400` generates a deterministic CSV of about 300 MB (7,000,716 rows; on disk in OPFS where the browser has it, in memory otherwise), imports it, opens the data view, checks the first rows, the last row after scrolling to the end, a middle row, and that filtering refuses with a clear message above 1,000,000 rows. Pass/fail; the phase times in the report are informational only, from one run each. Results: `/mnt/project-files/lfc-workbench/browser-results/*-bigfile-300MB-*.txt`.
+
+## One-file build (added 2026.11.06)
+
+`node tools/build-single.mjs OUT.html` writes the whole page (code, styles, worker, LFC-pack 0.5.0) as one 435 KB `.html` file that opens by double-click, with a CSP that names the exact hashes of its inline script and style (no `unsafe-inline`). `--test` adds a loopback reporting hook; `python3 tests/browser-run.py chromium|firefox|webkit "selftest=1" 90 --file=OUT.html` runs it from `file://`. Results 2026.11.06: Chromium and Firefox PASS from `file://`; Chromium keeps data in memory only there (no OPFS on `file://`) and says so; WebKitGTK from `file://` fails reading the chosen file inside the worker ("I/O read operation failed"), so Safari-family browsers need the page hosted over http(s).
