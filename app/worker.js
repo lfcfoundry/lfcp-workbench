@@ -37,7 +37,9 @@ const stop = (job) => { if (job.cancelled) { const e = new Error('Import cancell
 self.onmessage = async (e) => {
   const m = e.data || {};
   await storageReady;
-  if (m.type === 'cancel') { const j = jobs.get(m.id); if (j) j.cancelled = true; }
+  if (m.type === 'cancel') { const j = jobs.get(m.id); if (j) { j.cancelled = true; if (j.abort) j.abort(); } }
+  else if (m.type === 'parseJob') parseJob(m);
+  else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importFile(m);
   else if (m.type === 'list') list(m);
   else if (m.type === 'delete') remove(m);
@@ -50,13 +52,58 @@ self.onmessage = async (e) => {
   else if (m.type === 'export') exportView(m);
 };
 
+// Reads the file in slices, parses it, tracks column types and hands JSON-lines bytes to onBytes (awaited, so the consumer sets the pace).
+// Used twice: in a helper worker (parse on one thread while the import worker packs and writes on another), or inline when a helper cannot start.
+async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t) {
+  await loadCore();
+  const { DelimitedParser, IngestError, cleanHeaders, TypeTracker } = core;
+  let headers = null, trackers = null, rows = 0, lines = [], queued = 0, lastProg = 0; const sample = [];
+  const flush = async () => { if (!lines.length) return; const bytes = enc.encode(lines.join('')); lines = []; queued = 0; await onBytes(bytes); };
+  const parser = new DelimitedParser(delimiter, (f, line) => {
+    if (!headers) { headers = cleanHeaders(f); trackers = headers.map(() => new TypeTracker()); return; }
+    if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
+    const rec = Object.create(null);
+    for (let i = 0; i < headers.length; i++) { rec[headers[i]] = f[i]; trackers[i].add(f[i]); }
+    rows++; if (sample.length < 20) sample.push(rec);
+    const s = JSON.stringify(rec) + '\n'; lines.push(s); queued += s.length;
+  });
+  const dec = new TextDecoder('utf-8', { fatal: true });
+  for (let off = 0; off < file.size; off += SLICE) {
+    stopFn();
+    const end = Math.min(file.size, off + SLICE);
+    let s = performance.now(); const chunk = new Uint8Array(await file.slice(off, end).arrayBuffer()); t.readMs += performance.now() - s;
+    s = performance.now(); parser.feed(dec.decode(chunk, { stream: end < file.size }), false); t.parseMs += performance.now() - s;
+    if (queued >= FLUSH) await flush();
+    if (performance.now() - lastProg > 200) { lastProg = performance.now(); onProgress(end, rows); }
+  }
+  parser.feed(dec.decode(), true);
+  if (!headers) throw new IngestError('The file has no header row.');
+  await flush(); stopFn();
+  return { headers, types: trackers.map((x) => ({ type: x.type, nullable: x.nullable })), rows, sample };
+}
+
+// Helper-worker side of an import: parse and send bytes back, at most CREDITS buffers ahead of the packer.
+const CREDITS = 6;
+let credit = null, parseCredits = CREDITS;
+async function parseJob(m) {
+  const t = { readMs: 0, parseMs: 0 };
+  try {
+    parseCredits = CREDITS;
+    const r = await parseStream(m.file, m.delimiter, () => {}, async (bytes) => {
+      while (parseCredits <= 0) await new Promise((res) => { credit = res; });
+      parseCredits--; self.postMessage({ type: 'lines', bytes }, [bytes.buffer]);
+    }, (bytes, rows) => self.postMessage({ type: 'progress', bytes, rows }), t);
+    self.postMessage({ type: 'parsed', result: r, t });
+  } catch (err) { self.postMessage({ type: 'perror', message: String(err && err.message || err), line: err && err.line || null }); }
+}
+
 async function importFile(m) {
   const job = { cancelled: false }; jobs.set(m.id, job);
-  let name = null, writable = null, closed = false;
+  let name = null, writable = null, closed = false, helper = null;
   const t0 = performance.now(), t = { readMs: 0, parseMs: 0, packMs: 0, writeMs: 0 };
   try {
     await Promise.all([loadCore(), LfcPack.init()]);
-    const { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker } = core;
+    const { IngestError, detectDelimiter } = core;
     const file = m.file; if (!file) throw new IngestError('No file was provided.');
     let delimiter = m.delimiter || 'auto';
     if (delimiter === 'auto') delimiter = detectDelimiter(new TextDecoder().decode(new Uint8Array(await file.slice(0, 65536).arrayBuffer())));
@@ -64,43 +111,43 @@ async function importFile(m) {
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: delimiter === '\t' ? 'tsv' : 'csv', sourceName: String(file.name).slice(0, 200), sourceBytes: file.size, tables: [{ name: 'rows', rows: 0, columns: [] }] };
     const packer = LfcPack.packStream({ blockBytes: 262144, share: true, meta });
-    let headers = null, trackers = null, rows = 0, lines = [], queued = 0, outBytes = 0, lastProg = 0; const sample = [];
+    let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
-    const flush = async () => { if (!lines.length) return; const bytes = enc.encode(lines.join('')); lines = []; queued = 0; const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
-    const parser = new DelimitedParser(delimiter, (f, line) => {
-      if (!headers) { headers = cleanHeaders(f); trackers = headers.map(() => new TypeTracker()); return; }
-      if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
-      const rec = Object.create(null);
-      for (let i = 0; i < headers.length; i++) { rec[headers[i]] = f[i]; trackers[i].add(f[i]); }
-      rows++; if (sample.length < 20) sample.push(rec);
-      const s = JSON.stringify(rec) + '\n'; lines.push(s); queued += s.length;
-    });
-    const dec = new TextDecoder('utf-8', { fatal: true });
-    for (let off = 0; off < file.size; off += SLICE) {
-      stop(job);
-      const end = Math.min(file.size, off + SLICE);
-      let s = performance.now(); const chunk = new Uint8Array(await file.slice(off, end).arrayBuffer()); t.readMs += performance.now() - s;
-      s = performance.now(); parser.feed(dec.decode(chunk, { stream: end < file.size }), false); t.parseMs += performance.now() - s;
-      if (queued >= FLUSH) await flush();
-      if (performance.now() - lastProg > 200) { lastProg = performance.now(); send('progress', m.id, { bytes: end, total: file.size, rows }); }
-    }
-    parser.feed(dec.decode(), true);
-    if (!headers) throw new IngestError('The file has no header row.');
-    await flush(); stop(job);
-    meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: trackers[i].type, nullable: trackers[i].nullable }));
+    const packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
+    let res;
+    try { helper = m.inline ? null : new Worker(self.location.href); } catch { helper = null; }
+    if (helper) {   // parse on the helper, pack and write here: both run at once
+      res = await new Promise((resolve, reject) => {
+        let chain = Promise.resolve();
+        job.abort = () => reject(Object.assign(new Error('Import cancelled.'), { cancelled: true }));
+        helper.onerror = (e) => reject(new Error('The import helper failed: ' + (e && e.message || 'unknown error')));
+        helper.onmessage = (e) => {
+          const d = e.data || {};
+          if (d.type === 'progress') { send('progress', m.id, { bytes: d.bytes, total: file.size, rows: d.rows }); return; }
+          chain = chain.then(async () => {
+            if (d.type === 'lines') { await packBytes(d.bytes); helper.postMessage({ type: 'credit' }); }
+            else if (d.type === 'parsed') { t.readMs = d.t.readMs; t.parseMs = d.t.parseMs; resolve(d.result); }
+            else if (d.type === 'perror') reject(Object.assign(new IngestError(d.message), { line: d.line, message: d.message }));
+          }).catch(reject);
+        };
+        helper.postMessage({ type: 'parseJob', file, delimiter });
+      });
+    } else res = await parseStream(file, delimiter, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t);
+    const { headers, types, rows, sample } = res; stop(job);
+    meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     await write(packer.finish());
     await writable.close(); closed = true; writable = null;
     // Complete only after the footer is validated, then recorded in the catalog.
     const v = await validate(name, rows);
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
-    const cols = headers.map((h, i) => ({ name: h, type: trackers[i].type, nullable: trackers[i].nullable }));
+    const cols = headers.map((h, i) => ({ name: h, type: types[i].type, nullable: types[i].nullable }));
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
-    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs) } } });
+    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs) }, parallel: !!helper } });
   } catch (err) {
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
     send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
-  } finally { jobs.delete(m.id); }
+  } finally { if (helper) helper.terminate(); jobs.delete(m.id); }
 }
 
 async function validate(name, rows) {

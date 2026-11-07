@@ -34,10 +34,10 @@
     host.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openGrid(b.dataset.open)));
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => { await call({ type: 'delete', name: b.dataset.del }); refresh(); }));
   }
-  async function runImport(file) {
+  async function runImport(file, inline) {
     $('go').disabled = true; $('selftest').disabled = true; $('cancel').hidden = false; $('prog').hidden = false; $('prog').value = 0;
     const id = 'j' + (++seq); active = id;
-    const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage({ type: 'import', id, file, delimiter: $('delim').value }); });
+    const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage({ type: 'import', id, file, delimiter: $('delim').value, inline: !!inline || /[?&]inline=1/.test(location.search) }); });
     active = null; $('cancel').hidden = true; $('prog').hidden = true; $('selftest').disabled = false; $('go').disabled = !$('file').files.length;
     if (res.type === 'done') { status('Import complete and checked.'); show(res.dataset); refresh(); }
     else status((res.type === 'cancelled' ? 'Cancelled. Nothing was kept.' : 'Import failed: ' + res.message), res.type !== 'cancelled');
@@ -126,6 +126,14 @@
     if (res.type === 'done') {
       const d = res.dataset;
       add('row count equals expected', d.rows === expected.length, `${d.rows} vs ${expected.length}`);
+      add('import ran parse and pack on two threads', d.parallel === true || /[?&]inline=1/.test(location.search) || location.protocol === 'file:', (d.parallel ? 'two threads' : 'one thread') + (location.protocol === 'file:' ? ' (a page opened from a file may not be allowed a helper; it then runs on one thread)' : ''));
+      const inl = await runImport(file, true);
+      add('import on one thread gives the same dataset', inl.type === 'done' && inl.dataset.rows === d.rows && !inl.dataset.parallel && JSON.stringify(inl.dataset.columns) === JSON.stringify(d.columns) && inl.dataset.bytes === d.bytes, inl.type === 'done' ? inl.dataset.rows + ' rows, ' + inl.dataset.bytes + ' vs ' + d.bytes + ' bytes' : inl.message);
+      if (inl.type === 'done') await call({ type: 'delete', name: inl.dataset.name });
+      const bad = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'bad.csv', { type: 'text/csv' }));
+      add('a bad row stops the import and names its line', bad.type === 'error' && /Line 3/.test(bad.message), bad.message);
+      const idc = 'j' + (++seq), pc = new Promise((r) => waiters.set(idc, r)); worker.postMessage({ type: 'import', id: idc, file, delimiter: ',' }); worker.postMessage({ type: 'cancel', id: idc });
+      const cr = await pc; add('cancel stops the import', cr.type === 'cancelled', cr.type);
       add('footer validated', d.validation.ok, d.validation.level);
       add('types: id integer, score number, when date', d.columns[0].type === 'integer' && d.columns[2].type === 'number' && d.columns[3].type === 'date', d.columns.map((c) => c.type).join(','));
       const v = await call({ type: 'verify', name: d.name, expectJson: JSON.stringify(expected) });
