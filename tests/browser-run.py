@@ -4,6 +4,14 @@
 # Pass/fail only. Starts and stops its own loopback server and browser.
 import json, os, shutil, subprocess, sys, tempfile, time, urllib.request, urllib.error
 which = sys.argv[1]
+DRIVER = {'firefox': 'none (direct launch)', 'chromium': 'none (direct launch, no Playwright)', 'webkit': 'WebKitWebDriver'}.get(which, '?')   # QA rule: print the driver on line 1
+if which == 'all':   # run the three test browsers one after another, always all three, exit 1 if any failed
+    rc = 0
+    for b in ('firefox', 'chromium', 'webkit'):
+        r = subprocess.run([sys.executable, '-I', os.path.abspath(__file__), b] + sys.argv[2:])
+        rc = rc or r.returncode
+    sys.exit(rc)
+if os.environ.get('_WK_INNER') != '1': print('Driver: ' + DRIVER, flush=True)
 file_arg = next((a[7:] for a in sys.argv if a.startswith('--file=')), None)   # open a built single-file page from disk (file://) instead of the served one
 http_arg = next((a[7:] for a in sys.argv if a.startswith('--http=')), None)   # serve a built single-file page over loopback http (like hosting) instead of file://
 args = [a for a in sys.argv[2:] if not a.startswith('--file=') and not a.startswith('--http=')]
