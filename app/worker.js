@@ -47,6 +47,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'open') openView(m);
   else if (m.type === 'query') queryView(m);
   else if (m.type === 'page') pageView(m);
+  else if (m.type === 'export') exportView(m);
 };
 
 async function importFile(m) {
@@ -178,6 +179,23 @@ async function pageView(m) {
     numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
   send('paged', m.id, { start: m.start, rows: out, numbers });
+}
+
+// Export: writes the rows now shown (filter and sort applied) as CSV, in batches, into one Blob. Memory is one batch plus the Blob (browsers keep large Blobs off the JS heap).
+async function exportView(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  try {
+    const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = 5000;
+    const count = view.filtered ? view.indices.length : view.total, parts = [csvHeader(view.columns, d)];
+    for (let start = 0; start < count; start += BATCH) {
+      const n = Math.min(BATCH, count - start); let rows;
+      if (view.filtered) { rows = []; for (let i = start; i < start + n; i++) { const r = view.rows[view.indices[i]]; rows.push(view.columns.map((c) => r[c.name] ?? '')); } }
+      else rows = (await view.R.rows({ from: start, count: n })).map((r) => view.columns.map((c) => r[c.name] ?? ''));
+      parts.push(csvLines(rows, d));
+    }
+    const blob = new Blob(parts, { type: 'text/csv;charset=utf-8' });
+    send('exported', m.id, { blob, rows: count, bytes: blob.size });
+  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
 
 // Big-file check support: builds a deterministic CSV of about m.mb megabytes, on disk (OPFS) when available.

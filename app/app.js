@@ -94,6 +94,19 @@
     return r;
   }
   $('gridscroll').addEventListener('scroll', () => { if (!G.busy) { G.busy = true; requestAnimationFrame(async () => { G.busy = false; await loadWindow(); }); } });
+  // Export the rows now shown (filter and sort applied) as CSV. Returns the worker's reply; with download=true also saves the file.
+  async function exportCsv(download) {
+    status('Preparing CSV…');
+    const r = await call({ type: 'export', delim: ',' });
+    if (r.type === 'error') { status(r.message, true); return r; }
+    if (download) {
+      const a = document.createElement('a'), name = String(($('gridtitle').textContent || 'data').replace(/^Data: /, '')).replace(/\.[^.]*$/, '') + '-view.csv';
+      a.href = URL.createObjectURL(r.blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      status('Saved ' + name + ': ' + r.rows.toLocaleString() + ' rows, ' + (r.bytes / 1048576).toFixed(1) + ' MB.');
+    }
+    return r;
+  }
+  $('exportcsv').addEventListener('click', () => exportCsv(true));
   $('closegrid').addEventListener('click', () => { $('gridbox').hidden = true; });
 
   // Self-test: messy generated CSV, imported in the worker, read back, compared row by row.
@@ -131,6 +144,11 @@
       const want = expected.filter((r) => r.name.toLowerCase().includes('xxxxxxxxxxxxxxxxxxxxxx')).length;
       add('text filter matches the source count', q.count === want, `${q.count} vs ${want}`);
       add('empty scores sort last', !G.rows.length || G.rows[0][2] !== '', G.rows[0] && G.rows[0][2]);
+      G.filters = { id: '>=19990' }; G.sort = { col: 'id', dir: 'desc' }; buildHead(); await applyQuery();
+      const ex = await exportCsv(false), exRows = [];
+      if (ex.blob) { const P = (window.__M || await import('../src/ingest/delimited.mjs')).DelimitedParser; new P(',', (r) => exRows.push(r)).feed(await ex.blob.text(), true); }
+      const want10 = expected.filter((r) => +r.id >= 19990).sort((a, b) => b.id - a.id).map((r) => G.cols.map((c) => r[c.name]));
+      add('export of the filtered, sorted view equals those rows', exRows.length === 11 && JSON.stringify(exRows[0]) === JSON.stringify(G.cols.map((c) => c.name)) && JSON.stringify(exRows.slice(1)) === JSON.stringify(want10), exRows.length - 1 + ' rows exported');
       G.filters = { id: '>abc' }; buildHead(); q = await applyQuery();
       add('bad filter shows a message', !!q.errors.id, q.errors.id);
       $('gridbox').hidden = true;

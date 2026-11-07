@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-oJfEXNd5APQit2cOvMb5hWHifwKMxjLXyyFS+t5cVlc=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-pcFkzJZSTjRRYoEwl6LFUAv9qxMNItMvaemKwC3oTmw=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -47,7 +47,7 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
     <p id="gridinfo"></p>
     <div id="gridwrap"><div id="gridhead"></div><div id="gridscroll" tabindex="0"><div id="gridspace"></div><div id="gridrows"></div></div></div>
     <p class="hint">Filter boxes: text finds matches anywhere; use &gt;5, &lt;=10, =exact, !=exact, = for empty cells, ! for filled cells. Click a column name to sort.</p>
-    <button id="closegrid">Close data view</button>
+    <button id="exportcsv">Export CSV</button> <button id="closegrid">Close data view</button>
   </section>
   <section>
     <h2>Saved in this browser</h2><div id="saved">Loading…</div>
@@ -252,6 +252,21 @@ function runQuery(rows, columns, { filters = {}, sort = null } = {}) {
   return { indices: Uint32Array.from(idx), errors };
 }
 
+// CSV writer for the Workbench export. Plain RFC 4180: fields holding the delimiter, a quote, CR or LF are
+// quoted and quotes are doubled; every other value is written exactly as stored. No spreadsheet-formula
+// escaping and no byte-order mark, so the file reads back identically through our own CSV reader.
+function csvField(v, delimiter = ',') {
+  const s = v == null ? '' : String(v);
+  return s.includes(delimiter) || /["\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+// rows: arrays of values, in column order. Returns one string ending with the line break.
+function csvLines(rows, delimiter = ',', eol = '\r\n') {
+  let out = '';
+  for (const r of rows) { let line = ''; for (let i = 0; i < r.length; i++) line += (i ? delimiter : '') + csvField(r[i], delimiter); out += line + eol; }
+  return out;
+}
+function csvHeader(columns, delimiter = ',', eol = '\r\n') { return csvLines([columns.map((c) => c.name)], delimiter, eol); }
+
 // Deterministic generator for the big-file check: row i is always the same, so the test
 // can recompute any row and compare it with what the data view shows.
 const HEADER = 'id,name,score,when,note\n';
@@ -260,7 +275,7 @@ function cells(i) {
 }
 const line = (i) => cells(i).join(',') + '\n';
 
-return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, readRecords, parseFilter, matches, runQuery, HEADER, cells, line };
+return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, readRecords, parseFilter, matches, runQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
 })();
 /*!
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
@@ -2423,6 +2438,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'open') openView(m);
   else if (m.type === 'query') queryView(m);
   else if (m.type === 'page') pageView(m);
+  else if (m.type === 'export') exportView(m);
 };
 
 async function importFile(m) {
@@ -2554,6 +2570,23 @@ async function pageView(m) {
     numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
   send('paged', m.id, { start: m.start, rows: out, numbers });
+}
+
+// Export: writes the rows now shown (filter and sort applied) as CSV, in batches, into one Blob. Memory is one batch plus the Blob (browsers keep large Blobs off the JS heap).
+async function exportView(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  try {
+    const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = 5000;
+    const count = view.filtered ? view.indices.length : view.total, parts = [csvHeader(view.columns, d)];
+    for (let start = 0; start < count; start += BATCH) {
+      const n = Math.min(BATCH, count - start); let rows;
+      if (view.filtered) { rows = []; for (let i = start; i < start + n; i++) { const r = view.rows[view.indices[i]]; rows.push(view.columns.map((c) => r[c.name] ?? '')); } }
+      else rows = (await view.R.rows({ from: start, count: n })).map((r) => view.columns.map((c) => r[c.name] ?? ''));
+      parts.push(csvLines(rows, d));
+    }
+    const blob = new Blob(parts, { type: 'text/csv;charset=utf-8' });
+    send('exported', m.id, { blob, rows: count, bytes: blob.size });
+  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
 
 // Big-file check support: builds a deterministic CSV of about m.mb megabytes, on disk (OPFS) when available.
@@ -2769,6 +2802,21 @@ function runQuery(rows, columns, { filters = {}, sort = null } = {}) {
   return { indices: Uint32Array.from(idx), errors };
 }
 
+// CSV writer for the Workbench export. Plain RFC 4180: fields holding the delimiter, a quote, CR or LF are
+// quoted and quotes are doubled; every other value is written exactly as stored. No spreadsheet-formula
+// escaping and no byte-order mark, so the file reads back identically through our own CSV reader.
+function csvField(v, delimiter = ',') {
+  const s = v == null ? '' : String(v);
+  return s.includes(delimiter) || /["\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+// rows: arrays of values, in column order. Returns one string ending with the line break.
+function csvLines(rows, delimiter = ',', eol = '\r\n') {
+  let out = '';
+  for (const r of rows) { let line = ''; for (let i = 0; i < r.length; i++) line += (i ? delimiter : '') + csvField(r[i], delimiter); out += line + eol; }
+  return out;
+}
+function csvHeader(columns, delimiter = ',', eol = '\r\n') { return csvLines([columns.map((c) => c.name)], delimiter, eol); }
+
 // Deterministic generator for the big-file check: row i is always the same, so the test
 // can recompute any row and compare it with what the data view shows.
 const HEADER = 'id,name,score,when,note\n';
@@ -2777,7 +2825,7 @@ function cells(i) {
 }
 const line = (i) => cells(i).join(',') + '\n';
 
-return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, readRecords, parseFilter, matches, runQuery, HEADER, cells, line };
+return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, readRecords, parseFilter, matches, runQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
 })();
 window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsrc").textContent], { type: "text/javascript" }));
 'use strict';
@@ -2876,6 +2924,19 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
     return r;
   }
   $('gridscroll').addEventListener('scroll', () => { if (!G.busy) { G.busy = true; requestAnimationFrame(async () => { G.busy = false; await loadWindow(); }); } });
+  // Export the rows now shown (filter and sort applied) as CSV. Returns the worker's reply; with download=true also saves the file.
+  async function exportCsv(download) {
+    status('Preparing CSV…');
+    const r = await call({ type: 'export', delim: ',' });
+    if (r.type === 'error') { status(r.message, true); return r; }
+    if (download) {
+      const a = document.createElement('a'), name = String(($('gridtitle').textContent || 'data').replace(/^Data: /, '')).replace(/\.[^.]*$/, '') + '-view.csv';
+      a.href = URL.createObjectURL(r.blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      status('Saved ' + name + ': ' + r.rows.toLocaleString() + ' rows, ' + (r.bytes / 1048576).toFixed(1) + ' MB.');
+    }
+    return r;
+  }
+  $('exportcsv').addEventListener('click', () => exportCsv(true));
   $('closegrid').addEventListener('click', () => { $('gridbox').hidden = true; });
 
   // Self-test: messy generated CSV, imported in the worker, read back, compared row by row.
@@ -2913,6 +2974,11 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       const want = expected.filter((r) => r.name.toLowerCase().includes('xxxxxxxxxxxxxxxxxxxxxx')).length;
       add('text filter matches the source count', q.count === want, `${q.count} vs ${want}`);
       add('empty scores sort last', !G.rows.length || G.rows[0][2] !== '', G.rows[0] && G.rows[0][2]);
+      G.filters = { id: '>=19990' }; G.sort = { col: 'id', dir: 'desc' }; buildHead(); await applyQuery();
+      const ex = await exportCsv(false), exRows = [];
+      if (ex.blob) { const P = (window.__M || await import('../src/ingest/delimited.mjs')).DelimitedParser; new P(',', (r) => exRows.push(r)).feed(await ex.blob.text(), true); }
+      const want10 = expected.filter((r) => +r.id >= 19990).sort((a, b) => b.id - a.id).map((r) => G.cols.map((c) => r[c.name]));
+      add('export of the filtered, sorted view equals those rows', exRows.length === 11 && JSON.stringify(exRows[0]) === JSON.stringify(G.cols.map((c) => c.name)) && JSON.stringify(exRows.slice(1)) === JSON.stringify(want10), exRows.length - 1 + ' rows exported');
       G.filters = { id: '>abc' }; buildHead(); q = await applyQuery();
       add('bad filter shows a message', !!q.errors.id, q.errors.id);
       $('gridbox').hidden = true;
