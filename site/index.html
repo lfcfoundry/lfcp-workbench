@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-pcFkzJZSTjRRYoEwl6LFUAv9qxMNItMvaemKwC3oTmw=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-3RfA5kyaUzyy1/2a9B08ovBnNzQrKE9tsfrXMc+hNVE=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -221,6 +221,7 @@ function matches(f, cell) {
   return f.op === 'gt' ? x > f.value : f.op === 'gte' ? x >= f.value : f.op === 'lt' ? x < f.value : x <= f.value;
 }
 
+function sortKeyFor(type) { return sortKey(type); }
 function sortKey(type) {
   if (NUMERIC.has(type)) return (v) => Number(v);
   if (type === 'date') return dateValue;
@@ -252,6 +253,46 @@ function runQuery(rows, columns, { filters = {}, sort = null } = {}) {
   return { indices: Uint32Array.from(idx), errors };
 }
 
+// Same filter and sort as query.mjs (runQuery), but over whole columns instead of row objects:
+// cols = { columnName: array of cell values, one entry per row }, n = row count.
+// Returns the same {indices, errors}. Used when only the filtered or sorted columns were decoded from the dataset
+// (LfcPack.unpackColumns), which skips making a row object per row and decoding the other columns.
+
+
+function runColumnQuery(cols, n, columns, { filters = {}, sort = null } = {}) {
+  const errors = {}, active = [];
+  for (const c of columns) {
+    const text = filters[c.name]; if (!text) continue;
+    const { filter, error } = parseFilter(text, c.type);
+    if (error) errors[c.name] = error; else if (filter) active.push([cols[c.name], filter]);
+  }
+  let idx;
+  if (!active.length) { idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; }
+  else {
+    // the first filter scans every row; later filters scan only the survivors
+    const [col0, f0] = active[0], first = []; for (let i = 0; i < n; i++) if (matches(f0, col0[i])) first.push(i);
+    idx = Uint32Array.from(first);
+    for (let a = 1; a < active.length && idx.length; a++) { const [col, f] = active[a]; let m = 0; for (let k = 0; k < idx.length; k++) if (matches(f, col[idx[k]])) idx[m++] = idx[k]; idx = idx.subarray(0, m); }
+  }
+  if (sort && sort.col && cols[sort.col]) {
+    const col = columns.find((c) => c.name === sort.col), src = cols[sort.col], key = sortKeyFor(col ? col.type : 'string'), sign = sort.dir === 'desc' ? -1 : 1;
+    const text = !col || !(col.type === 'integer' || col.type === 'number' || col.type === 'date');
+    // rank 0 normal, 1 not a number, 2 empty: empties sort last, then unparsable values, ties keep file order
+    const rank = new Uint8Array(n), num = text ? null : new Float64Array(n), str = text ? new Array(n) : null;
+    for (let k = 0; k < idx.length; k++) {
+      const i = idx[k], v = src[i];
+      if (v == null || v === '') { rank[i] = 2; continue; }
+      if (text) str[i] = String(v); else { const x = key(v); if (x !== x) rank[i] = 1; else num[i] = x; }
+    }
+    const arr = Array.from(idx);
+    arr.sort(text
+      ? (a, b) => { const ra = rank[a], rb = rank[b]; if (ra || rb) return ra === rb ? a - b : ra > rb ? 1 : -1; const x = str[a], y = str[b]; return x < y ? -sign : x > y ? sign : a - b; }
+      : (a, b) => { const ra = rank[a], rb = rank[b]; if (ra || rb) return ra === rb ? a - b : ra > rb ? 1 : -1; const x = num[a], y = num[b]; return x < y ? -sign : x > y ? sign : a - b; });
+    idx = Uint32Array.from(arr);
+  }
+  return { indices: idx, errors };
+}
+
 // CSV writer for the Workbench export. Plain RFC 4180: fields holding the delimiter, a quote, CR or LF are
 // quoted and quotes are doubled; every other value is written exactly as stored. No spreadsheet-formula
 // escaping and no byte-order mark, so the file reads back identically through our own CSV reader.
@@ -275,7 +316,7 @@ function cells(i) {
 }
 const line = (i) => cells(i).join(',') + '\n';
 
-return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, readRecords, parseFilter, matches, runQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
+return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
 })();
 /*!
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
@@ -2531,26 +2572,60 @@ async function remove(m) {
 
 // Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
-const MAX_DECODE_ROWS = 1000000;
-let view = null, queryMod = null;
+const MAX_DECODE_ROWS = 1000000;          // fallback path (decodes every row): used only when the file cannot be read by column
+const MAX_COLUMN_ROWS = 10000000, MAX_COLUMN_BYTES = 384 * 1048576;   // column path: only the filtered and sorted columns are decoded
+let view = null, queryMod = null, colMod = null;
 async function openView(m) {
   try {
     await LfcPack.init({ readOnly: true });
     queryMod ||= MODS() || await import('../src/query/query.mjs');
+    colMod ||= MODS() || await import('../src/query/columnar.mjs');
     const entry = (await store.catalog()).find((c) => c.name === m.name);
     if (!entry) throw new Error('Dataset not found.');
     const f = await store.file(m.name);
     const R = await LfcPack.open(f), total = R.info.rows;
-    view = { name: m.name, R, total, rows: null, columns: entry.columns, indices: null, filtered: false };
+    view = { name: m.name, R, f, total, rows: null, columns: entry.columns, indices: null, filtered: false, cols: new Map(), flat: R.blocks.length > 0 && R.blocks.every((b) => b.kind === 'f' && !b.table), cache: new Map() };
     send('opened', m.id, { name: m.name, total, columns: entry.columns });
   } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
 }
+// Column path: only the columns a filter or sort needs are decoded (LfcPack.unpackColumns), kept per column so typing in a filter box does not decode again.
+// Falls back to decoding every row when the file has no flat-row blocks.
+async function loadColumns(names) {
+  const want = names.filter((n) => !view.cols.has(n));
+  if (want.length) {
+    const bytes = new Uint8Array(await view.f.arrayBuffer()), blocks = LfcPack.unpackColumns(bytes, { keys: want }), out = want.map(() => new Array(view.total)); let at = 0;
+    for (const b of blocks) { for (let k = 0; k < want.length; k++) { const src = b.cols[want[k]], dst = out[k]; for (let i = 0; i < b.n; i++) dst[at + i] = src ? src[i] : ''; } at += b.n; }
+    want.forEach((n, k) => view.cols.set(n, out[k]));
+  }
+  const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
+}
+// Row objects for some row numbers, grouped by block so each block is decoded once. Keeps a few decoded blocks for scrolling back and forth.
+async function rowsAt(idx, from, to) {
+  if (view.rows) { const o = []; for (let i = from; i < to; i++) o.push(view.rows[idx[i]]); return o; }
+  const R = view.R, firsts = R.blocks.map((b) => b.first), out = new Array(to - from), byBlock = new Map();
+  for (let i = from; i < to; i++) {
+    const r = idx[i]; let lo = 0, hi = firsts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (firsts[mid] <= r) lo = mid; else hi = mid - 1; }
+    let list = byBlock.get(lo); if (!list) byBlock.set(lo, list = []); list.push(i);
+  }
+  for (const [b, list] of byBlock) {
+    let rows = view.cache.get(b); if (!rows) { rows = await R.block(b); view.cache.set(b, rows); if (view.cache.size > 8) view.cache.delete(view.cache.keys().next().value); }
+    for (const i of list) out[i - from] = rows[idx[i] - firsts[b]];
+  }
+  return out;
+}
 async function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
-  const t0 = performance.now(), plain = !m.sort && !Object.values(m.filters || {}).some(Boolean);
+  const t0 = performance.now(), active = Object.keys(m.filters || {}).filter((k) => m.filters[k]), plain = !m.sort && !active.length;
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
+  const colOk = view.flat && view.total <= MAX_COLUMN_ROWS && view.f.size <= MAX_COLUMN_BYTES;
+  if (colOk) {
+    const names = [...new Set(active.concat(m.sort ? [m.sort.col] : []))].filter((n) => view.columns.some((c) => c.name === n));
+    const cols = await loadColumns(names), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort });
+    view.indices = r.indices; view.filtered = true;
+    return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names });
+  }
   if (!view.rows) {
-    if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + MAX_DECODE_ROWS.toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
+    if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + (view.flat ? MAX_COLUMN_ROWS : MAX_DECODE_ROWS).toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
     view.rows = await view.R.rows({ from: 0, count: view.total });
   }
   const r = queryMod.runQuery(view.rows, view.columns, { filters: m.filters, sort: m.sort });
@@ -2565,9 +2640,8 @@ async function pageView(m) {
     const objs = n ? await view.R.rows({ from: m.start, count: n }) : [];
     out = objs.map((r) => view.columns.map((c) => r[c.name] ?? '')); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
-    const end = Math.min(view.indices.length, m.start + m.count); out = [];
-    for (let i = m.start; i < end; i++) { const r = view.rows[view.indices[i]]; out.push(view.columns.map((c) => r[c.name] ?? '')); }
-    numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
+    const end = Math.min(view.indices.length, m.start + m.count), objs = await rowsAt(view.indices, m.start, end);
+    out = objs.map((r) => view.columns.map((c) => r[c.name] ?? '')); numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
   send('paged', m.id, { start: m.start, rows: out, numbers });
 }
@@ -2576,11 +2650,11 @@ async function pageView(m) {
 async function exportView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
-    const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = 5000;
+    const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
     const count = view.filtered ? view.indices.length : view.total, parts = [csvHeader(view.columns, d)];
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
-      if (view.filtered) { rows = []; for (let i = start; i < start + n; i++) { const r = view.rows[view.indices[i]]; rows.push(view.columns.map((c) => r[c.name] ?? '')); } }
+      if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => r[c.name] ?? ''));
       else rows = (await view.R.rows({ from: start, count: n })).map((r) => view.columns.map((c) => r[c.name] ?? ''));
       parts.push(csvLines(rows, d));
     }
@@ -2771,6 +2845,7 @@ function matches(f, cell) {
   return f.op === 'gt' ? x > f.value : f.op === 'gte' ? x >= f.value : f.op === 'lt' ? x < f.value : x <= f.value;
 }
 
+function sortKeyFor(type) { return sortKey(type); }
 function sortKey(type) {
   if (NUMERIC.has(type)) return (v) => Number(v);
   if (type === 'date') return dateValue;
@@ -2802,6 +2877,46 @@ function runQuery(rows, columns, { filters = {}, sort = null } = {}) {
   return { indices: Uint32Array.from(idx), errors };
 }
 
+// Same filter and sort as query.mjs (runQuery), but over whole columns instead of row objects:
+// cols = { columnName: array of cell values, one entry per row }, n = row count.
+// Returns the same {indices, errors}. Used when only the filtered or sorted columns were decoded from the dataset
+// (LfcPack.unpackColumns), which skips making a row object per row and decoding the other columns.
+
+
+function runColumnQuery(cols, n, columns, { filters = {}, sort = null } = {}) {
+  const errors = {}, active = [];
+  for (const c of columns) {
+    const text = filters[c.name]; if (!text) continue;
+    const { filter, error } = parseFilter(text, c.type);
+    if (error) errors[c.name] = error; else if (filter) active.push([cols[c.name], filter]);
+  }
+  let idx;
+  if (!active.length) { idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; }
+  else {
+    // the first filter scans every row; later filters scan only the survivors
+    const [col0, f0] = active[0], first = []; for (let i = 0; i < n; i++) if (matches(f0, col0[i])) first.push(i);
+    idx = Uint32Array.from(first);
+    for (let a = 1; a < active.length && idx.length; a++) { const [col, f] = active[a]; let m = 0; for (let k = 0; k < idx.length; k++) if (matches(f, col[idx[k]])) idx[m++] = idx[k]; idx = idx.subarray(0, m); }
+  }
+  if (sort && sort.col && cols[sort.col]) {
+    const col = columns.find((c) => c.name === sort.col), src = cols[sort.col], key = sortKeyFor(col ? col.type : 'string'), sign = sort.dir === 'desc' ? -1 : 1;
+    const text = !col || !(col.type === 'integer' || col.type === 'number' || col.type === 'date');
+    // rank 0 normal, 1 not a number, 2 empty: empties sort last, then unparsable values, ties keep file order
+    const rank = new Uint8Array(n), num = text ? null : new Float64Array(n), str = text ? new Array(n) : null;
+    for (let k = 0; k < idx.length; k++) {
+      const i = idx[k], v = src[i];
+      if (v == null || v === '') { rank[i] = 2; continue; }
+      if (text) str[i] = String(v); else { const x = key(v); if (x !== x) rank[i] = 1; else num[i] = x; }
+    }
+    const arr = Array.from(idx);
+    arr.sort(text
+      ? (a, b) => { const ra = rank[a], rb = rank[b]; if (ra || rb) return ra === rb ? a - b : ra > rb ? 1 : -1; const x = str[a], y = str[b]; return x < y ? -sign : x > y ? sign : a - b; }
+      : (a, b) => { const ra = rank[a], rb = rank[b]; if (ra || rb) return ra === rb ? a - b : ra > rb ? 1 : -1; const x = num[a], y = num[b]; return x < y ? -sign : x > y ? sign : a - b; });
+    idx = Uint32Array.from(arr);
+  }
+  return { indices: idx, errors };
+}
+
 // CSV writer for the Workbench export. Plain RFC 4180: fields holding the delimiter, a quote, CR or LF are
 // quoted and quotes are doubled; every other value is written exactly as stored. No spreadsheet-formula
 // escaping and no byte-order mark, so the file reads back identically through our own CSV reader.
@@ -2825,7 +2940,7 @@ function cells(i) {
 }
 const line = (i) => cells(i).join(',') + '\n';
 
-return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, readRecords, parseFilter, matches, runQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
+return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
 })();
 window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsrc").textContent], { type: "text/javascript" }));
 'use strict';
@@ -2968,7 +3083,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       add('scrolling to row 15000 shows the right rows', G.start > 0 && JSON.stringify(G.rows[10]) === JSON.stringify(G.cols.map((c) => expected[G.start + 10][c.name])), 'window starts at ' + G.start);
       G.filters = { id: '>=19990' }; G.sort = { col: 'id', dir: 'desc' }; buildHead(); let q = await applyQuery();
       add('numeric filter id>=19990 gives 10 rows', q.count === 10, String(q.count));
-      add('filtering decodes all rows once', q.decodedAll === true);
+      add('filtering reads only the columns it needs', q.decodedAll === false && !!q.columnsOnly && q.columnsOnly.join() === 'id', q.columnsOnly && q.columnsOnly.join());
       add('sorted high to low: first row id 19999', G.rows[0] && G.rows[0][0] === '19999', G.rows[0] && G.rows[0][0]);
       G.filters = { name: 'xxxxxxxxxxxxxxxxxxxxxx' }; G.sort = { col: 'score', dir: 'asc' }; buildHead(); q = await applyQuery();
       const want = expected.filter((r) => r.name.toLowerCase().includes('xxxxxxxxxxxxxxxxxxxxxx')).length;
@@ -3014,8 +3129,12 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       const lastRow = G.rows[G.rows.length - 1]; add('scrolling to the end shows the last row', lastRow && same(lastRow, g.rows - 1), lastRow && lastRow[0] + ' vs ' + (g.rows - 1));
       await jump(0.5); const mid = G.rows[5]; add('middle of the file shows a consistent row', mid && same(mid, Number(mid[0])) && Number(mid[0]) > g.rows * 0.4 && Number(mid[0]) < g.rows * 0.6, mid && mid[0]);
       G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); s = performance.now(); const q = await applyQuery(); T.filterMs = Math.round(performance.now() - s);
-      if (g.rows > 1000000) add('filter on a huge file refuses with a clear message', q.refused && !!q.errors[''], q.errors['']);
-      else add('filter finds the last 10 rows', q.count === 10, String(q.count));
+      add('filter finds the last 10 rows', q.count === 10, String(q.count));
+      add('the filtered rows are the last 10', G.rows.length === 10 && same(G.rows[0], g.rows - 10) && same(G.rows[9], g.rows - 1), G.rows[0] && G.rows[0][0]);
+      G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
+      add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
+      G.sort = { col: 'score', dir: 'asc' }; buildHead(); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s);
+      add('sorting by score keeps empty scores last', q3.count === g.rows && G.rows[0] && G.rows[0][2] !== '', G.rows[0] && G.rows[0][2]);
       $('gridbox').hidden = true; await call({ type: 'delete', name: d.name });
     }
     await call({ type: 'genclean' }); refresh();

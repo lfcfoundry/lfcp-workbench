@@ -53,7 +53,7 @@ No generated caches or dependency directories are required. Do not rewrite histo
 
 ## Big-file check (added 2026.11.06)
 
-`python3 tests/browser-run.py firefox|chromium|webkit "bigtest=300" 400` generates a deterministic CSV of about 300 MB (7,000,716 rows; on disk in OPFS where the browser has it, in memory otherwise), imports it, opens the data view, checks the first rows, the last row after scrolling to the end, a middle row, and that filtering refuses with a clear message above 1,000,000 rows. Pass/fail; the phase times in the report are informational only, from one run each. Results: `/mnt/project-files/lfc-workbench/browser-results/*-bigfile-300MB-*.txt`.
+`python3 tests/browser-run.py firefox|chromium|webkit "bigtest=300" 400` generates a deterministic CSV of about 300 MB (7,000,716 rows; on disk in OPFS where the browser has it, in memory otherwise), imports it, opens the data view, checks the first rows, the last row after scrolling to the end, a middle row, then filters to the last 10 rows, sorts the whole file by id and by score (empties last) and checks the rows shown. Filter and sort read only the columns they need (`src/query/columnar.mjs`), so 7 million rows work. Pass/fail; the phase times in the report are informational only, from one run each. Results: `/mnt/project-files/lfc-workbench/browser-results/*-bigfile-300MB-*.txt`.
 
 ## One-file build (added 2026.11.06)
 
