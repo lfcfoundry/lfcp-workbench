@@ -46,14 +46,22 @@
 
   // Grid: fixed-height rows, only the visible window is rendered; the worker holds the rows and answers page requests.
   const ROW = 28, WINDOW = 60; const G = { cols: [], filters: {}, sort: null, count: 0, total: 0, start: -1, rows: [], numbers: [], busy: false, timer: 0 };
+  // Browsers cap element height (Firefox about 17.8M px), so a very long list scales the scrollbar instead of using real row heights.
+  const MAXH = 10000000;
+  const scaled = () => G.count * ROW > MAXH, spaceHeight = () => Math.min(G.count * ROW, MAXH);
+  function topIndex() {
+    const sc = $('gridscroll'), vis = Math.ceil(sc.clientHeight / ROW);
+    if (!scaled()) return Math.floor(sc.scrollTop / ROW);
+    return Math.max(0, Math.round(sc.scrollTop / (MAXH - sc.clientHeight) * (G.count - vis)));
+  }
   function renderRows() {
-    const sc = $('gridscroll'), first = Math.floor(sc.scrollTop / ROW), host = $('gridrows');
-    host.style.top = (Math.max(0, G.start) * ROW) + 'px';
+    const sc = $('gridscroll'), first = topIndex(), host = $('gridrows');
+    host.style.top = (scaled() ? sc.scrollTop - (first - G.start) * ROW : Math.max(0, G.start) * ROW) + 'px';
     host.innerHTML = G.rows.map((r) => '<div class="gr">' + r.map((v, i) => '<div class="gc' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? ' num' : '') + '" title="' + esc(v) + '" style="' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? 'text-align:right' : '') + '">' + esc(v) + '</div>').join('') + '</div>').join('');
     return first;
   }
   async function loadWindow() {
-    const sc = $('gridscroll'), first = Math.max(0, Math.floor(sc.scrollTop / ROW) - 10);
+    const sc = $('gridscroll'), first = Math.max(0, topIndex() - 10);
     if (G.start >= 0 && Math.abs(first - G.start) < 10 && G.rows.length) { $('gridhead').scrollLeft = sc.scrollLeft; return; }
     const r = await call({ type: 'page', start: first, count: WINDOW });
     G.start = r.start; G.rows = r.rows; G.numbers = r.numbers; renderRows(); $('gridhead').scrollLeft = sc.scrollLeft;
@@ -62,7 +70,7 @@
   async function applyQuery() {
     const r = await call({ type: 'query', filters: G.filters, sort: G.sort });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
-    $('gridspace').style.height = (r.count * ROW) + 'px'; $('gridscroll').scrollTop = 0;
+    $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
     if (r.errors['']) status(r.errors[''], true);
     gridInfo(); $('gridinfo').textContent += ' · ' + r.ms + ' ms'; await loadWindow();
@@ -137,9 +145,41 @@
     reportBack();
   }
 
+  // Big-file check: generate about N MB of CSV, import it, open the data view, read the first, middle and last rows.
+  async function bigTest(mb) {
+    const t0 = performance.now(), checks = [], T = {}; const add = (name, ok, detail) => checks.push({ name, ok: !!ok, detail: detail || '' });
+    const { cells } = await import('./bigdata.mjs');
+    status('Generating about ' + mb + ' MB of CSV…'); let s = performance.now();
+    const g = await call({ type: 'gen', mb }); T.generateMs = Math.round(performance.now() - s);
+    add('file generated', g.type === 'generated', g.message || `${g.rows} rows, ${fmt(g.bytes)}, ${g.onDisk ? 'on disk (OPFS)' : 'in memory'}`);
+    let res = null;
+    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file); T.importMs = Math.round(performance.now() - s); }
+    add('import finished', res && res.type === 'done', res && res.message);
+    if (res && res.type === 'done') {
+      const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes;
+      s = performance.now(); const o = await openGrid(d.name); T.openMs = Math.round(performance.now() - s);
+      add('data view opens', o && o.total === g.rows, o && String(o.total));
+      const same = (row, i) => JSON.stringify(row) === JSON.stringify(cells(i));
+      add('first rows are right', same(G.rows[0], 0) && same(G.rows[7], 7));
+      const sc = $('gridscroll'), jump = async (frac) => { sc.scrollTop = Math.round((sc.scrollHeight - sc.clientHeight) * frac); await new Promise((r) => setTimeout(r, 600)); };
+      s = performance.now(); await jump(1); T.lastPageMs = Math.round(performance.now() - s - 600);
+      const lastRow = G.rows[G.rows.length - 1]; add('scrolling to the end shows the last row', lastRow && same(lastRow, g.rows - 1), lastRow && lastRow[0] + ' vs ' + (g.rows - 1));
+      await jump(0.5); const mid = G.rows[5]; add('middle of the file shows a consistent row', mid && same(mid, Number(mid[0])) && Number(mid[0]) > g.rows * 0.4 && Number(mid[0]) < g.rows * 0.6, mid && mid[0]);
+      G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); s = performance.now(); const q = await applyQuery(); T.filterMs = Math.round(performance.now() - s);
+      if (g.rows > 1000000) add('filter on a huge file refuses with a clear message', q.refused && !!q.errors[''], q.errors['']);
+      else add('filter finds the last 10 rows', q.count === 10, String(q.count));
+      $('gridbox').hidden = true; await call({ type: 'delete', name: d.name });
+    }
+    await call({ type: 'genclean' }); refresh();
+    const ok = checks.every((c) => c.ok); status(ok ? 'Big-file check passed.' : 'Big-file check FAILED.', !ok);
+    last = { selfTest: { ok, checks, ms: Math.round(performance.now() - t0) }, big: { mb, rows: g.rows, bytes: g.bytes, onDisk: g.onDisk, T } };
+    reportBack();
+  }
+
   function report() {
     const L = ['LFCFoundry Workbench results', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
+    if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
     return L.join('\n');
   }
@@ -157,4 +197,5 @@
   });
   refresh();
   if (/[?&]selftest=1/.test(location.search)) selfTest();
+  const bt = /[?&]bigtest=(\d+)/.exec(location.search); if (bt) bigTest(+bt[1]);
 })();

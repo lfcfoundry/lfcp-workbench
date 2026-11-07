@@ -50,3 +50,7 @@ No generated caches or dependency directories are required. Do not rewrite histo
 - `node tests/run.mjs`: Node pass/fail gate, about 5 seconds, 14 checks. Writes nothing into the repo.
 - `python3 tests/browser-run.py firefox|chromium|webkit`: opens `app/index.html?selftest=1&report=1` in one test browser (Firefox 158, ungoogled Chromium 155.0.8059.39, WebKitGTK 2.52.6 from the knowledge-base `browsers` branch), prints a plain-text result, exits 0 only on PASS. Needs `FIREFOX` and `CHROMIUM` set; webkit needs `xvfb-run`, `dbus-run-session` and `WebKitWebDriver`. Run one browser at a time. Pass/fail only; no speed claims.
 - Latest results: `/mnt/project-files/lfc-workbench/browser-results/` (all three PASS on 2026.11.05).
+
+## Big-file check (added 2026.11.06)
+
+`python3 tests/browser-run.py firefox|chromium|webkit "bigtest=300" 400` generates a deterministic CSV of about 300 MB (7,000,716 rows; on disk in OPFS where the browser has it, in memory otherwise), imports it, opens the data view, checks the first rows, the last row after scrolling to the end, a middle row, and that filtering refuses with a clear message above 1,000,000 rows. Pass/fail; the phase times in the report are informational only, from one run each. Results: `/mnt/project-files/lfc-workbench/browser-results/*-bigfile-300MB-*.txt`.

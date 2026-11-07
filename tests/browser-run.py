@@ -4,12 +4,14 @@
 # Pass/fail only. Starts and stops its own loopback server and browser.
 import json, os, shutil, subprocess, sys, tempfile, time, urllib.request, urllib.error
 which = sys.argv[1]
+query = sys.argv[2] if len(sys.argv) > 2 else 'selftest=1'
+wait_s = int(sys.argv[3]) if len(sys.argv) > 3 else 90
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if which == 'webkit' and os.environ.get('_WK_INNER') != '1':
     env = dict(os.environ, _WK_INNER='1', GTK_A11Y='none', WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS='1')
-    sys.exit(subprocess.run(['xvfb-run', '-a', '-s', '-screen 0 1280x1024x24', 'dbus-run-session', '--', sys.executable, '-I', os.path.abspath(__file__), which], env=env).returncode)
+    sys.exit(subprocess.run(['xvfb-run', '-a', '-s', '-screen 0 1280x1024x24', 'dbus-run-session', '--', sys.executable, '-I', os.path.abspath(__file__)] + sys.argv[1:], env=env).returncode)
 port = 8800 + os.getpid() % 100
-url = 'http://127.0.0.1:%d/app/index.html?selftest=1&report=1' % port
+url = 'http://127.0.0.1:%d/app/index.html?%s&report=1' % (port, query)
 log = tempfile.NamedTemporaryFile('w+', suffix='.log', delete=False)
 srv = subprocess.Popen(['node', os.path.join(root, 'tests/browser-serve.mjs'), str(port)], stdout=log, stderr=subprocess.STDOUT)
 prof = tempfile.mkdtemp(); proc = None; drv = None
@@ -28,10 +30,10 @@ try:
             except urllib.error.HTTPError as e: return {'error': e.read().decode()[:300]}
         s = call('POST', '/session', {'capabilities': {'alwaysMatch': {}}}); call('POST', '/session/%s/url' % s['sessionId'], {'url': url})
     else: sys.exit('unknown browser')
-    for _ in range(180):
+    for _ in range(wait_s * 2):
         time.sleep(0.5); log.seek(0); txt = log.read()
         if 'RESULT' in txt: print(txt.split('RESULT\n', 1)[1]); sys.exit(0 if 'Self-test: PASS' in txt else 1)
-    print('NO RESULT within 90 s (the page did not report back)'); sys.exit(2)
+    print('NO RESULT within %d s' % wait_s + ' (the page did not report back)'); sys.exit(2)
 finally:
     for p in (proc, drv, srv):
         if p:

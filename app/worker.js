@@ -37,6 +37,8 @@ self.onmessage = (e) => {
   else if (m.type === 'list') list(m);
   else if (m.type === 'delete') remove(m);
   else if (m.type === 'verify') verify(m);
+  else if (m.type === 'gen') genBig(m);
+  else if (m.type === 'genclean') store.remove('scratch-big.csv').then(() => send('cleaned', m.id, {}));
   else if (m.type === 'open') openView(m);
   else if (m.type === 'query') queryView(m);
   else if (m.type === 'page') pageView(m);
@@ -171,4 +173,18 @@ async function pageView(m) {
     numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
   send('paged', m.id, { start: m.start, rows: out, numbers });
+}
+
+// Big-file check support: builds a deterministic CSV of about m.mb megabytes, on disk (OPFS) when available.
+async function genBig(m) {
+  try {
+    const { HEADER, line } = await import('./bigdata.mjs'), target = m.mb * 1048576, parts = []; let w = null, bytes = 0, rows = 0, buf = [], bl = 0;
+    if (OPFS) { const h = await (await store.dir()).getFileHandle('scratch-big.csv', { create: true }); w = await h.createWritable({ keepExistingData: false }); }
+    const put = async (str) => { const b = enc.encode(str); bytes += b.byteLength; if (w) await w.write(b); else parts.push(b); };
+    await put(HEADER);
+    while (bytes < target) { const l = line(rows++); buf.push(l); bl += l.length; if (bl >= 1 << 20) { await put(buf.join('')); buf = []; bl = 0; } }
+    if (buf.length) await put(buf.join(''));
+    let file; if (w) { await w.close(); file = await (await (await store.dir()).getFileHandle('scratch-big.csv')).getFile(); } else file = new File(parts, 'big.csv', { type: 'text/csv' });
+    send('generated', m.id, { file, rows, bytes, onDisk: !!w });
+  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
