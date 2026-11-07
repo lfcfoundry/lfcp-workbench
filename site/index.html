@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-wr5TjtXBEZwpfy13E584XLtUBirg2MWb+wR2PbYJ63c=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-a8G7R9hyfpO4M5OIntYgpPXeI3c2B2wzhOE5gGtt48I=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -47,7 +47,7 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
     <p id="gridinfo"></p>
     <div id="gridwrap"><div id="gridhead"></div><div id="gridscroll" tabindex="0"><div id="gridspace"></div><div id="gridrows"></div></div></div>
     <p class="hint">Filter boxes: text finds matches anywhere; use &gt;5, &lt;=10, =exact, !=exact, = for empty cells, ! for filled cells. Click a column name to sort.</p>
-    <button id="exportcsv">Export CSV</button> <button id="closegrid">Close data view</button>
+    <button id="exportcsv">Export CSV</button> <label><input type="checkbox" id="excelbom"> Excel-friendly (adds a byte-order mark)</label> <button id="closegrid">Close data view</button>
   </section>
   <section>
     <h2>Saved in this browser</h2><div id="saved">Loading…</div>
@@ -2745,7 +2745,7 @@ async function exportView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
     const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
-    const count = view.filtered ? view.indices.length : view.total, parts = [csvHeader(view.columns, d)];
+    const count = view.filtered ? view.indices.length : view.total, parts = [...(m.bom ? ['\uFEFF'] : []), csvHeader(view.columns, d)];
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
       if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => r[c.name] ?? ''));
@@ -3153,9 +3153,9 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
   $('gridscroll').addEventListener('scroll', () => { if (!G.busy) { G.busy = true; requestAnimationFrame(async () => { G.busy = false; await loadWindow(); }); } });
   // Export the rows now shown (filter and sort applied) as CSV. Returns the worker's reply; with download=true also saves the file.
-  async function exportCsv(download) {
+  async function exportCsv(download, bom) {
     status('Preparing CSV…');
-    const r = await call({ type: 'export', delim: ',' });
+    const r = await call({ type: 'export', delim: ',', bom: bom === undefined ? $('excelbom').checked : bom });
     if (r.type === 'error') { status(r.message, true); return r; }
     if (download) {
       const a = document.createElement('a'), name = String(($('gridtitle').textContent || 'data').replace(/^Data: /, '')).replace(/\.[^.]*$/, '') + '-view.csv';
@@ -3215,6 +3215,9 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       if (ex.blob) { const P = (window.__M || await import('../src/ingest/delimited.mjs')).DelimitedParser; new P(',', (r) => exRows.push(r)).feed(await ex.blob.text(), true); }
       const want10 = expected.filter((r) => +r.id >= 19990).sort((a, b) => b.id - a.id).map((r) => G.cols.map((c) => r[c.name]));
       add('export of the filtered, sorted view equals those rows', exRows.length === 11 && JSON.stringify(exRows[0]) === JSON.stringify(G.cols.map((c) => c.name)) && JSON.stringify(exRows.slice(1)) === JSON.stringify(want10), exRows.length - 1 + ' rows exported');
+      const exb = await exportCsv(false, true), head3 = exb.blob ? new Uint8Array(await exb.blob.slice(0, 3).arrayBuffer()) : [];
+      const exbRows = []; if (exb.blob) { const P = (window.__M || await import('../src/ingest/delimited.mjs')).DelimitedParser; new P(',', (r) => exbRows.push(r)).feed(new TextDecoder().decode(new Uint8Array(await exb.blob.arrayBuffer())), true); }
+      add('Excel-friendly export starts with a byte-order mark and reads back the same', head3[0] === 0xEF && head3[1] === 0xBB && head3[2] === 0xBF && exb.bytes === ex.bytes + 3 && JSON.stringify(exbRows) === JSON.stringify(exRows), exb.bytes + ' vs ' + ex.bytes + ' bytes');
       G.forceStream = true; G.filters = { id: '>=19990' }; G.sort = { col: 'id', dir: 'desc' }; buildHead(); const qs = await applyQuery(); G.forceStream = false;
       add('block-by-block column read gives the same filtered, sorted rows', qs.count === 10 && JSON.stringify(G.rows[0]) === JSON.stringify(G.cols.map((c) => expected.find((r) => r.id === '19999')[c.name])), qs.count + ' rows');
       G.filters = { id: '>abc' }; buildHead(); q = await applyQuery();

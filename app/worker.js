@@ -275,7 +275,7 @@ async function exportView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
     const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
-    const count = view.filtered ? view.indices.length : view.total, parts = [csvHeader(view.columns, d)];
+    const count = view.filtered ? view.indices.length : view.total, parts = [...(m.bom ? ['\uFEFF'] : []), csvHeader(view.columns, d)];
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
       if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => r[c.name] ?? ''));
