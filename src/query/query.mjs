@@ -36,6 +36,7 @@ export function matches(f, cell) {
   return f.op === 'gt' ? x > f.value : f.op === 'gte' ? x >= f.value : f.op === 'lt' ? x < f.value : x <= f.value;
 }
 
+export function sortKeyFor(type) { return sortKey(type); }
 function sortKey(type) {
   if (NUMERIC.has(type)) return (v) => Number(v);
   if (type === 'date') return dateValue;

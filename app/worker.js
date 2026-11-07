@@ -140,26 +140,60 @@ async function remove(m) {
 
 // Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
-const MAX_DECODE_ROWS = 1000000;
-let view = null, queryMod = null;
+const MAX_DECODE_ROWS = 1000000;          // fallback path (decodes every row): used only when the file cannot be read by column
+const MAX_COLUMN_ROWS = 10000000, MAX_COLUMN_BYTES = 384 * 1048576;   // column path: only the filtered and sorted columns are decoded
+let view = null, queryMod = null, colMod = null;
 async function openView(m) {
   try {
     await LfcPack.init({ readOnly: true });
     queryMod ||= MODS() || await import('../src/query/query.mjs');
+    colMod ||= MODS() || await import('../src/query/columnar.mjs');
     const entry = (await store.catalog()).find((c) => c.name === m.name);
     if (!entry) throw new Error('Dataset not found.');
     const f = await store.file(m.name);
     const R = await LfcPack.open(f), total = R.info.rows;
-    view = { name: m.name, R, total, rows: null, columns: entry.columns, indices: null, filtered: false };
+    view = { name: m.name, R, f, total, rows: null, columns: entry.columns, indices: null, filtered: false, cols: new Map(), flat: R.blocks.length > 0 && R.blocks.every((b) => b.kind === 'f' && !b.table), cache: new Map() };
     send('opened', m.id, { name: m.name, total, columns: entry.columns });
   } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
 }
+// Column path: only the columns a filter or sort needs are decoded (LfcPack.unpackColumns), kept per column so typing in a filter box does not decode again.
+// Falls back to decoding every row when the file has no flat-row blocks.
+async function loadColumns(names) {
+  const want = names.filter((n) => !view.cols.has(n));
+  if (want.length) {
+    const bytes = new Uint8Array(await view.f.arrayBuffer()), blocks = LfcPack.unpackColumns(bytes, { keys: want }), out = want.map(() => new Array(view.total)); let at = 0;
+    for (const b of blocks) { for (let k = 0; k < want.length; k++) { const src = b.cols[want[k]], dst = out[k]; for (let i = 0; i < b.n; i++) dst[at + i] = src ? src[i] : ''; } at += b.n; }
+    want.forEach((n, k) => view.cols.set(n, out[k]));
+  }
+  const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
+}
+// Row objects for some row numbers, grouped by block so each block is decoded once. Keeps a few decoded blocks for scrolling back and forth.
+async function rowsAt(idx, from, to) {
+  if (view.rows) { const o = []; for (let i = from; i < to; i++) o.push(view.rows[idx[i]]); return o; }
+  const R = view.R, firsts = R.blocks.map((b) => b.first), out = new Array(to - from), byBlock = new Map();
+  for (let i = from; i < to; i++) {
+    const r = idx[i]; let lo = 0, hi = firsts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (firsts[mid] <= r) lo = mid; else hi = mid - 1; }
+    let list = byBlock.get(lo); if (!list) byBlock.set(lo, list = []); list.push(i);
+  }
+  for (const [b, list] of byBlock) {
+    let rows = view.cache.get(b); if (!rows) { rows = await R.block(b); view.cache.set(b, rows); if (view.cache.size > 8) view.cache.delete(view.cache.keys().next().value); }
+    for (const i of list) out[i - from] = rows[idx[i] - firsts[b]];
+  }
+  return out;
+}
 async function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
-  const t0 = performance.now(), plain = !m.sort && !Object.values(m.filters || {}).some(Boolean);
+  const t0 = performance.now(), active = Object.keys(m.filters || {}).filter((k) => m.filters[k]), plain = !m.sort && !active.length;
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
+  const colOk = view.flat && view.total <= MAX_COLUMN_ROWS && view.f.size <= MAX_COLUMN_BYTES;
+  if (colOk) {
+    const names = [...new Set(active.concat(m.sort ? [m.sort.col] : []))].filter((n) => view.columns.some((c) => c.name === n));
+    const cols = await loadColumns(names), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort });
+    view.indices = r.indices; view.filtered = true;
+    return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names });
+  }
   if (!view.rows) {
-    if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + MAX_DECODE_ROWS.toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
+    if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + (view.flat ? MAX_COLUMN_ROWS : MAX_DECODE_ROWS).toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
     view.rows = await view.R.rows({ from: 0, count: view.total });
   }
   const r = queryMod.runQuery(view.rows, view.columns, { filters: m.filters, sort: m.sort });
@@ -174,9 +208,8 @@ async function pageView(m) {
     const objs = n ? await view.R.rows({ from: m.start, count: n }) : [];
     out = objs.map((r) => view.columns.map((c) => r[c.name] ?? '')); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
-    const end = Math.min(view.indices.length, m.start + m.count); out = [];
-    for (let i = m.start; i < end; i++) { const r = view.rows[view.indices[i]]; out.push(view.columns.map((c) => r[c.name] ?? '')); }
-    numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
+    const end = Math.min(view.indices.length, m.start + m.count), objs = await rowsAt(view.indices, m.start, end);
+    out = objs.map((r) => view.columns.map((c) => r[c.name] ?? '')); numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
   send('paged', m.id, { start: m.start, rows: out, numbers });
 }
@@ -185,11 +218,11 @@ async function pageView(m) {
 async function exportView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
-    const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = 5000;
+    const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
     const count = view.filtered ? view.indices.length : view.total, parts = [csvHeader(view.columns, d)];
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
-      if (view.filtered) { rows = []; for (let i = start; i < start + n; i++) { const r = view.rows[view.indices[i]]; rows.push(view.columns.map((c) => r[c.name] ?? '')); } }
+      if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => r[c.name] ?? ''));
       else rows = (await view.R.rows({ from: start, count: n })).map((r) => view.columns.map((c) => r[c.name] ?? ''));
       parts.push(csvLines(rows, d));
     }

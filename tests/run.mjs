@@ -20,7 +20,7 @@ const unit = spawnSync(process.execPath, [join(root, 'tests/adapters.test.mjs')]
 process.stdout.write(unit.stdout);
 record('adapters unit tests', unit.status === 0, unit.status === 0 ? '' : unit.stderr.trim().split('\n')[0]);
 
-for (const f of ['ingest.test.mjs', 'ingest-lfcp.test.mjs', 'query.test.mjs', 'export.test.mjs']) {
+for (const f of ['ingest.test.mjs', 'ingest-lfcp.test.mjs', 'query.test.mjs', 'columnar.test.mjs', 'export.test.mjs']) {
   const r = spawnSync(process.execPath, [join(root, 'tests', f)], { encoding: 'utf8' });
   process.stdout.write(r.stdout);
   record(`ingest core: ${f}`, r.status === 0, r.status === 0 ? '' : (r.stderr.trim().split('\n').find((l) => /Error/.test(l)) || ''));
