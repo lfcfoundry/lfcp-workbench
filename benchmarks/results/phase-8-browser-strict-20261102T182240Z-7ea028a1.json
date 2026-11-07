@@ -1,0 +1,266 @@
+{
+  "schema": "lfcp-workbench-phase8-browser-qualification/v1",
+  "capturedAt": "2026-11-02T18:22:40.059Z",
+  "policyId": "strict",
+  "csp": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "browser": {
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "userAgentData": {
+      "architecture": "",
+      "brands": [
+        {
+          "brand": "Not:A-Brand",
+          "version": "8"
+        },
+        {
+          "brand": "Chromium",
+          "version": "156"
+        },
+        {
+          "brand": "Google Chrome",
+          "version": "156"
+        }
+      ],
+      "mobile": true,
+      "model": "Android phone",
+      "platform": "Android",
+      "platformVersion": "(withheld)"
+    },
+    "platform": "Linux armv81"
+  },
+  "capabilities": {
+    "secureContext": true,
+    "wasm": true,
+    "worker": true,
+    "streams": true
+  },
+  "package": {
+    "version": "0.4.19",
+    "apiVersion": 0
+  },
+  "results": [
+    {
+      "name": "candidate-initialization",
+      "status": "pass",
+      "elapsedMs": 12.900000095367432
+    },
+    {
+      "name": "ordinary-pack",
+      "status": "pass",
+      "rows": 3,
+      "bytes": 371
+    },
+    {
+      "name": "empty-first",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "empty-middle",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "empty-final",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "consecutive-empties",
+      "status": "pass",
+      "rows": 6,
+      "footerRows": 6,
+      "columnValues": 6
+    },
+    {
+      "name": "all-empty",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "single-empty",
+      "status": "pass",
+      "rows": 1,
+      "footerRows": 1,
+      "columnValues": 1
+    },
+    {
+      "name": "ordinary-nonempty",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "mixed-empty",
+      "status": "pass",
+      "rows": 5,
+      "footerRows": 5,
+      "columnValues": 5
+    },
+    {
+      "name": "cardinality-2",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-3",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-4",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-5",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-6",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-7",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-8",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "stream-pack",
+      "status": "pass",
+      "inputChunkBytes": 13,
+      "rows": 4
+    },
+    {
+      "name": "worker-error-propagation",
+      "status": "pass",
+      "injectedWorkerFailure": true,
+      "promiseRejected": true,
+      "rejection": "helper worker failed: Uncaught Error: phase8 synthetic worker failure",
+      "workerErrorEvents": 1,
+      "workersCreated": 1
+    },
+    {
+      "name": "parallel-pack-worker-execution",
+      "status": "pass",
+      "workersRequested": 2,
+      "workersCreated": 2,
+      "initializedWorkers": 2,
+      "workersWithJobs": 2,
+      "completedWorkerJobs": 2,
+      "blocks": 2,
+      "semanticMatchesSequential": true,
+      "byteIdenticalToSequential": true
+    }
+  ],
+  "workerTrace": [
+    {
+      "id": 1,
+      "test": "worker-error-propagation",
+      "created": true,
+      "initialized": false,
+      "jobsPosted": 1,
+      "jobsStarted": 0,
+      "jobsCompleted": 0,
+      "warmupsPosted": 0,
+      "messagesPosted": [
+        {
+          "kind": "p",
+          "id": 0,
+          "bytes": 543
+        }
+      ],
+      "errorEvents": [
+        {
+          "message": "Uncaught Error: phase8 synthetic worker failure",
+          "filename": "blob:http://127.0.0.1:8080/5497230d-49cc-458e-9711-1de7dfd69cee"
+        }
+      ],
+      "workerErrors": [],
+      "terminated": true,
+      "syntheticFault": true,
+      "syntheticFaultUrl": "blob:http://127.0.0.1:8080/5497230d-49cc-458e-9711-1de7dfd69cee"
+    },
+    {
+      "id": 2,
+      "test": "parallel-pack",
+      "created": true,
+      "initialized": true,
+      "jobsPosted": 1,
+      "jobsStarted": 1,
+      "jobsCompleted": 1,
+      "warmupsPosted": 0,
+      "messagesPosted": [
+        {
+          "kind": "p",
+          "id": 0,
+          "bytes": 543
+        }
+      ],
+      "errorEvents": [],
+      "workerErrors": [],
+      "terminated": false,
+      "syntheticFault": false
+    },
+    {
+      "id": 3,
+      "test": "parallel-pack",
+      "created": true,
+      "initialized": true,
+      "jobsPosted": 1,
+      "jobsStarted": 1,
+      "jobsCompleted": 1,
+      "warmupsPosted": 0,
+      "messagesPosted": [
+        {
+          "kind": "p",
+          "id": 1,
+          "bytes": 327
+        }
+      ],
+      "errorEvents": [],
+      "workerErrors": [],
+      "terminated": false,
+      "syntheticFault": false
+    }
+  ],
+  "result": "pass",
+  "summary": {
+    "tests": 20,
+    "passed": 20,
+    "failed": 0,
+    "workersCreated": 3,
+    "initializedWorkers": 2,
+    "workerJobsCompleted": 2
+  }
+}

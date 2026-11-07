@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>LFCP Workbench browser validation</title>
+  <link rel="stylesheet" href="validation.css">
+  <script defer src="../../../vendor/lfcp/0.4.19/lfc-pack.js"></script>
+  <script defer src="validation.js"></script>
+</head>
+<body>
+  <h1>LFCP Workbench browser validation</h1>
+  <p>This test page runs the existing experimental Worker and LFCP build. It writes only generated test datasets under this origin's OPFS directory.</p>
+  <p class="note">Run from localhost or HTTPS. Functional tests create and remove their own outputs. Resource tests use bounded generated data. Quota exhaustion is deliberately not attempted.</p>
+  <p><label><input id="retain" type="checkbox"> Keep successful test outputs in OPFS (for a manual browser-restart check)</label></p>
+  <p><label><input id="report-local" type="checkbox"> Send generated results to the explicit same-origin loopback report server</label></p>
+  <div>
+    <button id="functional">Run generated functional matrix</button>
+    <button id="resource">Run 256 KiB / 4 MiB / 16 MiB resource series</button>
+    <button id="cancel">Run cooperative cancellation checks</button>
+    <button id="interrupt">Terminate Worker during OPFS write</button>
+    <button id="phase3-resources">Run Phase 3 representative workload matrix (54 trials)</button>
+    <button id="phase3-interrupt-stages">Probe OPFS visibility at interrupted lifecycle stages</button>
+    <button id="phase3-audit">List Phase 3 generated artifacts</button>
+    <button id="save" disabled>Download results JSON</button>
+    <button id="phase3-save" disabled>Download Phase 3 results JSON</button>
+  </div>
+  <p id="status" role="status" aria-live="polite">Checking browser features…</p>
+  <pre id="results">No tests run.</pre>
+  <script defer src="phase3.js"></script>
+</body>
+</html>

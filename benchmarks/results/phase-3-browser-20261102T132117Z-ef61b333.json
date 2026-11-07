@@ -1,0 +1,146 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "phase": 3,
+  "suite": "representative-resource-matrix",
+  "startedAt": "2026-11-02T13:21:17.040Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:21:17.070Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "status": "measured-approximate-origin-estimate",
+      "usageBytes": 174871,
+      "quotaBytes": 10737593111
+    },
+    "storagePersisted": false,
+    "fileSystemHandleMove": false,
+    "fileSystemWritableStream": true,
+    "pageMemory": {
+      "api": "performance.memory (non-standard; page realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "userAgentSpecificMemory": false,
+    "deviceMemoryGiB": 8,
+    "worker": true,
+    "streams": true,
+    "lfcpVersion": "LFC-pack 0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "workload": "mixed-length-text",
+      "requestedTargetBytes": 262144,
+      "seed": "LFCP-WB-PHASE3-V1/mixed-length-text/262144",
+      "trials": [
+        {
+          "trial": 1,
+          "status": "fail",
+          "lfcpVersion": "0.4.19 / API 0",
+          "sourceName": "phase3-mixed-length-text-262144-phase3-20261102132117-bqvbbmr-r1.jsonl",
+          "inputBytes": 258500,
+          "rows": 269,
+          "fields": 4,
+          "sourceChunkBytesMax": 35056,
+          "generationMs": 190.09999990463257,
+          "storageBefore": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 174871,
+            "quotaBytes": 10737593111
+          },
+          "storageWithSource": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 433657,
+            "quotaBytes": 10737851897
+          },
+          "pageHeapBefore": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "workerUserAgentMemoryBefore": {
+            "status": "not-exposed"
+          },
+          "importWallMs": 143.29999995231628,
+          "workerMetrics": {
+            "readMs": 10.699999570846558,
+            "parseMs": 6.200000047683716,
+            "encodeMs": 38.200000047683716,
+            "opfsWriteMs": 7.200000047683716,
+            "readCalls": 4,
+            "maxInputChunkBytes": 65536,
+            "maxPendingRecordChars": 4172,
+            "maxQueuedLineChars": 258500,
+            "outputParts": 2,
+            "maxOutputPartBytes": 180412,
+            "workerHeap": {
+              "api": "not-exposed",
+              "sampledPeakUsedHeapBytes": null,
+              "samples": 3,
+              "samplingIntervalMs": 50
+            }
+          },
+          "workerReadMs": 10.699999570846558,
+          "parsingMs": 6.200000047683716,
+          "encodingMs": 38.200000047683716,
+          "opfsWriteMs": 7.200000047683716,
+          "pageHeapAfter": {
+            "api": "performance.memory (non-standard; page realm)",
+            "usedHeapBytes": 10000000,
+            "totalHeapBytes": 10000000,
+            "heapLimitBytes": 3140000000
+          },
+          "sampledPeakPageHeapBytes": 10000000,
+          "pageHeapSamples": 4,
+          "pageHeapSamplingIntervalMs": 50,
+          "userAgentSpecificMemoryAfter": {
+            "status": "not-exposed"
+          },
+          "storageAfterImport": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 614881,
+            "quotaBytes": 10738033121
+          },
+          "outputName": "phase3-mixed-length-text-262144-phase3-20261102132117-bqvbbmr-r1-0f699944-09b3-41be-9bb0-208a06a7a4cd.json.lfc",
+          "outputBytes": 180858,
+          "inputOverOutputRatio": 1.4292981233896205,
+          "outputOverInputFraction": 0.6996441005802708,
+          "error": "Decoded value/order mismatch at row 0; expected={\"id\":1,\"category\":\"coastal\",\"body\":\"\",\"note\":\"scheduled follow-up\"}; actual={\"id\":1,\"category\":\"coastal\",\"body\":\"VTx8vKxt\",\"note\":\"scheduled follow-up\"}",
+          "testArtifactsRemoved": [
+            "phase3-mixed-length-text-262144-phase3-20261102132117-bqvbbmr-r1-0f699944-09b3-41be-9bb0-208a06a7a4cd.json.lfc"
+          ],
+          "storageAfterCleanup": {
+            "status": "measured-approximate-origin-estimate",
+            "usageBytes": 174871,
+            "quotaBytes": 10737593111
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [],
+  "fixtureMethod": "Generated JSONL records from deterministic per-row xorshift32 seeds; source files written to OPFS in <=32 KiB encoded chunks; each requested target is rounded down to a complete JSONL record.",
+  "trialPolicy": {
+    "independentTrialsPerWorkloadAndSize": 1,
+    "sameSeedForRepeatability": true,
+    "targetInputBytes": [
+      262144
+    ],
+    "workloads": [
+      "mixed-length-text"
+    ],
+    "noParquetComparison": true
+  },
+  "memoryMeasurement": {
+    "pageHeap": "performance.memory sampled every 50 ms when exposed; page realm only.",
+    "workerHeap": "Worker instrumentation reports API exposure and sampled heap only when exposed.",
+    "processMemory": "Not inferred from page/worker values; Android process diagnostic access checked separately.",
+    "deviceMemory": "navigator.deviceMemory is a coarse browser hint, not measured free RAM."
+  },
+  "finishedAt": "2026-11-02T13:21:17.523Z"
+}

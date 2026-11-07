@@ -1,0 +1,18 @@
+--- a/modules/lfc-pack/wasm/flatscan.c
++++ b/modules/lfc-pack/wasm/flatscan.c
+@@ -201,13 +201,13 @@
+     while((e=ht[2*at])!=0){ if(ht[2*at+1]==h){ u32 c3=lab[e-1]; if(clen[c3]==L&&sameb(a,in+(u32)cval[c3],L)){ id=e-1; break; } } at=(at+1)&(T-1); }
+     if(id==0xFFFFFFFFu){ if(D*2>n){   /* more than n/2 distinct values: encodeColumn's dictionary loop stops here too; hand over every value joined by 0 bytes ('s'), and whether every value is 36 long (res[3]) or only digits and dots (res[1]) */
+         o=0; all36=1; dd=1;
+-        for(i=0;i<n;i++){ c2=ix[i]; if(o) out[o++]=0; s=(u32)cval[c2]; L=clen[c2]; if(L!=36) all36=0; if(dd&&!digdot(in+s,L)) dd=0; __builtin_memcpy(out+o,in+s,L); o+=L; }
++        for(i=0;i<n;i++){ c2=ix[i]; if(i) out[o++]=0; s=(u32)cval[c2]; L=clen[c2]; if(L!=36) all36=0; if(dd&&!digdot(in+s,L)) dd=0; __builtin_memcpy(out+o,in+s,L); o+=L; }
+         res[0]=o; res[1]=dd; res[2]=1; res[3]=all36; return 0; }
+       id=D++; lab[id]=c2; ht[2*at]=id+1; ht[2*at+1]=h; }
+     codes[m]=id; }
+   res[1]=dd; if(D*2>n||all36||dd) return 0;
+   o=0;
+-  if(D*4>n||D>=65536){ for(i=0;i<n;i++){ c2=ix[i]; if(o) out[o++]=0; s=(u32)cval[c2]; L=clen[c2]; __builtin_memcpy(out+o,in+s,L); o+=L; } }
++  if(D*4>n||D>=65536){ for(i=0;i<n;i++){ c2=ix[i]; if(i) out[o++]=0; s=(u32)cval[c2]; L=clen[c2]; __builtin_memcpy(out+o,in+s,L); o+=L; } }
+   else for(i=0;i<D;i++){ if(i) out[o++]=0; c2=lab[i]; s=(u32)cval[c2]; L=clen[c2]; __builtin_memcpy(out+o,in+s,L); o+=L; }
+   res[0]=o; return D;
+ }

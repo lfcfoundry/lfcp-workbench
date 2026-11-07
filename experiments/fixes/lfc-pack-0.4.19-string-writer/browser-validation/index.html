@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LFCP Phase 7 browser candidate validation</title>
+  <style>
+    body { font: 16px/1.45 system-ui, sans-serif; margin: 1.5rem auto; max-width: 64rem; padding: 0 1rem; }
+    h1 { font-size: 1.35rem; }
+    pre { background: #f3f4f6; overflow: auto; padding: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .running { color: #805600; } .done { color: #176b35; } .failed { color: #a21d27; }
+  </style>
+</head>
+<body>
+  <h1>LFCP Phase 7 browser candidate validation</h1>
+  <p id="state" class="running">Loading the pinned and corrected local LFC-pack copies…</p>
+  <pre id="report">The test uses only generated in-memory strings and locally served project files.</pre>
+  <script>
+  (async function () {
+    'use strict';
+    const state = document.getElementById('state');
+    const output = document.getElementById('report');
+    const encoder = new TextEncoder();
+    const results = [];
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('Could not load local script: ' + src));
+        document.head.appendChild(script);
+      });
+    }
+    function assert(ok, message) { if (!ok) throw new Error(message); }
+    function same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+    function rowsFor(values) { return values.map((body, id) => ({ id, body, pad: 'p'.repeat(80) })); }
+    function jsonl(rows) { return encoder.encode(rows.map((row) => JSON.stringify(row)).join('\n') + '\n'); }
+    function concat(parts) {
+      const total = parts.reduce((n, p) => n + p.length, 0);
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const part of parts) { out.set(part, offset); offset += part.length; }
+      return out;
+    }
+    function equalRows(expected, actual) {
+      if (expected.length !== actual.length) return false;
+      for (let i = 0; i < expected.length; i++) {
+        if (JSON.stringify(expected[i]) !== JSON.stringify(actual[i])) return false;
+      }
+      return true;
+    }
+    async function check(name, lib, values, opts) {
+      const expected = rowsFor(values);
+      const bytes = await lib.packRows(expected, { block: 'flat', templates: false });
+      const info = lib.info(bytes);
+      const decoded = lib.unpackRows(bytes);
+      assert(info.rows === expected.length, name + ': footer row count mismatch');
+      assert(decoded.length === expected.length, name + ': decoded row count mismatch');
+      assert(equalRows(expected, decoded), name + ': decoded rows differ');
+      const columns = lib.unpackColumns(bytes).flatMap((block) => block.cols.body || []);
+      assert(same(columns, values), name + ': decoded body column differs');
+      const bodyType = lib.stats(bytes).flatMap((block) => block.keys || []).find((col) => col.key === 'body')?.type;
+      if (opts && opts.bodyType) assert(bodyType === opts.bodyType, name + ': unexpected body type ' + bodyType);
+      return { name, status: 'pass', rows: info.rows, blocks: info.blocks, bodyType, bytes: bytes.length, values: values.length };
+    }
+    async function expectKnownVendorFailure(lib) {
+      const expected = rowsFor(['', 'A', 'B', 'C']);
+      const bytes = await lib.packRows(expected, { block: 'flat', templates: false });
+      const decoded = lib.unpackRows(bytes);
+      assert(lib.info(bytes).rows === 4, 'vendor negative control footer row count changed');
+      assert(!equalRows(expected, decoded), 'vendor negative control unexpectedly stopped reproducing Phase 5');
+      return { name: 'pinned-vendor-negative-control', status: 'known-mismatch-reproduced', expectedRows: 4, decodedRows: decoded.length, actualBody: decoded.map((row) => row.body) };
+    }
+
+    try {
+      await loadScript('/vendor/lfcp/0.4.19/lfc-pack.js');
+      const pinned = window.LfcPack;
+      await loadScript('/experiments/fixes/lfc-pack-0.4.19-string-writer/lfc-pack-fixed.js');
+      const fixed = window.LfcPack;
+      await Promise.all([pinned.init(), fixed.init()]);
+      let userAgentData = null;
+      if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+        try { userAgentData = await navigator.userAgentData.getHighEntropyValues(['fullVersion', 'platformVersion', 'architecture', 'model']); }
+        catch (error) { userAgentData = { unavailable: String(error && error.message || error) }; }
+      }
+
+      const report = {
+        schema: 'lfcp-workbench-phase7-browser-candidate/v1',
+        capturedAt: new Date().toISOString(),
+        browser: { userAgent: navigator.userAgent, platform: navigator.platform, language: navigator.language, userAgentData },
+        capabilities: { secureContext: window.isSecureContext, wasm: typeof WebAssembly === 'object', workers: typeof Worker === 'function', streams: typeof ReadableStream === 'function', hardwareConcurrency: navigator.hardwareConcurrency || null },
+        package: { version: fixed.version, apiVersion: fixed.apiVersion },
+        results
+      };
+
+      results.push(await expectKnownVendorFailure(pinned));
+      const cases = [
+        ['empty-first-early-join', ['', 'A', 'B', 'C'], 's'],
+        ['empty-middle', ['A', '', 'B', 'C'], 's'],
+        ['empty-final', ['A', 'B', 'C', ''], 's'],
+        ['consecutive-empties-postscan-join', ['', '', 'A', '', 'B', ''], 's'],
+        ['all-empty', ['', '', '', '']],
+        ['single-empty', ['']],
+        ['ordinary-nonempty', ['A', 'B', 'C', 'D'], 's'],
+        ['mixed-empty-postscan-join', ['', 'A', '', 'B', ''], 's'],
+        ['low-cardinality-postscan-join', ['', 'A', 'A', 'A'], 's'],
+        ['dictionary-control', ['', 'v1', 'v1', 'v1', 'v1', 'v1', 'v1', 'v1'], 'D']
+      ];
+      for (const [name, values, bodyType] of cases) results.push(await check(name, fixed, values, { bodyType }));
+      for (let distinct = 2; distinct <= 8; distinct++) {
+        const values = [''];
+        for (let row = 1; row < 8; row++) values.push(row < distinct ? `v${row}` : 'v1');
+        results.push(await check('cardinality-' + distinct, fixed, values, { bodyType: distinct === 2 ? 'D' : undefined }));
+      }
+
+      // Exercise chunked input parsing/packing through the browser stream API.
+      const streamRows = rowsFor(['', 'A', 'B', 'C']);
+      const input = jsonl(streamRows);
+      const stream = fixed.packStream({ templates: false });
+      const outputParts = [];
+      for (let p = 0; p < input.length; p += 13) outputParts.push(...stream.push(input.subarray(p, Math.min(input.length, p + 13))));
+      outputParts.push(...stream.finish());
+      const streamed = concat(outputParts);
+      assert(equalRows(streamRows, fixed.unpackRows(streamed)), 'packStream round trip differs');
+      results.push({ name: 'packStream-small-chunks', status: 'pass', rows: fixed.info(streamed).rows, blocks: fixed.info(streamed).blocks, inputChunkBytes: 13 });
+
+      // Two blocks, each with the empty-first pattern; packParallel uses Blob Workers in browsers.
+      const parallelRows = rowsFor(['', 'A', 'B', 'C', '', 'A', 'B', 'C']);
+      const parallelBytes = await fixed.packParallel(jsonl(parallelRows), { blockBytes: 450, workers: 2, templates: false });
+      assert(fixed.info(parallelBytes).blocks >= 2, 'packParallel did not produce multiple blocks');
+      assert(equalRows(parallelRows, fixed.unpackRows(parallelBytes)), 'packParallel round trip differs');
+      results.push({ name: 'packParallel-two-workers-multiblock', status: 'pass', rows: fixed.info(parallelBytes).rows, blocks: fixed.info(parallelBytes).blocks, workersRequested: 2 });
+
+      report.summary = { tests: results.length, passed: results.filter((r) => r.status === 'pass').length, vendorKnownFailures: results.filter((r) => r.status === 'known-mismatch-reproduced').length };
+      report.result = 'pass';
+      state.textContent = 'Browser validation completed: ' + report.summary.passed + ' candidate tests passed; pinned-vendor defect reproduced.';
+      state.className = 'done';
+      output.textContent = JSON.stringify(report, null, 2);
+      const response = await fetch('/__phase7_result', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(report) });
+      if (!response.ok) throw new Error('Local result capture failed: HTTP ' + response.status);
+      const saved = await response.json();
+      report.savedResult = saved.saved;
+      output.textContent = JSON.stringify(report, null, 2);
+      state.textContent += ' Result recorded as ' + saved.saved + '.';
+    } catch (error) {
+      state.textContent = 'Browser validation failed: ' + String(error && error.message || error);
+      state.className = 'failed';
+      output.textContent = String(error && error.stack || error) + '\n\n' + JSON.stringify({ results }, null, 2);
+    }
+  })();
+  </script>
+</body>
+</html>

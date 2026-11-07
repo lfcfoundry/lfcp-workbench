@@ -1,0 +1,45 @@
+{
+  "schema": "lfcp-workbench-phase-2-non-browser-checks/v1",
+  "runAt": "2026-11-01",
+  "runtime": {
+    "name": "Node.js",
+    "version": "v26.13.0",
+    "platform": "android",
+    "architecture": "arm64",
+    "environment": "Termux on Android 14; Linux kernel 6.1.162"
+  },
+  "checks": [
+    {
+      "name": "DelimitedParser unit-level smoke checks",
+      "status": "pass",
+      "scope": "Node execution of the existing parser module; not a browser test",
+      "source": "experiments/lfcp-first-spike/src/adapters.js",
+      "fixtures": [
+        "quoted delimiter and escaped quote",
+        "embedded newline",
+        "CRLF and LF",
+        "UTF-8 euro sign straddling byte 65536 through incremental TextDecoder",
+        "empty and trailing fields",
+        "unclosed and malformed closing quotes",
+        "blank and duplicate header normalization"
+      ],
+      "result": "All assertions passed",
+      "limitations": [
+        "Does not execute the Worker",
+        "Does not exercise File slicing, OPFS, browser CSP, or browser memory behavior",
+        "JSONL parsing is part of worker.js and was not covered by this parser-only check"
+      ]
+    },
+    {
+      "name": "Pinned LFC-pack streaming writer and reader check",
+      "status": "pass",
+      "scope": "Node execution of the pinned library only; not the Workbench Worker/OPFS pipeline",
+      "lfcp": { "package": "LFC-pack", "version": "0.4.19", "apiVersion": 0, "path": "vendor/lfcp/0.4.19/lfc-pack.js" },
+      "fixture": { "format": "NDJSON", "inputBytes": 465184, "rows": 12000, "fields": 3, "blockBytesOption": 262144, "deterministicRows": true },
+      "measured": { "outputBytes": 884, "blocks": 2 },
+      "assertions": { "footerRowCount": "pass", "multipleBlocks": "pass", "fullDecodeAndOrdering": "pass", "footerChecksumRejectsMutatedByte": "pass" },
+      "performanceClaim": "None; this small Node result is correctness evidence only and is not comparable to browser or Parquet performance."
+    }
+  ],
+  "browserPipelineStatus": "not-tested"
+}

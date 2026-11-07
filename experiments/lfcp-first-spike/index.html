@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="light dark">
+  <title>LFCFoundry Data Workbench · LFCP Spike</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">L</span><span>LFCFoundry <b>Data Workbench</b></span></div>
+    <div class="top-status"><span class="dot"></span> Local prototype <span class="sep">·</span> No network access</div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="eyebrow">FEASIBILITY SPIKE</div>
+      <h1>Make data<br>usable.</h1>
+      <p class="lede">A narrow end-to-end experiment: stream a local text file into an LFCP dataset stored in this browser’s private storage.</p>
+
+      <section class="panel">
+        <div class="section-heading"><span class="step">01</span><h2>Choose a source</h2></div>
+        <label class="file-pick" for="source-file">
+          <span class="file-icon" aria-hidden="true">↑</span>
+          <span><strong id="file-label">Select a local file</strong><small>CSV, TSV, JSONL or NDJSON</small></span>
+        </label>
+        <input id="source-file" type="file" accept=".csv,.tsv,.jsonl,.ndjson,.lfc,.json.lfc,text/csv,text/tab-separated-values,application/x-ndjson,application/json,application/octet-stream">
+        <div class="form-row">
+          <label for="format">Input format</label>
+          <select id="format">
+            <option value="auto">Detect from filename</option>
+            <option value="csv">CSV</option>
+            <option value="tsv">TSV</option>
+            <option value="jsonl">JSONL / NDJSON</option>
+            <option value="lfc">Inspect LFCP file</option>
+          </select>
+        </div>
+        <div class="form-row" id="delimiter-row">
+          <label for="delimiter">Delimiter</label>
+          <select id="delimiter">
+            <option value="auto">Detect comma or tab</option>
+            <option value=",">Comma</option>
+            <option value="tab">Tab</option>
+            <option value=";">Semicolon</option>
+            <option value="|">Vertical bar</option>
+          </select>
+        </div>
+        <button id="start-import" class="primary" disabled>Import as LFCP <span aria-hidden="true">→</span></button>
+        <button id="cancel-import" class="secondary" hidden>Cancel import</button>
+        <div class="progress-wrap" id="progress-wrap" hidden>
+          <div class="progress-label"><span id="progress-text">Preparing…</span><span id="progress-pct"></span></div>
+          <progress id="progress" max="1" value="0"></progress>
+        </div>
+        <div id="status" class="status" role="status" aria-live="polite">Choose a file to begin.</div>
+      </section>
+
+      <section class="panel compact-panel">
+        <div class="section-heading"><span class="step">02</span><h2>Inspect LFCP</h2></div>
+        <p class="small-copy">The pinned reader needs the full file in memory. This spike caps inspection at 64 MiB so the limitation stays visible.</p>
+        <label class="file-pick small-pick" for="lfc-file">
+          <span class="file-icon file-icon-small" aria-hidden="true">⌕</span>
+          <span><strong>Select .json.lfc</strong><small>64 MiB inspection cap</small></span>
+        </label>
+        <input id="lfc-file" type="file" accept=".lfc,.json.lfc,application/octet-stream">
+      </section>
+
+      <section class="local-note">
+        <div class="lock" aria-hidden="true">◈</div>
+        <div><strong>Stored on this browser</strong><p>Datasets go to OPFS for this origin. They are not ordinary files and may be cleared by browser storage management.</p></div>
+      </section>
+    </aside>
+
+    <section class="workspace" aria-label="Dataset workspace">
+      <div class="workspace-head">
+        <div><div class="eyebrow">WORKSPACE</div><h2 id="workspace-title">Your data, in columns.</h2></div>
+        <button id="refresh-storage" class="icon-button" title="Refresh local datasets" aria-label="Refresh local datasets">↻</button>
+      </div>
+
+      <div class="empty-state" id="empty-state">
+        <div class="empty-illustration" aria-hidden="true"><div class="sheet"><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="spark">✳</div></div>
+        <h3>A clean start</h3>
+        <p>Select a delimited file or JSONL to create an LFCP dataset. The importer works in chunks and writes the finished file directly to browser storage.</p>
+        <div class="empty-chips"><span>CSV / TSV</span><span>JSONL</span><span>LFCP blocks</span><span>OPFS</span></div>
+      </div>
+
+      <div class="result-view" id="result-view" hidden>
+        <div class="result-summary" id="result-summary"></div>
+        <div class="tabs" role="tablist" aria-label="Dataset details">
+          <button class="tab active" role="tab" aria-selected="true" data-tab="preview">Preview</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="profile">Profile</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="details">LFCP details</button>
+        </div>
+        <div class="tab-panel" id="tab-preview" role="tabpanel"><div class="table-wrap" id="preview-table"></div></div>
+        <div class="tab-panel" id="tab-profile" role="tabpanel" hidden><div class="table-wrap" id="profile-table"></div></div>
+        <div class="tab-panel" id="tab-details" role="tabpanel" hidden><pre id="details-json"></pre></div>
+      </div>
+
+      <section class="saved-section">
+        <div class="saved-heading"><div><div class="eyebrow">LOCAL STORAGE</div><h3>Datasets in this browser</h3></div><span id="storage-usage" class="storage-usage">Checking storage…</span></div>
+        <div id="saved-list" class="saved-list"><div class="list-empty">Checking OPFS…</div></div>
+      </section>
+
+      <footer class="workspace-footer"><span>Prototype scope: ingest · compress · persist · inspect</span><span>SQL, large-file LFCP reads and transformations are not implemented here.</span></footer>
+    </section>
+  </main>
+</body>
+</html>

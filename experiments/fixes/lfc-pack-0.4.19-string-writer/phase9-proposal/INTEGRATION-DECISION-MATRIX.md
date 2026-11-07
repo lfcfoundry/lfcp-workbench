@@ -1,0 +1,18 @@
+<!-- Copyright (c) 2026 LFC Foundry. MIT License. -->
+
+# Integration decision matrix
+
+The current decision is **NO-GO for production integration**. Choose a path only after the evidence and ownership conditions below are met. This matrix is a proposal; it changes no artifact.
+
+| Path | Required maintainer response / trigger | Required evidence before choosing | Operational requirements | Result |
+|---|---|---|---|---|
+| **A. Upstream acceptance and official rebuild** | Maintainers confirm `modules/lfc-pack/wasm/flatscan.c` is the source of truth, accept the two-predicate correction, and identify or approve a pinned flat-scan build process. | Reproducible clean build; official recipe and toolchain; standalone Wasm and embedded module byte-identical; exports/wrapper verified; source-level regression passes; 19-case and 49-case candidate suites pass; root/module tests pass; browser matrix recorded, including Firefox if it is a supported release browser; immutable source/package reference. | Upstream updates source, build documentation, changelog/version metadata, package artifacts, and licenses/provenance. Workbench vendors a separately versioned artifact only after explicit authorization. Rollback switches consumers back to the preserved 0.4.19 artifact by exact hash. | **Preferred.** Lowest long-term Workbench maintenance once build provenance is resolved. |
+| **B. Downstream-maintained source patch** | Upstream confirms downstream use is acceptable but declines or cannot integrate in the needed timeframe, and a named Workbench owner accepts ongoing maintenance. | Same regression and browser evidence; exact patch base; reproducible downstream build in a pinned environment; package/embedded hashes; audit trail for every rebase; licensing review. Historical upstream binary reproduction may remain unresolved only if the downstream artifact is generated reproducibly from source and is clearly a new artifact. | Keep source patch, compiler/toolchain image, flags, builder, generated artifact, notices, tests, and rollback reference together. Assign responsibility for rebasing, security review, and supported-browser updates. Never replace the existing vendor file in place. | **Fallback only.** Higher continuing maintenance burden. |
+| **C. Continue isolation without integration** | Source authority or build provenance remains unclear; maintainers do not respond/approve; no owner accepts downstream maintenance; or browser/release evidence is insufficient. | Preserve current source and results, do not claim the canonical dependency is fixed, and retain the pinned-vendor negative control. | Keep candidate under `experiments/fixes/`; no production consumer changes. Revisit when a specific blocking question is answered or a new reproducible build/release is available. | **Current path.** Safest while Phase 9 blockers remain. |
+
+## Evidence common to all paths
+
+- Keep the canonical vendor artifact unchanged until an explicitly approved integration; current expected SHA-256 is `8c312582c7c739fa43b9df82a418a9ac6cdebfcb27cc32ed2e92642dc646c259` and Git blob is `dae1cf4a7d9f6f568ea05447f57e9158e7396091`.
+- Preserve the writer regression fix and reader decoded-value-count validation as separate changes. `LFCP-WB-PHASE5-002` remains open and must not be treated as fixed by this patch.
+- Retain browser/version/device data, exact CSP, actual Worker counts and completion/error observations, test output, compiler/linker versions, binary hashes, and package provenance.
+- Keep rollback possible by preserving the previous artifact under its exact version/hash and changing only a separately reviewed consumer reference.

@@ -1,0 +1,132 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "phase": 3,
+  "suite": "opfs-worker-interruption-stages",
+  "startedAt": "2026-11-02T13:17:10.035Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:17:10.045Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "status": "measured-approximate-origin-estimate",
+      "usageBytes": 135213,
+      "quotaBytes": 10737553453
+    },
+    "storagePersisted": false,
+    "fileSystemHandleMove": false,
+    "fileSystemWritableStream": true,
+    "pageMemory": {
+      "api": "performance.memory (non-standard; page realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "userAgentSpecificMemory": false,
+    "deviceMemoryGiB": 8,
+    "worker": true,
+    "streams": true,
+    "lfcpVersion": "LFC-pack 0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "stage": "file-created",
+      "filename": "phase3-stage-phase3-20261102131710-wu9nomf-370d4178-f5d5-4a7b-9cf0-20a935587a2b.json.lfc",
+      "fileVisibleWhileWorkerPaused": true,
+      "bytesWhilePaused": 0,
+      "workerReportedOutputBytes": 0,
+      "trailingMarker": "",
+      "reader": {
+        "accepted": false
+      },
+      "outputVisibleAfterTermination": true,
+      "bytesAfterTermination": 0,
+      "markerAfterTermination": "",
+      "readerAcceptedAfterTermination": false,
+      "readerErrorAfterTermination": "not an LFC-pack file: too short",
+      "cleanup": [
+        {
+          "name": "phase3-stage-phase3-20261102131710-wu9nomf-370d4178-f5d5-4a7b-9cf0-20a935587a2b.json.lfc",
+          "removed": true
+        }
+      ],
+      "status": "observed"
+    },
+    {
+      "stage": "writable-open",
+      "filename": "phase3-stage-phase3-20261102131710-al2dtc6-4cd32781-e01d-4e0a-82c4-28d4929eaef1.json.lfc",
+      "fileVisibleWhileWorkerPaused": true,
+      "bytesWhilePaused": 0,
+      "workerReportedOutputBytes": 0,
+      "trailingMarker": "",
+      "reader": {
+        "accepted": false
+      },
+      "outputVisibleAfterTermination": true,
+      "bytesAfterTermination": 0,
+      "markerAfterTermination": "",
+      "readerAcceptedAfterTermination": false,
+      "readerErrorAfterTermination": "not an LFC-pack file: too short",
+      "cleanup": [
+        {
+          "name": "phase3-stage-phase3-20261102131710-al2dtc6-4cd32781-e01d-4e0a-82c4-28d4929eaef1.json.lfc",
+          "removed": true
+        }
+      ],
+      "status": "observed"
+    },
+    {
+      "stage": "opfs-write-complete",
+      "filename": "phase3-stage-phase3-20261102131710-0wd5mbz-a95e228f-802b-4a2b-be37-91633022370e.json.lfc",
+      "fileVisibleWhileWorkerPaused": true,
+      "bytesWhilePaused": 0,
+      "workerReportedOutputBytes": 2318,
+      "trailingMarker": "",
+      "reader": {
+        "accepted": false
+      },
+      "outputVisibleAfterTermination": true,
+      "bytesAfterTermination": 0,
+      "markerAfterTermination": "",
+      "readerAcceptedAfterTermination": false,
+      "readerErrorAfterTermination": "not an LFC-pack file: too short",
+      "cleanup": [
+        {
+          "name": "phase3-stage-phase3-20261102131710-0wd5mbz-a95e228f-802b-4a2b-be37-91633022370e.json.lfc",
+          "removed": true
+        }
+      ],
+      "status": "observed"
+    },
+    {
+      "stage": "finalize",
+      "filename": "phase3-stage-phase3-20261102131710-qj0jsq5-c064c6b7-5e3e-438f-b514-85f95e402b4d.json.lfc",
+      "fileVisibleWhileWorkerPaused": true,
+      "bytesWhilePaused": 0,
+      "workerReportedOutputBytes": 15777,
+      "trailingMarker": "",
+      "reader": {
+        "accepted": false
+      },
+      "outputVisibleAfterTermination": true,
+      "bytesAfterTermination": 0,
+      "markerAfterTermination": "",
+      "readerAcceptedAfterTermination": false,
+      "readerErrorAfterTermination": "not an LFC-pack file: too short",
+      "cleanup": [
+        {
+          "name": "phase3-stage-phase3-20261102131710-qj0jsq5-c064c6b7-5e3e-438f-b514-85f95e402b4d.json.lfc",
+          "removed": true
+        }
+      ],
+      "status": "observed"
+    }
+  ],
+  "notes": [
+    "Each stage is gated by test-only Worker instrumentation. File visibility is observed while the worker is paused and after termination; this does not measure a write mid-system-call or establish cross-browser atomicity."
+  ],
+  "finishedAt": "2026-11-02T13:17:11.171Z"
+}

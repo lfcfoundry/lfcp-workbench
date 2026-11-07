@@ -1,0 +1,75 @@
+{
+  "schema": "lfcp-workbench-browser-validation/v1",
+  "phase": 3,
+  "suite": "opfs-completed-file-restart-verify",
+  "startedAt": "2026-11-02T13:23:44.308Z",
+  "environment": {
+    "capturedAt": "2026-11-02T13:23:44.315Z",
+    "browserRuntime": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "platform": "Linux armv81",
+    "origin": "http://127.0.0.1:8080",
+    "secureContext": true,
+    "crossOriginIsolated": false,
+    "opfs": true,
+    "storageEstimate": {
+      "status": "measured-approximate-origin-estimate",
+      "usageBytes": 175185,
+      "quotaBytes": 10737593425
+    },
+    "storagePersisted": false,
+    "fileSystemHandleMove": false,
+    "fileSystemWritableStream": true,
+    "pageMemory": {
+      "api": "performance.memory (non-standard; page realm)",
+      "usedHeapBytes": 10000000,
+      "totalHeapBytes": 10000000,
+      "heapLimitBytes": 3140000000
+    },
+    "userAgentSpecificMemory": false,
+    "deviceMemoryGiB": 8,
+    "worker": true,
+    "streams": true,
+    "lfcpVersion": "LFC-pack 0.4.19 / API 0"
+  },
+  "tests": [
+    {
+      "status": "pass",
+      "stage": "after-explicit-browser-restart-procedure",
+      "details": {
+        "fileFound": true,
+        "sameOrigin": true,
+        "outputName": "phase3-restart-restart-20261102-phase3a-3448ffd8-ee94-4360-b992-701f85836ae9.json.lfc",
+        "fileSizeBytes": 963,
+        "expectedSizeBytes": 963,
+        "lastModified": 1793625615807,
+        "expectedLastModified": 1793625615807,
+        "readerInfo": {
+          "rows": 256,
+          "blocks": 1,
+          "size": 963,
+          "major": 1,
+          "minor": 0
+        },
+        "footerMarker": "LFC1",
+        "decodedAllRows": true,
+        "rowCount": 256,
+        "expectedRowCount": 256,
+        "valuesAndOrderMatch": true,
+        "footerCorruptionRejected": true,
+        "fileIdentityMatches": true,
+        "storageEstimateAfterRestart": {
+          "status": "measured-approximate-origin-estimate",
+          "usageBytes": 175185,
+          "quotaBytes": 10737593425
+        },
+        "generatedDatasetRemovedAfterVerification": true
+      }
+    }
+  ],
+  "notes": [
+    "A successful browser restart check demonstrates persistence for this Chrome profile and test only. It does not guarantee retention against eviction, profile clearing, device failure, or all crash modes."
+  ],
+  "lifecycleId": "restart-20261102-phase3a",
+  "restartConfirmedByProcedure": true,
+  "finishedAt": "2026-11-02T13:23:44.355Z"
+}

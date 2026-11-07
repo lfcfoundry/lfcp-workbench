@@ -1,0 +1,213 @@
+{
+  "schema": "lfcp-workbench-phase8-browser-qualification/v1",
+  "capturedAt": "2026-11-02T19:27:46.440Z",
+  "policyId": "no_blob_worker",
+  "csp": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "browser": {
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+    "userAgentData": {
+      "architecture": "",
+      "brands": [
+        {
+          "brand": "Not:A-Brand",
+          "version": "8"
+        },
+        {
+          "brand": "Chromium",
+          "version": "156"
+        },
+        {
+          "brand": "Google Chrome",
+          "version": "156"
+        }
+      ],
+      "mobile": true,
+      "model": "Android phone",
+      "platform": "Android",
+      "platformVersion": "(withheld)"
+    },
+    "platform": "Linux armv81"
+  },
+  "capabilities": {
+    "secureContext": true,
+    "wasm": true,
+    "worker": true,
+    "streams": true
+  },
+  "package": {
+    "version": "0.4.19",
+    "apiVersion": 0
+  },
+  "results": [
+    {
+      "name": "candidate-initialization",
+      "status": "pass",
+      "elapsedMs": 5.6000001430511475
+    },
+    {
+      "name": "ordinary-pack",
+      "status": "pass",
+      "rows": 3,
+      "bytes": 371
+    },
+    {
+      "name": "empty-first",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "empty-middle",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "empty-final",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "consecutive-empties",
+      "status": "pass",
+      "rows": 6,
+      "footerRows": 6,
+      "columnValues": 6
+    },
+    {
+      "name": "all-empty",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "single-empty",
+      "status": "pass",
+      "rows": 1,
+      "footerRows": 1,
+      "columnValues": 1
+    },
+    {
+      "name": "ordinary-nonempty",
+      "status": "pass",
+      "rows": 4,
+      "footerRows": 4,
+      "columnValues": 4
+    },
+    {
+      "name": "mixed-empty",
+      "status": "pass",
+      "rows": 5,
+      "footerRows": 5,
+      "columnValues": 5
+    },
+    {
+      "name": "cardinality-2",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-3",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-4",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-5",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-6",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-7",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "cardinality-8",
+      "status": "pass",
+      "rows": 8,
+      "footerRows": 8,
+      "columnValues": 8
+    },
+    {
+      "name": "stream-pack",
+      "status": "pass",
+      "inputChunkBytes": 13,
+      "rows": 4
+    },
+    {
+      "name": "parallel-pack-blocked-without-worker-src-blob",
+      "status": "pass",
+      "expectedPolicyBlock": true,
+      "workersRequested": 2,
+      "workerConstructionAttempts": 1,
+      "workerObjectsCreated": 1,
+      "initializedWorkers": 0,
+      "workerErrorEvents": 1,
+      "rejection": "helper worker failed: undefined"
+    }
+  ],
+  "workerTrace": [
+    {
+      "id": 1,
+      "test": "parallel-pack",
+      "created": true,
+      "initialized": false,
+      "jobsPosted": 1,
+      "jobsStarted": 0,
+      "jobsCompleted": 0,
+      "warmupsPosted": 0,
+      "messagesPosted": [
+        {
+          "kind": "p",
+          "id": 0,
+          "bytes": 543
+        }
+      ],
+      "errorEvents": [
+        {
+          "message": "",
+          "filename": ""
+        }
+      ],
+      "workerErrors": [],
+      "terminated": true,
+      "syntheticFault": false
+    }
+  ],
+  "result": "pass",
+  "summary": {
+    "tests": 19,
+    "passed": 19,
+    "failed": 0,
+    "workersCreated": 1,
+    "initializedWorkers": 0,
+    "workerJobsCompleted": 0
+  }
+}

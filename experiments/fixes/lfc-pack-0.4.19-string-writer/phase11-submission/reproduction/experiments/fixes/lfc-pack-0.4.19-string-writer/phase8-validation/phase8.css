@@ -1,0 +1,6 @@
+body { font: 16px/1.45 system-ui, sans-serif; margin: 1.5rem auto; max-width: 68rem; padding: 0 1rem; }
+h1 { font-size: 1.35rem; }
+pre { background: #f3f4f6; overflow: auto; padding: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.running { color: #805600; }
+.done { color: #176b35; font-weight: 700; }
+.failed { color: #a21d27; font-weight: 700; }
