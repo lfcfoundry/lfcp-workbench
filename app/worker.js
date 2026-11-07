@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.5.0/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.5.9/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -141,7 +141,7 @@ async function remove(m) {
 // Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
 const MAX_DECODE_ROWS = 1000000;          // fallback path (decodes every row): used only when the file cannot be read by column
-const MAX_COLUMN_ROWS = 10000000, MAX_COLUMN_BYTES = 384 * 1048576;   // column path: only the filtered and sorted columns are decoded
+const MAX_COLUMN_ROWS = 10000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
 let view = null, queryMod = null, colMod = null;
 async function openView(m) {
   try {
@@ -158,11 +158,16 @@ async function openView(m) {
 }
 // Column path: only the columns a filter or sort needs are decoded (LfcPack.unpackColumns), kept per column so typing in a filter box does not decode again.
 // Falls back to decoding every row when the file has no flat-row blocks.
-async function loadColumns(names) {
+// Two ways, same result. A stored file up to WHOLE_FILE_MAX is read once and all wanted columns decoded together (2 to 3 times faster in all three
+// browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.5.9), so memory stays at the kept columns plus one block.
+const WHOLE_FILE_MAX = 384 * 1048576;
+async function loadColumns(names, stream) {
   const want = names.filter((n) => !view.cols.has(n));
   if (want.length) {
-    const bytes = new Uint8Array(await view.f.arrayBuffer()), blocks = LfcPack.unpackColumns(bytes, { keys: want }), out = want.map(() => new Array(view.total)); let at = 0;
-    for (const b of blocks) { for (let k = 0; k < want.length; k++) { const src = b.cols[want[k]], dst = out[k]; for (let i = 0; i < b.n; i++) dst[at + i] = src ? src[i] : ''; } at += b.n; }
+    const out = want.map(() => new Array(view.total)); let at = 0;
+    const put = (e) => { for (let k = 0; k < want.length; k++) { const src = e.cols[want[k]], dst = out[k]; for (let i = 0; i < e.n; i++) dst[at + i] = src ? src[i] : ''; } at += e.n; };
+    if (!stream && view.f.size <= WHOLE_FILE_MAX) { const bytes = new Uint8Array(await view.f.arrayBuffer()); for (const e of LfcPack.unpackColumns(bytes, { keys: want })) put(e); }
+    else for (let b = 0; b < view.R.blocks.length; b++) put(await view.R.columns(b, { keys: want }));
     want.forEach((n, k) => view.cols.set(n, out[k]));
   }
   const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
@@ -185,10 +190,11 @@ async function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   const t0 = performance.now(), active = Object.keys(m.filters || {}).filter((k) => m.filters[k]), plain = !m.sort && !active.length;
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
-  const colOk = view.flat && view.total <= MAX_COLUMN_ROWS && view.f.size <= MAX_COLUMN_BYTES;
+  const colOk = view.flat && view.total <= MAX_COLUMN_ROWS;
   if (colOk) {
     const names = [...new Set(active.concat(m.sort ? [m.sort.col] : []))].filter((n) => view.columns.some((c) => c.name === n));
-    const cols = await loadColumns(names), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort });
+    if (m.stream) view.cols.clear();   // test hook: force the block-by-block path
+    const cols = await loadColumns(names, m.stream), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort });
     view.indices = r.indices; view.filtered = true;
     return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names });
   }
