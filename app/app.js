@@ -34,10 +34,10 @@
     host.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openGrid(b.dataset.open)));
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => { await call({ type: 'delete', name: b.dataset.del }); refresh(); }));
   }
-  async function runImport(file) {
+  async function runImport(file, inline) {
     $('go').disabled = true; $('selftest').disabled = true; $('cancel').hidden = false; $('prog').hidden = false; $('prog').value = 0;
     const id = 'j' + (++seq); active = id;
-    const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage({ type: 'import', id, file, delimiter: $('delim').value }); });
+    const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage({ type: 'import', id, file, delimiter: $('delim').value, inline: !!inline || /[?&]inline=1/.test(location.search) }); });
     active = null; $('cancel').hidden = true; $('prog').hidden = true; $('selftest').disabled = false; $('go').disabled = !$('file').files.length;
     if (res.type === 'done') { status('Import complete and checked.'); show(res.dataset); refresh(); }
     else status((res.type === 'cancelled' ? 'Cancelled. Nothing was kept.' : 'Import failed: ' + res.message), res.type !== 'cancelled');
@@ -68,7 +68,7 @@
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
-    const r = await call({ type: 'query', filters: G.filters, sort: G.sort });
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
@@ -126,6 +126,14 @@
     if (res.type === 'done') {
       const d = res.dataset;
       add('row count equals expected', d.rows === expected.length, `${d.rows} vs ${expected.length}`);
+      add('import ran parse and pack on two threads', d.parallel === true || /[?&]inline=1/.test(location.search) || location.protocol === 'file:', (d.parallel ? 'two threads' : 'one thread') + (location.protocol === 'file:' ? ' (a page opened from a file may not be allowed a helper; it then runs on one thread)' : ''));
+      const inl = await runImport(file, true);
+      add('import on one thread gives the same dataset', inl.type === 'done' && inl.dataset.rows === d.rows && !inl.dataset.parallel && JSON.stringify(inl.dataset.columns) === JSON.stringify(d.columns) && inl.dataset.bytes === d.bytes, inl.type === 'done' ? inl.dataset.rows + ' rows, ' + inl.dataset.bytes + ' vs ' + d.bytes + ' bytes' : inl.message);
+      if (inl.type === 'done') await call({ type: 'delete', name: inl.dataset.name });
+      const bad = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'bad.csv', { type: 'text/csv' }));
+      add('a bad row stops the import and names its line', bad.type === 'error' && /Line 3/.test(bad.message), bad.message);
+      const idc = 'j' + (++seq), pc = new Promise((r) => waiters.set(idc, r)); worker.postMessage({ type: 'import', id: idc, file, delimiter: ',' }); worker.postMessage({ type: 'cancel', id: idc });
+      const cr = await pc; add('cancel stops the import', cr.type === 'cancelled', cr.type);
       add('footer validated', d.validation.ok, d.validation.level);
       add('types: id integer, score number, when date', d.columns[0].type === 'integer' && d.columns[2].type === 'number' && d.columns[3].type === 'date', d.columns.map((c) => c.type).join(','));
       const v = await call({ type: 'verify', name: d.name, expectJson: JSON.stringify(expected) });
@@ -149,6 +157,8 @@
       if (ex.blob) { const P = (window.__M || await import('../src/ingest/delimited.mjs')).DelimitedParser; new P(',', (r) => exRows.push(r)).feed(await ex.blob.text(), true); }
       const want10 = expected.filter((r) => +r.id >= 19990).sort((a, b) => b.id - a.id).map((r) => G.cols.map((c) => r[c.name]));
       add('export of the filtered, sorted view equals those rows', exRows.length === 11 && JSON.stringify(exRows[0]) === JSON.stringify(G.cols.map((c) => c.name)) && JSON.stringify(exRows.slice(1)) === JSON.stringify(want10), exRows.length - 1 + ' rows exported');
+      G.forceStream = true; G.filters = { id: '>=19990' }; G.sort = { col: 'id', dir: 'desc' }; buildHead(); const qs = await applyQuery(); G.forceStream = false;
+      add('block-by-block column read gives the same filtered, sorted rows', qs.count === 10 && JSON.stringify(G.rows[0]) === JSON.stringify(G.cols.map((c) => expected.find((r) => r.id === '19999')[c.name])), qs.count + ' rows');
       G.filters = { id: '>abc' }; buildHead(); q = await applyQuery();
       add('bad filter shows a message', !!q.errors.id, q.errors.id);
       $('gridbox').hidden = true;
@@ -174,7 +184,7 @@
     if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
-      const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes;
+      const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing;
       s = performance.now(); const o = await openGrid(d.name); T.openMs = Math.round(performance.now() - s);
       add('data view opens', o && o.total === g.rows, o && String(o.total));
       const same = (row, i) => JSON.stringify(row) === JSON.stringify(cells(i));
@@ -189,6 +199,8 @@
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
       G.sort = { col: 'score', dir: 'asc' }; buildHead(); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s);
+      G.sort = { col: 'note', dir: 'asc' }; buildHead(); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
+      G.sort = { col: 'score', dir: 'asc' }; buildHead(); await applyQuery();
       add('sorting by score keeps empty scores last', q3.count === g.rows && G.rows[0] && G.rows[0][2] !== '', G.rows[0] && G.rows[0][2]);
       $('gridbox').hidden = true; await call({ type: 'delete', name: d.name });
     }
