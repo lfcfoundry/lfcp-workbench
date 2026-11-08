@@ -68,7 +68,7 @@
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
-    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream });
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
@@ -125,12 +125,15 @@
     add('import finished', res.type === 'done', res.message);
     if (res.type === 'done') {
       const d = res.dataset;
+      const { typedCell } = (window.__M || await import('../src/ingest/infer.mjs')), names0 = d.columns.map((c) => c.name);
+      const expTyped = d.plan ? expected.map((r) => { const o = Object.assign({}, r); names0.forEach((nm, i) => { if (d.plan[i]) o[nm] = typedCell(r[nm]); }); return o; }) : expected, expJson0 = JSON.stringify(expTyped);
+      add('whole-number columns are stored as numbers', !!d.plan && d.columns.some((c, i) => d.plan[i] && c.type === 'integer'), d.plan ? names0.filter((_, i) => d.plan[i]).join(', ') : 'none');
       add('row count equals expected', d.rows === expected.length, `${d.rows} vs ${expected.length}`);
       add('import ran parse and pack on two threads', d.parallel === true || /[?&]inline=1/.test(location.search) || location.protocol === 'file:', (d.parallel ? 'two threads' : 'one thread') + (location.protocol === 'file:' ? ' (a page opened from a file may not be allowed a helper; it then runs on one thread)' : ''));
       const inl = await runImport(file, true);
       add('import on one thread gives the same dataset', inl.type === 'done' && inl.dataset.rows === d.rows && !inl.dataset.parallel && JSON.stringify(inl.dataset.columns) === JSON.stringify(d.columns) && inl.dataset.bytes === d.bytes, inl.type === 'done' ? inl.dataset.rows + ' rows, ' + inl.dataset.bytes + ' vs ' + d.bytes + ' bytes' : inl.message);
       if (inl.type === 'done') await call({ type: 'delete', name: inl.dataset.name });
-      let segOk = true, segDetail = []; const expJson = JSON.stringify(expected);
+      let segOk = true, segDetail = []; const expJson = expJson0;
       for (const sb of (/Firefox\//.test(navigator.userAgent) ? [] : [1009])) {   // Firefox keeps one helper, and re-parsing pieces there is slow
 
         const q0 = performance.now(), sg = await runImport(file, false, { segBytes: sb }); segDetail.push(Math.round(performance.now() - q0) + 'ms');
@@ -151,13 +154,25 @@
         segDetail.push('bad ' + Math.round(performance.now() - q3) + 'ms'); add('a bad row in the middle names the same line with pieces', b1.type === 'error' && b2.type === 'error' && b1.message === b2.message && /Line 4002/.test(b2.message), b2.message);
         for (const x of [one, many]) if (x.type === 'done') await call({ type: 'delete', name: x.dataset.name });
       }
+      {   // many small blocks: a number filter decodes only the blocks whose range can hold a match, with the same answer as scanning everything
+        const zr = await runImport(file, false, { blockBytes: 3000 });
+        if (zr.type === 'done') {
+          await openGrid(zr.dataset.name);
+          const want = (f) => expected.filter(f).map((r) => r.id).join(',');
+          const run = async (filters, sort, noZones) => { G.filters = filters; G.sort = sort; G.noZones = noZones; buildHead(); const q = await applyQuery(); G.noZones = false; return { q, ids: G.rows.map((r) => r[0]).join(',') }; };
+          const a = await run({ id: '>=19990' }, { col: 'id', dir: 'asc' }, false), b2 = await run({ id: '>=19990' }, { col: 'id', dir: 'asc' }, true);
+          const c = await run({ id: '=777' }, null, false), d2 = await run({ id: '<3' }, { col: 'id', dir: 'desc' }, false), e2 = await run({ id: '>5', name: 'x' }, null, false), e3 = await run({ id: '>5', name: 'x' }, null, true);
+          add('number filter skips blocks and gives the same rows', a.q.zoneBlocks > 0 && a.q.zoneBlocks * 5 <= a.q.blocks && a.ids === b2.ids && a.ids === want((r) => +r.id >= 19990) && c.ids === '777' && d2.ids === '2,1,0' && e2.q.count === e3.q.count, 'kept ' + a.q.zoneBlocks + ' of ' + a.q.blocks + ' blocks; ' + a.q.count + ' rows');
+          await call({ type: 'delete', name: zr.dataset.name }); G.filters = {}; G.sort = null;
+        } else add('number filter skips blocks and gives the same rows', false, zr.message);
+      }
       const bad = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'bad.csv', { type: 'text/csv' }));
       add('a bad row stops the import and names its line', bad.type === 'error' && /Line 3/.test(bad.message), bad.message);
       const idc = 'j' + (++seq), pc = new Promise((r) => waiters.set(idc, r)); worker.postMessage({ type: 'import', id: idc, file, delimiter: ',' }); worker.postMessage({ type: 'cancel', id: idc });
       const cr = await pc; add('cancel stops the import', cr.type === 'cancelled', cr.type);
       add('footer validated', d.validation.ok, d.validation.level);
       add('types: id integer, score number, when date', d.columns[0].type === 'integer' && d.columns[2].type === 'number' && d.columns[3].type === 'date', d.columns.map((c) => c.type).join(','));
-      const v = await call({ type: 'verify', name: d.name, expectJson: JSON.stringify(expected) });
+      const v = await call({ type: 'verify', name: d.name, expectJson: expJson0 });
       add('every value read back identical to the source', v.json === true, v.message || `${v.rows} rows read`);
       const o = await openGrid(d.name);
       add('grid opens with all rows', o && o.total === expected.length, o && String(o.total));
@@ -205,7 +220,7 @@
     const g = await call({ type: 'gen', mb }); T.generateMs = Math.round(performance.now() - s);
     add('file generated', g.type === 'generated', g.message || `${g.rows} rows, ${fmt(g.bytes)}, ${g.onDisk ? 'on disk (OPFS)' : 'in memory'}`);
     let res = null;
-    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file); T.importMs = Math.round(performance.now() - s); }
+    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, /[?&]untyped=1/.test(location.search) ? { untyped: true } : undefined); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
       const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing;
