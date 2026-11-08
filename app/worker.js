@@ -122,9 +122,9 @@ async function parseJob(m) {
 // line break at or after the next cut where the parser is outside quotes. The pieces fit together only if each piece ends exactly where
 // the next one started; otherwise the rest of the file is parsed in order from the last verified spot, so the result is always the same.
 const SEG_BYTES = 8 * 1048576, SEG_MIN_FILE = 48 * 1048576, SEG_WINDOW = 5;
-// Pieces pay off where two parsing helpers really run side by side: measured faster in Chromium and WebKitGTK, but Firefox slows both
-// helpers down when they run together, so it keeps the one-helper path. Tests can force pieces with m.segBytes.
-const useSegments = (m, file) => !m.inline && (m.segBytes || (file.size >= SEG_MIN_FILE && (self.navigator && self.navigator.hardwareConcurrency || 2) >= 4 && !/Firefox\//.test(self.navigator && self.navigator.userAgent || '')));
+// Pieces need two parsing helpers that really run side by side. They do in all three test browsers now that rows are built as text
+// (when each row was an object, Firefox ran two helpers at half speed each). Tests can force pieces on small files with m.segBytes.
+const useSegments = (m, file) => !m.inline && (m.segBytes || (file.size >= SEG_MIN_FILE && (self.navigator && self.navigator.hardwareConcurrency || 2) >= 4));
 const cleanState = (p) => p.mode === 0 && !p.seen && p.row.length === 0 && p.field === '' && !p.pendingQuote && !p.skipLF;
 // m: file, delimiter, headers (null for the header scan), headerOnly, first, hdrEnd, s (cut), e (next cut), startAt, lineBase, trackers, emit, stopFn.
 async function parseSegment(m) {
