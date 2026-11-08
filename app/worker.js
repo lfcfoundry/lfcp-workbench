@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.5.9/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.6.2/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -367,7 +367,7 @@ async function openView(m) {
 // Column path: only the columns a filter or sort needs are decoded (LfcPack.unpackColumns), kept per column so typing in a filter box does not decode again.
 // Falls back to decoding every row when the file has no flat-row blocks.
 // Two ways, same result. A stored file up to WHOLE_FILE_MAX is read once and all wanted columns decoded together (2 to 3 times faster in all three
-// browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.5.9), so memory stays at the kept columns plus one block.
+// browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.6.2), so memory stays at the kept columns plus one block.
 const WHOLE_FILE_MAX = 384 * 1048576;
 async function loadColumns(names, stream) {
   const want = names.filter((n) => !view.cols.has(n));
@@ -380,7 +380,7 @@ async function loadColumns(names, stream) {
   }
   const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
 }
-// Number ranges per block (LFC-pack 0.5.9 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
+// Number ranges per block (LFC-pack 0.6.2 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
 // A block with no range (text cells, empty cells, or an older file) is always kept. Used only when it keeps at most a fifth of the blocks.
 async function zonePlan(filters, active) {
   const need = [];

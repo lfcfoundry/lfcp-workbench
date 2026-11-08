@@ -362,7 +362,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
  * Part of JS-modules, https://github.com/lfcfoundry/JS-modules
  * Copyright (c) 2026 LFC Foundry. MIT License (see LICENSE at the repository root).
- * Version 0.5.9 (API 0)
+ * Version 0.6.2 (API 0)
  *
  * Needs WebAssembly (zstd, the tokenizer and the string deduplicator are compiled from C; page policy 'wasm-unsafe-eval' and nothing else). No other dependency, one file.
  * Contains zstd 1.5.7 (BSD-3-Clause, Meta Platforms), compiled to wasm32; see NOTICE-zstd.txt next to this file.
@@ -1663,14 +1663,42 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     return f;
   }
   var popc8 = new Uint8Array(256); (function () { for (var i = 1; i < 256; i++) popc8[i] = (i & 1) + popc8[i >> 1]; })();
+
+  /* rows: 'lazy' and 'lazycols' (opt-in, no generated code). A row is a small object holding only its index (under a symbol, so it never clashes with a key and
+     Object.keys(row) is empty); each key is a getter on one class per block. JSON.stringify gives the same text through toJSON and for..in lists the keys,
+     but Object.keys, spread, hasOwnProperty, structuredClone and postMessage do not carry the values. 'lazycols' also decodes a column the first time any
+     row reads its key, so a damaged column throws on that first read instead of at unpack. */
+  var ROWI = typeof Symbol === 'function' ? Symbol('row') : '\u0001row';
+  function lazyRows(keys, vals, n) {
+    var K = keys.length, j;
+    function R(i) { this[ROWI] = i; }
+    for (j = 0; j < K; j++) (function (arr, key) { Object.defineProperty(R.prototype, key, { get: function () { return arr[this[ROWI]]; }, enumerable: true, configurable: true }); })(vals[j], keys[j]);
+    Object.defineProperty(R.prototype, 'toJSON', { value: function () { var o = {}, k; for (k = 0; k < K; k++) o[keys[k]] = vals[k][this[ROWI]]; return o; }, enumerable: false });
+    var out = new Array(n), i; for (i = 0; i < n; i++) out[i] = new R(i);
+    return out;
+  }
+  function lazyRows2(keys, K, n, decodeAt) {
+    var cols = new Array(K), j;
+    function R(i) { this[ROWI] = i; }
+    for (j = 0; j < K; j++) (function (j, key) { Object.defineProperty(R.prototype, key, { get: function () { var a = cols[j]; if (a === undefined) a = cols[j] = decodeAt(j); return a[this[ROWI]]; }, enumerable: true, configurable: true }); })(j, keys[j]);
+    Object.defineProperty(R.prototype, 'toJSON', { value: function () { var o = {}, k; for (k = 0; k < K; k++) o[keys[k]] = this[keys[k]]; return o; }, enumerable: false });
+    var out = new Array(n), i; for (i = 0; i < n; i++) out[i] = new R(i);
+    return out;
+  }
   function makeFlatReader(zs) {
     // assemble rows from the decompressed frames of flatFrames; want: null, or an object whose own keys are the only keys to decode
-    var gen = false;
+    var gen = false, lazyOn = false;
     function assemble(F, want) {
       var meta = F.meta, n = F.n, K = meta.keys.length, vals = new Array(K), pl = F.pl, ordList = F.ordList, ordIds = F.ordIds, i, j;
       var pb = (n + 7) >> 3, ptr = new Int32Array(K), out = new Array(n), keys = meta.keys, o, hasProto = keys.indexOf('__proto__') >= 0;
       // Chromium (V8) only, a dense block (plain rows, or clones from CLONE_KEYS keys; no generated code): each column is decoded, assigned down and dropped, so fewer column arrays are alive at the next young-generation collection. Same objects, same key order
-      if (V8 && !ordList && !gen && !hasProto && K > 0 && K <= 250 && n >= 2000) {
+      var lazyOk = lazyOn && !hasProto && keys.indexOf('toJSON') < 0;   // a key named toJSON or __proto__ keeps plain rows
+      if (lazyOk && lazyOn === 2 && !ordList && K > 0 && K <= 250 && n >= 1) {
+        var dl = true; for (j = 0; j < K && dl; j++) dl = F.cols[j] !== null && (F.cols[j].pre ? F.cols[j].pre.length === n : meta.cols[j].n === n);
+        if (dl) { for (j = 0; j < K; j++) if (F.cols[j].fr) F.cols[j].fr = F.cols[j].fr.map(function (x) { return x.slice(); }); }   // the frames may be views of memory the next block reuses: keep copies
+        if (dl) return lazyRows2(keys, K, n, function (c) { return F.cols[c].pre ? F.cols[c].pre : decodeColumn(meta.cols[c], zs, F.cols[c].fr); });
+      }
+      if (V8 && !ordList && !gen && !lazyOn && !hasProto && K > 0 && K <= 250 && n >= 2000) {
         var allDense = true; for (j = 0; j < K && allDense; j++) allDense = F.cols[j] !== null && (F.cols[j].pre ? F.cols[j].pre.length === n : meta.cols[j].n === n);
         if (allDense) {
           if (K >= CLONE_KEYS) { var ts0 = '{'; for (j = 0; j < K; j++) ts0 += (j ? ',' : '') + JSON.stringify(keys[j]) + ':null'; var tpl0 = JSON.parse(ts0 + '}'); for (i = 0; i < n; i++) out[i] = { ...tpl0 }; } else for (i = 0; i < n; i++) out[i] = {};
@@ -1686,6 +1714,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       for (j = 0; j < K && dense; j++) if (!vals[j] || vals[j].length !== n) dense = false;
       if (dense) { for (j = 0, ts = '{'; j < K; j++) ts += (j ? ',' : '') + JSON.stringify(keys[j]) + ':null'; tpl = JSON.parse(ts + '}'); }
       var useClone = dense && K >= CLONE_KEYS;
+      if (dense && lazyOk && n >= 1) return lazyRows(keys, vals, n);
       if (dense && gen && n >= 1) { var mk = rowBuilder(keys); if (mk) { for (i = 0; i < n; i++) out[i] = mk(vals, i); return out; } }
       if (useClone) { for (i = 0; i < n; i++) out[i] = { ...tpl }; }
       else for (i = 0; i < n; i++) out[i] = {};
@@ -1736,7 +1765,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       }
       return { n: n, keys: Object.keys(cols), cols: cols, present: present };
     }
-    return { generated: function (on) { gen = !!on; }, readBlock: readBlock, readRange: readRange, assemble: assemble, columns: columns, columnsOf: function (bytes, want, verify) { return columns(flatFrames(zs, bytes, want, false, verify), want); } };
+    return { generated: function (on) { gen = !!on; }, lazy: function (on) { lazyOn = on; }, readBlock: readBlock, readRange: readRange, assemble: assemble, columns: columns, columnsOf: function (bytes, want, verify) { return columns(flatFrames(zs, bytes, want, false, verify), want); } };
   }
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
@@ -2130,7 +2159,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
   }
   function unpackSome(bytes, opts) {
     var file = openFile(bytes), rn = arenaReader(makeNestedReader(arenaZs(S.zdec), sharedOf(file))), rf = arenaReader(makeFlatReader(arenaZs(S.zdec))), out = [], i, j, r, kd, want = null, range = opts.range || null;
-    rf.generated(opts.rows === 'generated');
+    rf.generated(opts.rows === 'generated'); rf.lazy(opts.rows === 'lazy' ? 1 : opts.rows === 'lazycols' ? 2 : false);
     if (opts.keys) { want = {}; for (i = 0; i < opts.keys.length; i++) want[opts.keys[i]] = 1; if (range) want[range.key] = 1; }
     for (i = 0; i < file.blocks.length; i++) {
       if (opts.table != null && (file.blocks[i][5] || 0) !== opts.table) continue;
@@ -2182,7 +2211,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     opts = packOpts(opts); need(true);
     if (opts.exact) throw new Error('LfcPack: packStream does not support exact mode yet');
     var st = opts.share ? sharedState() : null, mopts = st ? Object.assign({}, opts, { _st: st }) : opts;
-    var bb = opts.blockBytes || BLOCK_BYTES, buf = new Uint8Array(0), blocks = [], zone = [], off = 0, rows = 0, tail = true, done = false;
+    var bb = opts.blockBytes || BLOCK_BYTES, blocks = [], zone = [], off = 0, rows = 0, tail = true, done = false;
     function cut(chunk) {   // one chunk of whole lines -> its block bytes, with the table entries moved to this file's offsets
       var mini = packMany([{ name: null, bytes: chunk }], mopts), f = openFile(mini), out = [], i, b, e;
       for (i = 0; i < f.blocks.length; i++) {
@@ -2191,11 +2220,20 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       }
       return out;
     }
+    /* the text not yet packed is kept as a list of pushed pieces (parts, plen bytes in all) and joined only when a block is cut, so many small pushes
+       do not copy the waiting text again on every push (since 0.6.2); scan says how far the search for a line end past the block size has already gone */
+    var parts = [], plen = 0, scan = 0;
+    function joined() { if (parts.length === 1) return parts[0]; var u = new Uint8Array(plen), p = 0, i; for (i = 0; i < parts.length; i++) { u.set(parts[i], p); p += parts[i].length; } parts = [u]; return u; }
     function take(final) {
-      var out = [], e, nl;
-      while (buf.length) {
-        if (buf.length > bb && (nl = buf.indexOf(10, bb)) >= 0) e = nl + 1; else if (final) e = buf.length; else break;
-        out = out.concat(cut(buf.subarray(0, e))); buf = buf.subarray(e);
+      var out = [], e, nl, u;
+      while (plen) {
+        if (plen > bb) {
+          /* find the first line end at or after bb without joining: walk the pieces from where the last search stopped */
+          nl = -1; var p0 = 0, i, a, from;
+          for (i = 0; i < parts.length && nl < 0; i++) { a = parts[i]; if (p0 + a.length > Math.max(bb, scan)) { from = Math.max(0, Math.max(bb, scan) - p0); var k = a.indexOf(10, from); if (k >= 0) nl = p0 + k; } p0 += a.length; }
+          if (nl < 0) { scan = plen; if (!final) break; e = plen; } else e = nl + 1;
+        } else if (final) e = plen; else break;
+        u = joined(); out = out.concat(cut(u.subarray(0, e))); u = u.subarray(e); parts = u.length ? [u] : []; plen = u.length; scan = 0;
       }
       return out;
     }
@@ -2203,8 +2241,10 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       push: function (bytes) {
         if (done) throw new Error('LfcPack: packStream is finished');
         bytes = bytesOf(bytes); if (!bytes.length) return [];
-        var nb = new Uint8Array(buf.length + bytes.length); nb.set(buf); nb.set(bytes, buf.length); buf = nb; tail = bytes[bytes.length - 1] === 10;
-        return take(false);
+        parts.push(bytes); plen += bytes.length; tail = bytes[bytes.length - 1] === 10;
+        var out = take(false), i;
+        for (i = 0; i < parts.length; i++) if (parts[i].buffer === bytes.buffer) parts[i] = parts[i].slice();   /* only what waits is copied: the caller may reuse its buffer after push */
+        return out;
       },
       finish: function () {
         if (done) throw new Error('LfcPack: packStream is finished');
@@ -2304,7 +2344,22 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       return init(write ? undefined : { readOnly: true }).then(function () { return fn.apply(null, a); });
     };
   }
-  var api = { _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(packTables, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packParallel: packParallel, warmPack: warmPack, packStream: packStream, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.5.9', apiVersion: 0 };
+  // warm(): opt-in, call once when the page is idle (since 0.6.1). Starts the WebAssembly, then packs and opens one made-up 400-row table set, each step in a task of
+  // its own, so the first real save and open skip most of the compile and warm-up cost. Returns the same promise every time: true, or false if it could not run.
+  var warmP = null;
+  function warm() {
+    if (warmP) return warmP;
+    var later = function (f) { return new Promise(function (res) { setTimeout(function () { try { res(f()); } catch (e) { res(false); } }, 0); }); };
+    var file = null;
+    warmP = init().then(function () { return later(function () {
+      var nodes = [], links = [], i;
+      for (i = 0; i < 400; i++) nodes.push({ id: 'n' + i, label: 'Item ' + (i % 97), group: 'g' + (i % 7), x: i * 1.25, y: (i * 7919) % 1000 / 10, size: i % 13, on: i % 3 === 0, tags: i % 5 ? ['a', 'b' + (i % 4)] : [], attrs: { kind: 'k' + (i % 3), score: i / 7 } });
+      for (i = 0; i < 1200; i++) links.push({ source: 'n' + (i % 400), target: 'n' + ((i * 31 + 7) % 400), value: (i % 17) + 0.5, label: i % 9 ? '' : 'link ' + i });
+      file = packTables({ meta: { name: 'warm', created: 1700000000000 }, nodes: nodes, links: links }); return true;
+    }); }).then(function (ok) { return ok && later(function () { unpackTables(file); file = null; return true; }); }).then(function (ok) { return ok === true; }, function () { return false; });
+    return warmP;
+  }
+  var api = { _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(packTables, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packParallel: packParallel, warmPack: warmPack, warm: warm, packStream: packStream, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.6.2', apiVersion: 0 };
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
   // ================================================================ helper workers: only byte work moves (CRC, zstd, number columns); strings and rows are built on the calling thread
@@ -2858,7 +2913,7 @@ async function openView(m) {
 // Column path: only the columns a filter or sort needs are decoded (LfcPack.unpackColumns), kept per column so typing in a filter box does not decode again.
 // Falls back to decoding every row when the file has no flat-row blocks.
 // Two ways, same result. A stored file up to WHOLE_FILE_MAX is read once and all wanted columns decoded together (2 to 3 times faster in all three
-// browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.5.9), so memory stays at the kept columns plus one block.
+// browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.6.2), so memory stays at the kept columns plus one block.
 const WHOLE_FILE_MAX = 384 * 1048576;
 async function loadColumns(names, stream) {
   const want = names.filter((n) => !view.cols.has(n));
@@ -2871,7 +2926,7 @@ async function loadColumns(names, stream) {
   }
   const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
 }
-// Number ranges per block (LFC-pack 0.5.9 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
+// Number ranges per block (LFC-pack 0.6.2 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
 // A block with no range (text cells, empty cells, or an older file) is always kept. Used only when it keeps at most a fifth of the blocks.
 async function zonePlan(filters, active) {
   const need = [];
