@@ -34,10 +34,10 @@
     host.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openGrid(b.dataset.open)));
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => { await call({ type: 'delete', name: b.dataset.del }); refresh(); }));
   }
-  async function runImport(file, inline) {
+  async function runImport(file, inline, opts) {
     $('go').disabled = true; $('selftest').disabled = true; $('cancel').hidden = false; $('prog').hidden = false; $('prog').value = 0;
     const id = 'j' + (++seq); active = id;
-    const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage({ type: 'import', id, file, delimiter: $('delim').value, inline: !!inline || /[?&]inline=1/.test(location.search) }); });
+    const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage(Object.assign({ type: 'import', id, file, delimiter: $('delim').value, inline: !!inline || /[?&]inline=1/.test(location.search) }, opts || {})); });
     active = null; $('cancel').hidden = true; $('prog').hidden = true; $('selftest').disabled = false; $('go').disabled = !$('file').files.length;
     if (res.type === 'done') { status('Import complete and checked.'); show(res.dataset); refresh(); }
     else status((res.type === 'cancelled' ? 'Cancelled. Nothing was kept.' : 'Import failed: ' + res.message), res.type !== 'cancelled');
@@ -130,6 +130,27 @@
       const inl = await runImport(file, true);
       add('import on one thread gives the same dataset', inl.type === 'done' && inl.dataset.rows === d.rows && !inl.dataset.parallel && JSON.stringify(inl.dataset.columns) === JSON.stringify(d.columns) && inl.dataset.bytes === d.bytes, inl.type === 'done' ? inl.dataset.rows + ' rows, ' + inl.dataset.bytes + ' vs ' + d.bytes + ' bytes' : inl.message);
       if (inl.type === 'done') await call({ type: 'delete', name: inl.dataset.name });
+      let segOk = true, segDetail = []; const expJson = JSON.stringify(expected);
+      for (const sb of (/Firefox\//.test(navigator.userAgent) ? [] : [1009])) {   // Firefox keeps one helper, and re-parsing pieces there is slow
+
+        const q0 = performance.now(), sg = await runImport(file, false, { segBytes: sb }); segDetail.push(Math.round(performance.now() - q0) + 'ms');
+        const same = sg.type === 'done' && sg.dataset.rows === d.rows && sg.dataset.bytes === d.bytes && JSON.stringify(sg.dataset.columns) === JSON.stringify(d.columns) && (sg.dataset.segmented || sg.dataset.parallel === false);
+        let rowsOk = false;
+        if (sg.type === 'done') { const v = await call({ type: 'verify', name: sg.dataset.name, expectJson: expJson }); rowsOk = v.json === true; await call({ type: 'delete', name: sg.dataset.name }); }
+        segOk = segOk && same && rowsOk; segDetail.push(sb + (sg.type === 'done' ? (sg.dataset.segmented ? (sg.dataset.serialTail ? 'T[' + sg.dataset.segWhy + ']' : 'S' + sg.dataset.redos) : '-') : '!'));
+      }
+      add('import in small pieces gives the same dataset', segOk, (segDetail.length ? 'piece sizes ' + segDetail.join(' ') : 'skipped in Firefox, which keeps one helper') + ' (S<n> = pieces fit after n re-parsed pieces, T = rest parsed in order, - = one helper path)');
+      {   // plain rows: every guessed cut is a real line break, so the pieces fit and nothing is parsed twice
+        const plain = []; for (let i = 0; i < 6000; i++) plain.push(i + ',row ' + i + ',' + (i % 9) + '.25\r\n');
+        const pf = new File(['id,name,score\r\n', ...plain], 'plain.csv', { type: 'text/csv' });
+        const q1 = performance.now(), one = await runImport(pf, true), q2 = performance.now(), many = await runImport(pf, false, { segBytes: 2048 }), q3 = performance.now(); segDetail.push('plain ' + Math.round(q2 - q1) + '/' + Math.round(q3 - q2) + 'ms');
+        const okp = one.type === 'done' && many.type === 'done' && many.dataset.segmented === true && !many.dataset.serialTail && many.dataset.redos === 0 && many.dataset.rows === 6000 && many.dataset.bytes === one.dataset.bytes && JSON.stringify(many.dataset.columns) === JSON.stringify(one.dataset.columns);
+        add('pieces that fit are accepted without parsing twice', okp, many.type === 'done' ? many.dataset.rows + ' rows, ' + (many.dataset.serialTail ? 'rest parsed in order' : 'pieces fit') + ', ' + many.dataset.bytes + ' vs ' + one.dataset.bytes + ' bytes' : many.message);
+        const badRows = ['id,name,score\r\n', ...plain]; badRows[4001] = '4000,only two\r\n';
+        const bf = new File(badRows, 'plainbad.csv', { type: 'text/csv' }), b1 = await runImport(bf, true), b2 = await runImport(bf, false, { segBytes: 2048 });
+        segDetail.push('bad ' + Math.round(performance.now() - q3) + 'ms'); add('a bad row in the middle names the same line with pieces', b1.type === 'error' && b2.type === 'error' && b1.message === b2.message && /Line 4002/.test(b2.message), b2.message);
+        for (const x of [one, many]) if (x.type === 'done') await call({ type: 'delete', name: x.dataset.name });
+      }
       const bad = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'bad.csv', { type: 'text/csv' }));
       add('a bad row stops the import and names its line', bad.type === 'error' && /Line 3/.test(bad.message), bad.message);
       const idc = 'j' + (++seq), pc = new Promise((r) => waiters.set(idc, r)); worker.postMessage({ type: 'import', id: idc, file, delimiter: ',' }); worker.postMessage({ type: 'cancel', id: idc });

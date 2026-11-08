@@ -39,6 +39,7 @@ self.onmessage = async (e) => {
   await storageReady;
   if (m.type === 'cancel') { const j = jobs.get(m.id); if (j) { j.cancelled = true; if (j.abort) j.abort(); } }
   else if (m.type === 'parseJob') parseJob(m);
+  else if (m.type === 'seg') segJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importFile(m);
   else if (m.type === 'list') list(m);
@@ -100,6 +101,133 @@ async function parseJob(m) {
   } catch (err) { self.postMessage({ type: 'perror', message: String(err && err.message || err), line: err && err.line || null }); }
 }
 
+
+// ---- Segmented parse: the file is cut into pieces that helpers parse at the same time ----
+// A piece starts at the first line break after its cut point, which is a guess (the break may sit inside quotes), and runs to the first
+// line break at or after the next cut where the parser is outside quotes. The pieces fit together only if each piece ends exactly where
+// the next one started; otherwise the rest of the file is parsed in order from the last verified spot, so the result is always the same.
+const SEG_BYTES = 8 * 1048576, SEG_MIN_FILE = 48 * 1048576, SEG_WINDOW = 5;
+// Pieces pay off where two parsing helpers really run side by side: measured faster in Chromium and WebKitGTK, but Firefox slows both
+// helpers down when they run together, so it keeps the one-helper path. Tests can force pieces with m.segBytes.
+const useSegments = (m, file) => !m.inline && (m.segBytes || (file.size >= SEG_MIN_FILE && (self.navigator && self.navigator.hardwareConcurrency || 2) >= 4 && !/Firefox\//.test(self.navigator && self.navigator.userAgent || '')));
+const cleanState = (p) => p.mode === 0 && !p.seen && p.row.length === 0 && p.field === '' && !p.pendingQuote && !p.skipLF;
+// m: file, delimiter, headers (null for the header scan), headerOnly, first, hdrEnd, s (cut), e (next cut), startAt, lineBase, trackers, emit, stopFn.
+async function parseSegment(m) {
+  await loadCore();
+  const { DelimitedParser, IngestError, cleanHeaders, TypeTracker } = core;
+  const file = m.file, size = file.size, SL = 1048576;
+  let start = 0;
+  if (m.startAt != null) start = m.startAt;
+  else if (m.headerOnly) start = 0;
+  else if (m.first) start = m.hdrEnd;
+  else { start = size; for (let o = m.s; o < size; o += 65536) { const b = new Uint8Array(await file.slice(o, Math.min(size, o + 65536)).arrayBuffer()); const k = b.indexOf(10); if (k >= 0) { start = o + k + 1; break; } } }
+  const limit = Math.max(m.e, start), headers = m.headers;
+  const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null);
+  let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
+  let buf = new Uint8Array(1 << 20);
+  const drain = () => { if (!accN) return; if (buf.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(buf.length * 2, pos + acc.length * 3)); n.set(buf.subarray(0, pos)); buf = n; } pos += enc.encodeInto(acc, buf.subarray(pos)).written; acc = ''; accN = 0; };
+  const flushOut = async () => { drain(); if (!pos) return; const b = buf.slice(0, pos); pos = 0; if (m.emit) await m.emit(b); else pieces.push(b); };
+  const parser = new DelimitedParser(m.delimiter, (f, line) => {
+    if (m.headerOnly) { if (!header) header = cleanHeaders(f); return; }
+    if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
+    const rec = Object.create(null);
+    for (let i = 0; i < headers.length; i++) { rec[headers[i]] = f[i]; trackers[i].add(f[i]); }
+    rows++; if (sample.length < 20) sample.push(rec);
+    acc += JSON.stringify(rec) + '\n'; if (++accN >= 64) drain();
+  });
+  if (m.lineBase) parser.line = parser.startLine = m.lineBase;
+  const dec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: !m.headerOnly && start > 0 });
+  const ready = () => cleanState(parser) && (!m.headerOnly || header);
+  let at = start, end = size, finished = false;
+  while (at < size && !finished) {
+    if (m.stopFn) m.stopFn();
+    if (m.headerOnly && at - start > 8 * SL) throw new Error('No line break found near the start of the file.');
+    const to = Math.min(size, at + SL), b = new Uint8Array(await file.slice(at, to).arrayBuffer());
+    let i = 0; const from = Math.max(0, limit - at);
+    while (i < b.length) {
+      const k = from < b.length ? b.indexOf(10, Math.max(from, i)) : -1;
+      if (k < 0) { parser.feed(dec.decode(b.subarray(i), { stream: true }), false); i = b.length; break; }
+      parser.feed(dec.decode(b.subarray(i, k + 1), { stream: true }), false); i = k + 1;
+      if (ready()) { end = at + i; finished = true; break; }
+    }
+    at = to;
+    if (pos >= (1 << 22) || acc.length > (1 << 20)) await flushOut();
+  }
+  if (!finished) { end = size; parser.feed(dec.decode(), true); }
+  await flushOut();
+  const snap = trackers ? trackers.map((x) => ({ n: x.n, empty: x.empty, int: x.int, num: x.num, bool: x.bool, date: x.date })) : null;
+  return { startPos: start, endPos: end, pieces, rows, lines: parser.line - 1, header, sample, trackers: snap, eof: !finished };
+}
+
+// Helper side of a segmented import: parse one piece, post the result (the bytes are transferred, not copied).
+async function segJob(m) {
+  try {
+    const r = await parseSegment(m);
+    self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer));
+  } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err) } }); }
+}
+
+
+// Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
+// Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
+async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB) {
+  await loadCore(); const { TypeTracker } = core;
+  const helpers = [], pending = new Map(); let rid = 0;
+  const closeAll = () => helpers.forEach((h) => h.terminate());
+  try { for (let i = 0; i < 2; i++) helpers.push(new Worker(self.location.href)); } catch { closeAll(); return null; }
+  const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
+  for (const h of helpers) {
+    h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); p.res(d.r); } } };
+    h.onerror = (e) => failAll(new Error('The import helper failed: ' + (e && e.message || 'unknown error')));
+  }
+  const rpc = (h, msg) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'seg', rid: id }, msg)); });
+  job.abort = () => { closeAll(); failAll(Object.assign(new Error('Import cancelled.'), { cancelled: true })); };
+  const t0 = performance.now();
+  try {
+    let hdr; try { hdr = await rpc(helpers[0], { file, delimiter, headerOnly: true, e: 0 }); } catch { closeAll(); return null; }
+    if (hdr.error || !hdr.header || hdr.eof) { closeAll(); return null; }
+    const headers = hdr.header, hdrEnd = hdr.endPos, total = Math.ceil((file.size - hdrEnd) / SEGB);
+    const agg = headers.map(() => new TypeTracker());
+    let rows = 0, expect = hdrEnd, lineBase = hdr.lines + 1; const sample = [];
+    let nextD = 0, nextP = 0, quit = false; const done = new Map(), waiters = new Set();
+    const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } };
+    const wait = () => new Promise((r) => waiters.add(r));
+    const run = async (h) => {
+      while (!quit && nextD < total) {
+        if (nextD >= nextP + SEG_WINDOW) { await wait(); continue; }
+        const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
+        done.set(k, await rpc(h, { file, delimiter, headers, first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
+        signal();
+      }
+    };
+    const loops = helpers.map(run);
+    let serial = false;
+    for (let k = 0; k < total; k++) {
+      while (!done.has(k)) { stop(job); await wait(); }
+      let r = done.get(k); done.delete(k); nextP = k + 1; signal(); stop(job);
+      if (r.error || r.startPos !== expect) {   // a guessed start sat inside quotes: parse this piece again from the verified spot
+        t.redos = (t.redos || 0) + 1;
+        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
+        stop(job);
+        if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
+      }
+      for (const b of r.pieces) await packBytes(b);
+      rows += r.rows; r.trackers.forEach((x, i) => agg[i].merge(x)); for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
+      expect = r.endPos; lineBase += r.lines; progress(r.endPos, rows);
+      if (r.eof) break;
+    }
+    quit = true; signal();
+    if (serial || expect < file.size) {   // pieces did not fit together (or one failed): parse the rest in order, from the last verified spot
+      closeAll();
+      const r = await parseSegment({ file, delimiter, headers, startAt: expect, e: file.size, lineBase, trackers: agg, emit: packBytes, stopFn: () => stop(job) });
+      rows += r.rows; for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
+      t.serialTail = true;
+    }
+    t.parseMs = performance.now() - t0; t.readMs = 0;
+    return { headers, types: agg.map((x) => ({ type: x.type, nullable: x.nullable })), rows, sample, pieces: total };
+  } finally { closeAll(); }
+}
+
 async function importFile(m) {
   const job = { cancelled: false }; jobs.set(m.id, job);
   let name = null, writable = null, closed = false, helper = null;
@@ -117,9 +245,10 @@ async function importFile(m) {
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     const packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
-    let res;
-    try { helper = m.inline ? null : new Worker(self.location.href); } catch { helper = null; }
-    if (helper) {   // parse on the helper, pack and write here: both run at once
+    let res = null;
+    if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES);
+    if (!res) try { helper = m.inline ? null : new Worker(self.location.href); } catch { helper = null; }
+    if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
         let chain = Promise.resolve();
         job.abort = () => reject(Object.assign(new Error('Import cancelled.'), { cancelled: true }));
@@ -145,7 +274,7 @@ async function importFile(m) {
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
     const cols = headers.map((h, i) => ({ name: h, type: types[i].type, nullable: types[i].nullable }));
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
-    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs) }, parallel: !!helper } });
+    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0 }, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
