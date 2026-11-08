@@ -349,7 +349,7 @@ async function remove(m) {
 // Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
 const MAX_DECODE_ROWS = 1000000;          // fallback path (decodes every row): used only when the file cannot be read by column
-const MAX_COLUMN_ROWS = 10000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
+const MAX_COLUMN_ROWS = 20000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
 let view = null, queryMod = null, colMod = null;
 async function openView(m) {
   try {

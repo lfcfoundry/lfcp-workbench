@@ -10,7 +10,7 @@ First page built on the new ingestion core in `../src/ingest/`, as a classic Wor
 
 **Buttons:** Import, Cancel, Run self-test (generates a messy 20,000-row CSV, imports it, reads every value back and compares), Copy results (plain-text report, no screenshots needed).
 
-**Limits today:** CSV and TSV only; browsing holds only the footer and one block; filter and sort decode only the columns they use (up to 10,000,000 rows, read one block at a time; other files fall back to decoding every row, up to 1,000,000 rows); blank-line skipping means a file with only one column cannot hold an empty value on its own line.
+**Limits today:** CSV and TSV only; browsing holds only the footer and one block; filter and sort decode only the columns they use (up to 20,000,000 rows; tested at 18.2 million rows (800 MB), read one block at a time; other files fall back to decoding every row, up to 1,000,000 rows); blank-line skipping means a file with only one column cannot hold an empty value on its own line.
 
 **Run it:** `python3 -m http.server 8080` from the repo root, then open `http://localhost:8080/app/index.html`. Browser checks: `python3 tests/browser-run.py firefox|chromium|webkit` (pass/fail, one browser at a time; see `docs/DEVELOPMENT.md`).
 
