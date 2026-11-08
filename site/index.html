@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-wBnOVLWU98qIqWj50LCyt9hv3TSZ+/2bmhcJCsghZ/w=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ZLx1IM4wEux+0WYiNQCkUjwm/8tkzAKp8Zmj52LLOUY=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -2760,7 +2760,7 @@ async function importFile(m) {
     name = safe(file.name) + '-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: delimiter === '\t' ? 'tsv' : 'csv', sourceName: String(file.name).slice(0, 200), sourceBytes: file.size, tables: [{ name: 'rows', rows: 0, columns: [] }] };
-    const packer = LfcPack.packStream({ blockBytes: m.blockBytes || 262144, share: true, meta });
+    const packer = LfcPack.packStream(Object.assign(m.level ? { level: m.level } : {}, { blockBytes: m.blockBytes || 1048576, share: true, meta }));
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     const packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
@@ -3530,7 +3530,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
     const g = await call({ type: 'gen', mb }); T.generateMs = Math.round(performance.now() - s);
     add('file generated', g.type === 'generated', g.message || `${g.rows} rows, ${fmt(g.bytes)}, ${g.onDisk ? 'on disk (OPFS)' : 'in memory'}`);
     let res = null;
-    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, /[?&]untyped=1/.test(location.search) ? { untyped: true } : undefined); T.importMs = Math.round(performance.now() - s); }
+    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (b) o.blockBytes = +b[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
       const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing;
