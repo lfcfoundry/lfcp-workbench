@@ -342,7 +342,9 @@ async function importFile(m) {
     let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
     let finishPacking = async () => {};
     const packWorkers = m.packWorkers != null ? m.packWorkers : 2;   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
-    if (packWorkers > 0 && useSegments(m, file)) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
+    let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
+    if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(new Worker(self.location.href)); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
+    if (pws) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
       const bb = m.blockBytes || 2097152, popts = Object.assign(m.level ? { level: m.level } : {}, { blockBytes: bb, share: false });
       packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
       const ws = [], idle = [], done = new Map(); let seq = 0, emit = 0, parts = [], plen = 0, wake = null, wchain = Promise.resolve(), failed = null;
@@ -353,7 +355,7 @@ async function importFile(m) {
         wchain = wchain.then(async () => { while (done.has(emit)) { const r = done.get(emit); done.delete(emit); emit++; await write(packer.pushPacked(r)); } pump(); });
         pump();
       };
-      for (let i = 0; i < packWorkers; i++) { const w = new Worker(self.location.href); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
+      for (const w of pws) { w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
       job.abort = () => { failed = Object.assign(new Error('Import cancelled.'), { cancelled: true }); pump(); };
       const dispatch = async (chunk) => {
         while (!idle.length && !failed) await new Promise((r) => { wake = r; });

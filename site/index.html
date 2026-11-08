@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-kE/PII4qnEKJ6uaXCgtqdP8GprUb9U5YNvMYXxGMKCA=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-5QihUAWLWRX27Y3ysRPQ9ReqGuZvfsEBfEQZmXZuGlY=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -2960,7 +2960,9 @@ async function importFile(m) {
     let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
     let finishPacking = async () => {};
     const packWorkers = m.packWorkers != null ? m.packWorkers : 2;   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
-    if (packWorkers > 0 && useSegments(m, file)) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
+    let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
+    if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(new Worker(self.location.href)); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
+    if (pws) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
       const bb = m.blockBytes || 2097152, popts = Object.assign(m.level ? { level: m.level } : {}, { blockBytes: bb, share: false });
       packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
       const ws = [], idle = [], done = new Map(); let seq = 0, emit = 0, parts = [], plen = 0, wake = null, wchain = Promise.resolve(), failed = null;
@@ -2971,7 +2973,7 @@ async function importFile(m) {
         wchain = wchain.then(async () => { while (done.has(emit)) { const r = done.get(emit); done.delete(emit); emit++; await write(packer.pushPacked(r)); } pump(); });
         pump();
       };
-      for (let i = 0; i < packWorkers; i++) { const w = new Worker(self.location.href); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
+      for (const w of pws) { w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
       job.abort = () => { failed = Object.assign(new Error('Import cancelled.'), { cancelled: true }); pump(); };
       const dispatch = async (chunk) => {
         while (!idle.length && !failed) await new Promise((r) => { wake = r; });
@@ -3711,7 +3713,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       const expTyped = d.plan ? expected.map((r) => { const o = Object.assign({}, r); names0.forEach((nm, i) => { if (d.plan[i]) o[nm] = typedCell(r[nm]); }); return o; }) : expected, expJson0 = JSON.stringify(expTyped);
       add('whole-number columns are stored as numbers', !!d.plan && d.columns.some((c, i) => d.plan[i] && c.type === 'integer'), d.plan ? names0.filter((_, i) => d.plan[i]).join(', ') : 'none');
       add('row count equals expected', d.rows === expected.length, `${d.rows} vs ${expected.length}`);
-      add('import ran parse and pack on two threads', d.parallel === true || /[?&]inline=1/.test(location.search) || location.protocol === 'file:', (d.parallel ? 'two threads' : 'one thread') + (location.protocol === 'file:' ? ' (a page opened from a file may not be allowed a helper; it then runs on one thread)' : ''));
+      add('import ran parse and pack on two threads', d.parallel === true || /[?&]inline=1/.test(location.search) || !/^https?:/.test(location.protocol), (d.parallel ? 'two threads' : 'one thread') + (location.protocol === 'file:' ? ' (a page opened from a file may not be allowed a helper; it then runs on one thread)' : ''));
       const inl = await runImport(file, true);
       add('import on one thread gives the same dataset', inl.type === 'done' && inl.dataset.rows === d.rows && !inl.dataset.parallel && JSON.stringify(inl.dataset.columns) === JSON.stringify(d.columns) && inl.dataset.bytes === d.bytes, inl.type === 'done' ? inl.dataset.rows + ' rows, ' + inl.dataset.bytes + ' vs ' + d.bytes + ' bytes' : inl.message);
       if (inl.type === 'done') await call({ type: 'delete', name: inl.dataset.name });
@@ -3730,7 +3732,8 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
         const pf = new File(['id,name,score\r\n', ...plain], 'plain.csv', { type: 'text/csv' });
         const q1 = performance.now(), one = await runImport(pf, true), q2 = performance.now(), many = await runImport(pf, false, { segBytes: 2048 }), q3 = performance.now(); segDetail.push('plain ' + Math.round(q2 - q1) + '/' + Math.round(q3 - q2) + 'ms');
         const okp = one.type === 'done' && many.type === 'done' && many.dataset.segmented === true && !many.dataset.serialTail && many.dataset.redos === 0 && many.dataset.rows === 6000 && many.dataset.bytes === one.dataset.bytes && JSON.stringify(many.dataset.columns) === JSON.stringify(one.dataset.columns);
-        add('pieces that fit are accepted without parsing twice', okp, many.type === 'done' ? many.dataset.rows + ' rows, ' + (many.dataset.serialTail ? 'rest parsed in order' : 'pieces fit') + ', ' + many.dataset.bytes + ' vs ' + one.dataset.bytes + ' bytes' : many.message);
+        const okpFile = !/^https?:/.test(location.protocol) && one.type === 'done' && many.type === 'done' && many.dataset.rows === 6000 && many.dataset.bytes === one.dataset.bytes;   // a page opened from a file may not get helper threads: same result on one thread is enough
+        add('pieces that fit are accepted without parsing twice', okp || okpFile, many.type === 'done' ? many.dataset.rows + ' rows, ' + (many.dataset.serialTail ? 'rest parsed in order' : 'pieces fit') + ', ' + many.dataset.bytes + ' vs ' + one.dataset.bytes + ' bytes' : many.message);
         const badRows = ['id,name,score\r\n', ...plain]; badRows[4001] = '4000,only two\r\n';
         const bf = new File(badRows, 'plainbad.csv', { type: 'text/csv' }), b1 = await runImport(bf, true), b2 = await runImport(bf, false, { segBytes: 2048 });
         segDetail.push('bad ' + Math.round(performance.now() - q3) + 'ms'); add('a bad row in the middle names the same line with pieces', b1.type === 'error' && b2.type === 'error' && b1.message === b2.message && /Line 4002/.test(b2.message), b2.message);
