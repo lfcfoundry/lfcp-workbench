@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-O1q1+dkgomUhUcRi0lyshWMFxnAu3fFlFy2Aa1DEhdA=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-kE/PII4qnEKJ6uaXCgtqdP8GprUb9U5YNvMYXxGMKCA=' 'wasm-unsafe-eval'; style-src 'sha256-mDGrUCCm+uMOEl+OEKCoecpEKPG7SL2ejgdJQchOvaQ='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -413,7 +413,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
  * Part of JS-modules, https://github.com/lfcfoundry/JS-modules
  * Copyright (c) 2026 LFC Foundry. MIT License (see LICENSE at the repository root).
- * Version 0.6.2 (API 0)
+ * Version 0.7.0 (API 0)
  *
  * Needs WebAssembly (zstd, the tokenizer and the string deduplicator are compiled from C; page policy 'wasm-unsafe-eval' and nothing else). No other dependency, one file.
  * Contains zstd 1.5.7 (BSD-3-Clause, Meta Platforms), compiled to wasm32; see NOTICE-zstd.txt next to this file.
@@ -2263,8 +2263,9 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     if (opts.exact) throw new Error('LfcPack: packStream does not support exact mode yet');
     var st = opts.share ? sharedState() : null, mopts = st ? Object.assign({}, opts, { _st: st }) : opts;
     var bb = opts.blockBytes || BLOCK_BYTES, blocks = [], zone = [], off = 0, rows = 0, tail = true, done = false;
-    function cut(chunk) {   // one chunk of whole lines -> its block bytes, with the table entries moved to this file's offsets
-      var mini = packMany([{ name: null, bytes: chunk }], mopts), f = openFile(mini), out = [], i, b, e;
+    function cut(chunk) { return add(packMany([{ name: null, bytes: chunk }], mopts)); }   // one chunk of whole lines -> its block bytes
+    function add(mini) {   // a one-chunk file -> its block bytes, with the table entries moved to this file's offsets
+      var f = openFile(mini), out = [], i, b, e;
       for (i = 0; i < f.blocks.length; i++) {
         b = f.blocks[i]; e = mini.subarray(b[0], b[0] + b[1]);
         blocks.push([off].concat(b.slice(1, 5), 0, b.slice(6))); zone.push(f.zone[i] || []); off += b[1]; rows += b[3]; out.push(e);
@@ -2297,6 +2298,17 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
         for (i = 0; i < parts.length; i++) if (parts[i].buffer === bytes.buffer) parts[i] = parts[i].slice();   /* only what waits is copied: the caller may reuse its buffer after push */
         return out;
       },
+      /* pushPacked(bytes): append a chunk that packBlock() packed (in a worker, say), in text order, instead of pushing its text. Chunks must be cut where
+         push would cut them: at the first line end at or after blockBytes (the last chunk may be shorter). Then the file is the same bytes as push gives (since 0.7.0) */
+      pushPacked: function (mini) {
+        if (done) throw new Error('LfcPack: packStream is finished');
+        if (st) throw new Error('LfcPack: pushPacked does not support share (each worker would build its own tables); pass share: false');
+        if (plen) throw new Error('LfcPack: pushPacked cannot follow text that push has not packed yet; push whole blocks or use one of the two');
+        var f = openFile(bytesOf(mini)), fl = jsonSec(f.footer.sec[SEC_FLAGS]) || {};
+        if (fl.exact || f.footer.sec[SEC_SHARED]) throw new Error('LfcPack: pushPacked needs a file from packBlock');
+        if (!f.blocks.length) return [];
+        tail = fl.tail !== false; return add(f.bytes);
+      },
       finish: function () {
         if (done) throw new Error('LfcPack: packStream is finished');
         done = true; var out = take(true);
@@ -2308,6 +2320,15 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
         return out;
       }
     };
+  }
+  /* packBlock(chunk, opts): pack one chunk of whole lines on its own, for packStream().pushPacked() to append; the work can run in any worker, since the result
+     is plain bytes (a small file of the chunk's blocks). Use the options the stream uses; share and exact are not supported (since 0.7.0) */
+  function packBlock(chunk, opts) {
+    opts = packOpts(opts); need(true);
+    if (opts.exact) throw new Error('LfcPack: packBlock does not support exact mode');
+    if (opts.share) throw new Error('LfcPack: packBlock does not support share (each worker would build its own tables); pass share: false');
+    var o = {}, k; for (k in opts) if (k !== 'meta') o[k] = opts[k];
+    return packMany([{ name: null, bytes: bytesOf(chunk) }], o);
   }
   // hash(bytes, kind): 'crc32' (default; the number the file's checksums use) or 'xxh64' (16 lowercase hex digits); WebAssembly when init() has run, plain JavaScript for crc32 otherwise
   function hash(bytes, kind) {
@@ -2410,7 +2431,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     }); }).then(function (ok) { return ok && later(function () { unpackTables(file); file = null; return true; }); }).then(function (ok) { return ok === true; }, function () { return false; });
     return warmP;
   }
-  var api = { _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(packTables, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packParallel: packParallel, warmPack: warmPack, warm: warm, packStream: packStream, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.6.2', apiVersion: 0 };
+  var api = { _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(packTables, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packParallel: packParallel, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.7.0', apiVersion: 0 };
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
   // ================================================================ helper workers: only byte work moves (CRC, zstd, number columns); strings and rows are built on the calling thread
@@ -2637,6 +2658,7 @@ self.onmessage = async (e) => {
   if (m.type === 'cancel') { const j = jobs.get(m.id); if (j) { j.cancelled = true; if (j.abort) j.abort(); } }
   else if (m.type === 'parseJob') parseJob(m);
   else if (m.type === 'seg') segJob(m);
+  else if (m.type === 'packBlock') packBlockJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importFile(m);
   else if (m.type === 'list') list(m);
@@ -2768,6 +2790,12 @@ async function parseSegment(m) {
   return { startPos: start, endPos: end, pieces, rows, lines: parser.line - 1, header, sample, trackers: snap, eof: !finished };
 }
 
+// Pack worker side (LFC-pack 0.7.0): pack one chunk of JSON lines into block bytes; the importer appends the results in order with pushPacked.
+async function packBlockJob(m) {
+  try { await LfcPack.init(); const r = LfcPack.packBlock(new Uint8Array(m.c), m.o); self.postMessage({ type: 'packed', rid: m.rid, r }, [r.buffer]); }
+  catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
+}
+
 // Helper side of a segmented import: parse one piece, post the result (the bytes are transferred, not copied).
 async function segJob(m) {
   try {
@@ -2866,10 +2894,48 @@ async function importFile(m) {
     name = safe(file.name) + '-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: delimiter === '\t' ? 'tsv' : 'csv', sourceName: String(file.name).slice(0, 200), sourceBytes: file.size, tables: [{ name: 'rows', rows: 0, columns: [] }] };
-    const packer = LfcPack.packStream(Object.assign(m.level ? { level: m.level } : {}, { blockBytes: m.blockBytes || 2097152, share: true, meta }));
+    let packer = LfcPack.packStream(Object.assign(m.level ? { level: m.level } : {}, { blockBytes: m.blockBytes || 2097152, share: true, meta }));
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
-    const packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
+    let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
+    let finishPacking = async () => {};
+    const packWorkers = m.packWorkers != null ? m.packWorkers : (/Firefox\//.test(self.navigator && self.navigator.userAgent || '') ? 2 : 0);   // measured faster only in Firefox so far
+    if (packWorkers > 0 && useSegments(m, file)) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
+      const bb = m.blockBytes || 2097152, popts = Object.assign(m.level ? { level: m.level } : {}, { blockBytes: bb, share: false });
+      packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
+      const ws = [], idle = [], done = new Map(); let seq = 0, emit = 0, parts = [], plen = 0, wake = null, wchain = Promise.resolve(), failed = null;
+      const pump = () => { if (wake) { const r = wake; wake = null; r(); } };
+      const onPacked = (w) => (e) => {
+        const d = e.data; if (d.error) failed = new Error('Pack worker failed: ' + d.error); else done.set(d.rid, d.r);
+        idle.push(w);
+        wchain = wchain.then(async () => { while (done.has(emit)) { const r = done.get(emit); done.delete(emit); emit++; await write(packer.pushPacked(r)); } pump(); });
+        pump();
+      };
+      for (let i = 0; i < packWorkers; i++) { const w = new Worker(self.location.href); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
+      job.abort = () => { failed = Object.assign(new Error('Import cancelled.'), { cancelled: true }); pump(); };
+      const dispatch = async (chunk) => {
+        while (!idle.length && !failed) await new Promise((r) => { wake = r; });
+        if (failed) throw failed;
+        idle.pop().postMessage({ type: 'packBlock', rid: seq++, c: chunk, o: popts }, [chunk.buffer]);
+      };
+      const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
+      packBytes = async (bytes) => {
+        stop(job); parts.push(bytes); plen += bytes.length;
+        while (plen > bb) {   // cut at the first line end at or after blockBytes, as push would
+          let off = 0, cut = -1;
+          for (const p of parts) { if (off + p.length > bb) { const k = p.indexOf(10, Math.max(bb - off, 0)); if (k >= 0) { cut = off + k + 1; break; } } off += p.length; }
+          if (cut < 0) break;
+          await dispatch(take(cut));
+        }
+      };
+      finishPacking = async () => {
+        if (plen) await dispatch(take(plen));
+        while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
+        await wchain; if (failed) throw failed;
+        ws.forEach((w) => w.terminate());
+      };
+      var packWorkersToStop = ws;
+    }
     const plan = m.untyped ? null : await samplePlan(file, delimiter);
     let res = null;
     if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan);
@@ -2893,6 +2959,7 @@ async function importFile(m) {
     } else res = await parseStream(file, delimiter, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, plan);
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
+    await finishPacking();
     await write(packer.finish());
     await writable.close(); closed = true; writable = null;
     // Complete only after the footer is validated, then recorded in the catalog.
@@ -2905,7 +2972,7 @@ async function importFile(m) {
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
     send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
-  } finally { if (helper) helper.terminate(); jobs.delete(m.id); }
+  } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => w.terminate()); jobs.delete(m.id); }
 }
 
 async function validate(name, rows) {
@@ -2964,7 +3031,7 @@ async function openView(m) {
 // Column path: only the columns a filter or sort needs are decoded (LfcPack.unpackColumns), kept per column so typing in a filter box does not decode again.
 // Falls back to decoding every row when the file has no flat-row blocks.
 // Two ways, same result. A stored file up to WHOLE_FILE_MAX is read once and all wanted columns decoded together (2 to 3 times faster in all three
-// browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.6.2), so memory stays at the kept columns plus one block.
+// browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.7.0), so memory stays at the kept columns plus one block.
 const WHOLE_FILE_MAX = 384 * 1048576;
 async function loadColumns(names, stream) {
   const want = names.filter((n) => !view.cols.has(n));
@@ -2977,7 +3044,7 @@ async function loadColumns(names, stream) {
   }
   const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
 }
-// Number ranges per block (LFC-pack 0.6.2 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
+// Number ranges per block (LFC-pack 0.7.0 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
 // A block with no range (text cells, empty cells, or an older file) is always kept. Used only when it keeps at most a fifth of the blocks.
 async function zonePlan(filters, active) {
   const need = [];
@@ -3608,6 +3675,12 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
         const bf = new File(badRows, 'plainbad.csv', { type: 'text/csv' }), b1 = await runImport(bf, true), b2 = await runImport(bf, false, { segBytes: 2048 });
         segDetail.push('bad ' + Math.round(performance.now() - q3) + 'ms'); add('a bad row in the middle names the same line with pieces', b1.type === 'error' && b2.type === 'error' && b1.message === b2.message && /Line 4002/.test(b2.message), b2.message);
         for (const x of [one, many]) if (x.type === 'done') await call({ type: 'delete', name: x.dataset.name });
+        {   // blocks packed by worker threads (LFC-pack 0.7.0) and appended in order give the same rows
+          const pk = await runImport(pf, false, { segBytes: 2048, blockBytes: 3000, packWorkers: 2 });
+          let okw = false, why = pk.message || '';
+          if (pk.type === 'done') { const want = []; for (let i = 0; i < 6000; i++) want.push({ id: i, name: 'row ' + i, score: (i % 9) + '.25' }); const v = await call({ type: 'verify', name: pk.dataset.name, expectJson: JSON.stringify(want) }); okw = v.json === true && pk.dataset.rows === 6000 && pk.dataset.validation.ok; why = pk.dataset.rows + ' rows, ' + pk.dataset.bytes + ' bytes, rows ' + (v.json === true ? 'identical' : 'DIFFERENT'); await call({ type: 'delete', name: pk.dataset.name }); }
+          add('blocks packed by worker threads give the same rows', okw, why);
+        }
       }
       {   // many small blocks: a number filter decodes only the blocks whose range can hold a match, with the same answer as scanning everything
         const zr = await runImport(file, false, { blockBytes: 3000 });
@@ -3687,7 +3760,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
     const g = await call({ type: 'gen', mb }); T.generateMs = Math.round(performance.now() - s);
     add('file generated', g.type === 'generated', g.message || `${g.rows} rows, ${fmt(g.bytes)}, ${g.onDisk ? 'on disk (OPFS)' : 'in memory'}`);
     let res = null;
-    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
+    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; const pw = /[?&]pw=(\d+)/.exec(location.search); if (pw) o.packWorkers = +pw[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
       const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing;
