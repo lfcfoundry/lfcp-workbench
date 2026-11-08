@@ -166,6 +166,18 @@
           await call({ type: 'delete', name: zr.dataset.name }); G.filters = {}; G.sort = null;
         } else add('number filter skips blocks and gives the same rows', false, zr.message);
       }
+      {   // awkward text: quotes, backslash, tab, non-BMP, line separator, and column names that are special to objects
+        const weird = 'id,__proto__,1,"a""b",note\r\n1,x,2,y,"back\\slash"\r\n2,x,3,y,"tab\there"\r\n3,\u00e9,4,y,"\ud83d\ude00 \u2028 end"\r\n4,x,5,y,"quote "" and, comma\nnext line"\r\n';
+        const wr = await runImport(new File([weird], 'weird.csv', { type: 'text/csv' })), wExp = readRecords(weird).records;
+        let wOk = false, wDetail = wr.message || '';
+        if (wr.type === 'done') {
+          const wNames = wr.dataset.columns.map((c) => c.name), wTyped = wExp.map((r) => { const o = Object.create(null); wNames.forEach((nm, i) => { o[nm] = wr.dataset.plan && wr.dataset.plan[i] ? typedCell(r[nm]) : r[nm]; }); return o; });
+          const wv = await call({ type: 'verify', name: wr.dataset.name, expectJson: JSON.stringify(wTyped) });
+          wOk = wv.json === true && wr.dataset.rows === 4; wDetail = wr.dataset.rows + ' rows, columns ' + wNames.join(' | ') + (wOk ? '' : ' / got ' + JSON.stringify(wv.firstRows));
+          await call({ type: 'delete', name: wr.dataset.name });
+        }
+        add('awkward text and column names are stored and read back exactly', wOk, wDetail);
+      }
       const bad = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'bad.csv', { type: 'text/csv' }));
       add('a bad row stops the import and names its line', bad.type === 'error' && /Line 3/.test(bad.message), bad.message);
       const idc = 'j' + (++seq), pc = new Promise((r) => waiters.set(idc, r)); worker.postMessage({ type: 'import', id: idc, file, delimiter: ',' }); worker.postMessage({ type: 'cancel', id: idc });

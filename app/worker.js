@@ -55,27 +55,42 @@ self.onmessage = async (e) => {
 
 // Reads the file in slices, parses it, tracks column types and hands JSON-lines bytes to onBytes (awaited, so the consumer sets the pace).
 // Used twice: in a helper worker (parse on one thread while the import worker packs and writes on another), or inline when a helper cannot start.
+// One JSON line per row, built as text without making a row object. A string that needs no escaping gets its quotes added directly (a regex test
+// is much cheaper than JSON.stringify in Firefox); anything else goes through JSON.stringify, so the line is valid JSON with the same values.
+const NEEDS_ESC = /["\\\u0000-\u001f]/;
+function lineBuilder(headers, plan, trackers, typedCell) {
+  const n = headers.length, keyQ = headers.map((h, i) => (i ? ',' : '{') + JSON.stringify(h) + ':'), isInt = headers.map((_, i) => !!(plan && plan[i]));
+  return (f) => {
+    let line = '';
+    for (let i = 0; i < n; i++) {
+      const raw = f[i]; trackers[i].add(raw);
+      const v = isInt[i] ? typedCell(raw) : raw;
+      line += keyQ[i] + (typeof v === 'string' ? (NEEDS_ESC.test(v) ? JSON.stringify(v) : '"' + v + '"') : v === null ? 'null' : v);
+    }
+    return line + '}\n';
+  };
+}
+const sampleRecord = (headers, plan, f, typedCell) => { const rec = Object.create(null); for (let i = 0; i < headers.length; i++) rec[headers[i]] = plan && plan[i] ? typedCell(f[i]) : f[i]; return rec; };
 let scratch = new Uint8Array(0);
 async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t, plan) {
   await loadCore();
   const { DelimitedParser, IngestError, cleanHeaders, TypeTracker, typedCell } = core;
-  let headers = null, trackers = null, rows = 0, pos = 0, queued = 0, lastProg = 0; const sample = [];
+  let headers = null, trackers = null, build = null, rows = 0, pos = 0, queued = 0, lastProg = 0; const sample = [];
   let acc = '', accN = 0;
   const drain = () => { if (!accN) return; if (scratch.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(scratch.length * 2, pos + acc.length * 3)); n.set(scratch.subarray(0, pos)); scratch = n; } pos += enc.encodeInto(acc, scratch.subarray(pos)).written; queued += acc.length; acc = ''; accN = 0; };
   const flush = async () => { drain(); if (!pos) return; const bytes = scratch.slice(0, pos); pos = 0; queued = 0; await onBytes(bytes); };
   const parser = new DelimitedParser(delimiter, (f, line) => {
-    if (!headers) { headers = cleanHeaders(f); trackers = headers.map(() => new TypeTracker()); return; }
+    if (!headers) { headers = cleanHeaders(f); trackers = headers.map(() => new TypeTracker()); build = lineBuilder(headers, plan, trackers, typedCell); return; }
     if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
-    const rec = Object.create(null);
-    for (let i = 0; i < headers.length; i++) { rec[headers[i]] = plan && plan[i] ? typedCell(f[i]) : f[i]; trackers[i].add(f[i]); }
-    rows++; if (sample.length < 20) sample.push(rec);
-    acc += JSON.stringify(rec) + '\n'; if (++accN >= 64) drain();
+    acc += build(f); rows++; if (sample.length < 20) sample.push(sampleRecord(headers, plan, f, typedCell)); if (++accN >= 64) drain();
   });
   const dec = new TextDecoder('utf-8', { fatal: true });
+  let pre = file.size ? file.slice(0, Math.min(file.size, SLICE)).arrayBuffer() : null;   // the next slice loads while this one is parsed
   for (let off = 0; off < file.size; off += SLICE) {
     stopFn();
     const end = Math.min(file.size, off + SLICE);
-    let s = performance.now(); const chunk = new Uint8Array(await file.slice(off, end).arrayBuffer()); t.readMs += performance.now() - s;
+    let s = performance.now(); const chunk = new Uint8Array(await pre); t.readMs += performance.now() - s;
+    pre = end < file.size ? file.slice(end, Math.min(file.size, end + SLICE)).arrayBuffer() : null;
     s = performance.now(); parser.feed(dec.decode(chunk, { stream: end < file.size }), false); t.parseMs += performance.now() - s;
     if (queued >= FLUSH) await flush();
     if (performance.now() - lastProg > 200) { lastProg = performance.now(); onProgress(end, rows); }
@@ -122,7 +137,7 @@ async function parseSegment(m) {
   else if (m.first) start = m.hdrEnd;
   else { start = size; for (let o = m.s; o < size; o += 65536) { const b = new Uint8Array(await file.slice(o, Math.min(size, o + 65536)).arrayBuffer()); const k = b.indexOf(10); if (k >= 0) { start = o + k + 1; break; } } }
   const limit = Math.max(m.e, start), headers = m.headers, plan = m.plan;
-  const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null);
+  const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
   let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
   let buf = new Uint8Array(1 << 20);
   const drain = () => { if (!accN) return; if (buf.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(buf.length * 2, pos + acc.length * 3)); n.set(buf.subarray(0, pos)); buf = n; } pos += enc.encodeInto(acc, buf.subarray(pos)).written; acc = ''; accN = 0; };
@@ -130,19 +145,16 @@ async function parseSegment(m) {
   const parser = new DelimitedParser(m.delimiter, (f, line) => {
     if (m.headerOnly) { if (!header) header = cleanHeaders(f); return; }
     if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
-    const rec = Object.create(null);
-    for (let i = 0; i < headers.length; i++) { rec[headers[i]] = plan && plan[i] ? typedCell(f[i]) : f[i]; trackers[i].add(f[i]); }
-    rows++; if (sample.length < 20) sample.push(rec);
-    acc += JSON.stringify(rec) + '\n'; if (++accN >= 64) drain();
+    acc += build(f); rows++; if (sample.length < 20) sample.push(sampleRecord(headers, plan, f, typedCell)); if (++accN >= 64) drain();
   });
   if (m.lineBase) parser.line = parser.startLine = m.lineBase;
   const dec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: !m.headerOnly && start > 0 });
   const ready = () => cleanState(parser) && (!m.headerOnly || header);
-  let at = start, end = size, finished = false;
+  let at = start, end = size, finished = false, pre = at < size ? file.slice(at, Math.min(size, at + SL)).arrayBuffer() : null;
   while (at < size && !finished) {
     if (m.stopFn) m.stopFn();
     if (m.headerOnly && at - start > 8 * SL) throw new Error('No line break found near the start of the file.');
-    const to = Math.min(size, at + SL), b = new Uint8Array(await file.slice(at, to).arrayBuffer());
+    const to = Math.min(size, at + SL), b = new Uint8Array(await pre); pre = to < size ? file.slice(to, Math.min(size, to + SL)).arrayBuffer() : null;   // the next slice loads while this one is parsed
     let i = 0; const from = Math.max(0, limit - at);
     while (i < b.length) {
       const k = from < b.length ? b.indexOf(10, Math.max(from, i)) : -1;
