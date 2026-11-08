@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readRecords } from '../src/ingest/records.mjs';
 
-const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.7.0/lfc-pack.js'));
+const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.7.2/lfc-pack.js'));
 await lib.init();
 const csv = '﻿id,name,score,when,note\r\n1,"Ann, Jr.",9.5,2026-11-05,\r\n\r\n2,Bob,,2026-11-06,"line1\nline2"\r\n3,,7,2026-11-07,ok\r\n\r\n';
 const { headers, records, types } = readRecords(csv.replace(/^﻿/, ''));
