@@ -240,6 +240,7 @@
       add('data view opens', o && o.total === g.rows, o && String(o.total));
       const same = (row, i) => JSON.stringify(row) === JSON.stringify(cells(i));
       add('first rows are right', same(G.rows[0], 0) && same(G.rows[7], 7));
+      { const t1 = performance.now(); for (const f of [0.11, 0.37, 0.52, 0.73, 0.94]) await call({ type: 'page', start: Math.floor(g.rows * f), count: 30 }); T.pageColdMs = Math.round((performance.now() - t1) / 5 * 10) / 10; }   // average time to fetch 30 rows from far apart places
       const sc = $('gridscroll'), jump = async (frac) => { sc.scrollTop = Math.round((sc.scrollHeight - sc.clientHeight) * frac); await new Promise((r) => setTimeout(r, 600)); };
       s = performance.now(); await jump(1); T.lastPageMs = Math.round(performance.now() - s - 600);
       const lastRow = G.rows[G.rows.length - 1]; add('scrolling to the end shows the last row', lastRow && same(lastRow, g.rows - 1), lastRow && lastRow[0] + ' vs ' + (g.rows - 1));
