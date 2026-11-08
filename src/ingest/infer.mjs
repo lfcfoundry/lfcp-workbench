@@ -19,6 +19,8 @@ export class TypeTracker {
       else this.date = false;
     }
   }
+  // Folds in the tallies of another tracker that saw later rows (used when a file is parsed in pieces).
+  merge(o) { this.n += o.n; this.empty += o.empty; this.int = this.int && o.int; this.num = this.num && o.num; this.bool = this.bool && o.bool; this.date = this.date && o.date; }
   get type() {
     if (this.n === this.empty) return 'empty';
     return this.int ? 'integer' : this.num ? 'number' : this.bool ? 'boolean' : this.date ? 'date' : 'string';
