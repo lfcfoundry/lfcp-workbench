@@ -134,7 +134,7 @@
       add('import on one thread gives the same dataset', inl.type === 'done' && inl.dataset.rows === d.rows && !inl.dataset.parallel && JSON.stringify(inl.dataset.columns) === JSON.stringify(d.columns) && inl.dataset.bytes === d.bytes, inl.type === 'done' ? inl.dataset.rows + ' rows, ' + inl.dataset.bytes + ' vs ' + d.bytes + ' bytes' : inl.message);
       if (inl.type === 'done') await call({ type: 'delete', name: inl.dataset.name });
       let segOk = true, segDetail = []; const expJson = expJson0;
-      for (const sb of (/Firefox\//.test(navigator.userAgent) ? [] : [1009])) {   // Firefox keeps one helper, and re-parsing pieces there is slow
+      for (const sb of [1009]) {
 
         const q0 = performance.now(), sg = await runImport(file, false, { segBytes: sb }); segDetail.push(Math.round(performance.now() - q0) + 'ms');
         const same = sg.type === 'done' && sg.dataset.rows === d.rows && sg.dataset.bytes === d.bytes && JSON.stringify(sg.dataset.columns) === JSON.stringify(d.columns) && (sg.dataset.segmented || sg.dataset.parallel === false);
@@ -142,7 +142,7 @@
         if (sg.type === 'done') { const v = await call({ type: 'verify', name: sg.dataset.name, expectJson: expJson }); rowsOk = v.json === true; await call({ type: 'delete', name: sg.dataset.name }); }
         segOk = segOk && same && rowsOk; segDetail.push(sb + (sg.type === 'done' ? (sg.dataset.segmented ? (sg.dataset.serialTail ? 'T[' + sg.dataset.segWhy + ']' : 'S' + sg.dataset.redos) : '-') : '!'));
       }
-      add('import in small pieces gives the same dataset', segOk, (segDetail.length ? 'piece sizes ' + segDetail.join(' ') : 'skipped in Firefox, which keeps one helper') + ' (S<n> = pieces fit after n re-parsed pieces, T = rest parsed in order, - = one helper path)');
+      add('import in small pieces gives the same dataset', segOk, ('piece sizes ' + segDetail.join(' ')) + ' (S<n> = pieces fit after n re-parsed pieces, T = rest parsed in order, - = one helper path)');
       {   // plain rows: every guessed cut is a real line break, so the pieces fit and nothing is parsed twice
         const plain = []; for (let i = 0; i < 6000; i++) plain.push(i + ',row ' + i + ',' + (i % 9) + '.25\r\n');
         const pf = new File(['id,name,score\r\n', ...plain], 'plain.csv', { type: 'text/csv' });
@@ -232,7 +232,7 @@
     const g = await call({ type: 'gen', mb }); T.generateMs = Math.round(performance.now() - s);
     add('file generated', g.type === 'generated', g.message || `${g.rows} rows, ${fmt(g.bytes)}, ${g.onDisk ? 'on disk (OPFS)' : 'in memory'}`);
     let res = null;
-    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (b) o.blockBytes = +b[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
+    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
       const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing;
