@@ -153,6 +153,12 @@
         const bf = new File(badRows, 'plainbad.csv', { type: 'text/csv' }), b1 = await runImport(bf, true), b2 = await runImport(bf, false, { segBytes: 2048 });
         segDetail.push('bad ' + Math.round(performance.now() - q3) + 'ms'); add('a bad row in the middle names the same line with pieces', b1.type === 'error' && b2.type === 'error' && b1.message === b2.message && /Line 4002/.test(b2.message), b2.message);
         for (const x of [one, many]) if (x.type === 'done') await call({ type: 'delete', name: x.dataset.name });
+        {   // blocks packed by worker threads (LFC-pack 0.7.0) and appended in order give the same rows
+          const pk = await runImport(pf, false, { segBytes: 2048, blockBytes: 3000, packWorkers: 2 });
+          let okw = false, why = pk.message || '';
+          if (pk.type === 'done') { const want = []; for (let i = 0; i < 6000; i++) want.push({ id: i, name: 'row ' + i, score: (i % 9) + '.25' }); const v = await call({ type: 'verify', name: pk.dataset.name, expectJson: JSON.stringify(want) }); okw = v.json === true && pk.dataset.rows === 6000 && pk.dataset.validation.ok; why = pk.dataset.rows + ' rows, ' + pk.dataset.bytes + ' bytes, rows ' + (v.json === true ? 'identical' : 'DIFFERENT'); await call({ type: 'delete', name: pk.dataset.name }); }
+          add('blocks packed by worker threads give the same rows', okw, why);
+        }
       }
       {   // many small blocks: a number filter decodes only the blocks whose range can hold a match, with the same answer as scanning everything
         const zr = await runImport(file, false, { blockBytes: 3000 });
@@ -232,7 +238,7 @@
     const g = await call({ type: 'gen', mb }); T.generateMs = Math.round(performance.now() - s);
     add('file generated', g.type === 'generated', g.message || `${g.rows} rows, ${fmt(g.bytes)}, ${g.onDisk ? 'on disk (OPFS)' : 'in memory'}`);
     let res = null;
-    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
+    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; const pw = /[?&]pw=(\d+)/.exec(location.search); if (pw) o.packWorkers = +pw[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
       const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing;
