@@ -2672,6 +2672,55 @@ self.onmessage = async (e) => {
   else if (m.type === 'export') exportView(m);
 };
 
+
+// ---- Byte-level fast path: plain lines go from file bytes to JSON-lines bytes without strings, a row array or a decoder ----
+// A line takes this path only when it is plain: ASCII bytes with no quote, backslash or control character, and exactly as many fields as the header.
+// Any other line is handed to the character parser, which gives the same stored bytes, the same type tallies and the same error messages.
+// The caller only calls run() while the character parser is in a clean state (no open quote, no partly read record).
+function numBytes(b, s, f) {   // the same rule as NUM in infer.mjs: -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?
+  let p = s; if (b[p] === 45) p++; if (p >= f) return false;
+  if (b[p] === 48) p++; else if (b[p] >= 49 && b[p] <= 57) { p++; while (p < f && b[p] >= 48 && b[p] <= 57) p++; } else return false;
+  if (p < f && b[p] === 46) { p++; const q = p; while (p < f && b[p] >= 48 && b[p] <= 57) p++; if (p === q) return false; }
+  if (p < f && (b[p] === 101 || b[p] === 69)) { p++; if (p < f && (b[p] === 43 || b[p] === 45)) p++; const q = p; while (p < f && b[p] >= 48 && b[p] <= 57) p++; if (p === q) return false; }
+  return p === f;
+}
+function makeFast(headers, plan, trackers, delimiter) {
+  const n = headers.length, D = delimiter.charCodeAt(0);
+  if (n === 0 || n > 512 || D > 126) return null;
+  const keys = headers.map((h, i) => enc.encode((i ? ',' : '{') + JSON.stringify(h) + ':')), isInt = headers.map((_, i) => !!(plan && plan[i]));
+  const extra = keys.reduce((a, k) => a + k.length, 0) + 8 * n + 4, fs = new Int32Array(n), fe = new Int32Array(n), tdec = new TextDecoder();
+  const F = { off: false, rows: 0, miss: 0 };
+  // Parses the plain lines of b[i..) whose line break is before lim; returns where it stopped (the caller handles the next line another way).
+  F.run = (b, i, lim, parser, io) => {
+    let out = io.buf, o = io.pos, count = 0;
+    while (i < b.length && !F.off) {
+      const k = b.indexOf(10, i); if (k < 0 || k >= lim) break;
+      let e = k; if (e > i && b[e - 1] === 13) e--;
+      let ok = e > i, col = 0, p = i; fs[0] = i;
+      if (ok) for (; p < e; p++) { const c = b[p]; if (c === D) { fe[col] = p; if (++col >= n) { ok = false; break; } fs[col] = p + 1; } else if (c === 34 || c === 92 || c < 32 || c > 126) { ok = false; break; } }
+      if (!ok || col !== n - 1) { if (++F.miss >= 64) F.off = true; break; }
+      F.miss = 0; fe[n - 1] = e;
+      const need = (e - i) + extra; if (out.length - o < need) { const g = new Uint8Array(Math.max(out.length * 2, o + need)); g.set(out.subarray(0, o)); out = g; }
+      for (let c = 0; c < n; c++) {
+        const key = keys[c]; for (let q = 0; q < key.length; q++) out[o++] = key[q];
+        const s0 = fs[c], f0 = fe[c], len = f0 - s0, t = trackers[c];
+        if (len === 0) { if (isInt[c]) { out[o++] = 110; out[o++] = 117; out[o++] = 108; out[o++] = 108; } else { out[o++] = 34; out[o++] = 34; } t.n++; t.empty++; continue; }
+        let plain = false;
+        if (isInt[c]) {
+          const neg = b[s0] === 45 ? 1 : 0;
+          if (len > neg && len - neg <= 15) { const c0 = b[s0 + neg]; if (c0 === 48) plain = len === 1; else if (c0 > 48 && c0 <= 57) { plain = true; for (let q = s0 + neg + 1; q < f0; q++) if (b[q] < 48 || b[q] > 57) { plain = false; break; } } }
+        }
+        if (plain) { for (let q = s0; q < f0; q++) out[o++] = b[q]; if (t.int && !t.bool && !t.date) t.n++; else t.add(tdec.decode(b.subarray(s0, f0))); continue; }
+        out[o++] = 34; for (let q = s0; q < f0; q++) out[o++] = b[q]; out[o++] = 34;
+        if (!t.int && !t.bool && !t.date && (!t.num || numBytes(b, s0, f0))) t.n++; else t.add(tdec.decode(b.subarray(s0, f0)));
+      }
+      out[o++] = 125; out[o++] = 10; count++; parser.line++; parser.startLine = parser.line; i = k + 1;
+    }
+    io.buf = out; io.pos = o; F.rows += count; return i;
+  };
+  return F;
+}
+
 // Reads the file in slices, parses it, tracks column types and hands JSON-lines bytes to onBytes (awaited, so the consumer sets the pace).
 // Used twice: in a helper worker (parse on one thread while the import worker packs and writes on another), or inline when a helper cannot start.
 // One JSON line per row, built as text without making a row object. A string that needs no escaping gets its quotes added directly (a regex test
@@ -2695,11 +2744,11 @@ async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t, plan
   await loadCore();
   const { DelimitedParser, IngestError, cleanHeaders, TypeTracker, typedCell } = core;
   let headers = null, trackers = null, build = null, rows = 0, pos = 0, queued = 0, lastProg = 0; const sample = [];
-  let acc = '', accN = 0;
+  let acc = '', accN = 0, F = null;
   const drain = () => { if (!accN) return; if (scratch.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(scratch.length * 2, pos + acc.length * 3)); n.set(scratch.subarray(0, pos)); scratch = n; } pos += enc.encodeInto(acc, scratch.subarray(pos)).written; queued += acc.length; acc = ''; accN = 0; };
   const flush = async () => { drain(); if (!pos) return; const bytes = scratch.slice(0, pos); pos = 0; queued = 0; await onBytes(bytes); };
   const parser = new DelimitedParser(delimiter, (f, line) => {
-    if (!headers) { headers = cleanHeaders(f); trackers = headers.map(() => new TypeTracker()); build = lineBuilder(headers, plan, trackers, typedCell); return; }
+    if (!headers) { headers = cleanHeaders(f); trackers = headers.map(() => new TypeTracker()); build = lineBuilder(headers, plan, trackers, typedCell); F = makeFast(headers, plan, trackers, delimiter); return; }
     if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
     acc += build(f); rows++; if (sample.length < 20) sample.push(sampleRecord(headers, plan, f, typedCell)); if (++accN >= 64) drain();
   });
@@ -2710,14 +2759,21 @@ async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t, plan
     const end = Math.min(file.size, off + SLICE);
     let s = performance.now(); const chunk = new Uint8Array(await pre); t.readMs += performance.now() - s;
     pre = end < file.size ? file.slice(end, Math.min(file.size, end + SLICE)).arrayBuffer() : null;
-    s = performance.now(); parser.feed(dec.decode(chunk, { stream: end < file.size }), false); t.parseMs += performance.now() - s;
-    if (queued >= FLUSH) await flush();
-    if (performance.now() - lastProg > 200) { lastProg = performance.now(); onProgress(end, rows); }
+    s = performance.now();
+    for (let i = 0; i < chunk.length;) {
+      if (F && !F.off && sample.length >= 20 && cleanState(parser)) { drain(); const io = { buf: scratch, pos }; i = F.run(chunk, i, Infinity, parser, io); scratch = io.buf; pos = io.pos; if (i >= chunk.length) break; }
+      const k = !headers || (F && !F.off) ? chunk.indexOf(10, i) : -1;
+      if (k < 0) { parser.feed(dec.decode(chunk.subarray(i), { stream: end < file.size }), false); break; }
+      parser.feed(dec.decode(chunk.subarray(i, k + 1), { stream: true }), false); i = k + 1;
+    }
+    t.parseMs += performance.now() - s;
+    if (queued >= FLUSH || pos >= FLUSH) await flush();
+    if (performance.now() - lastProg > 200) { lastProg = performance.now(); onProgress(end, rows + (F ? F.rows : 0)); }
   }
   parser.feed(dec.decode(), true);
   if (!headers) throw new IngestError('The file has no header row.');
   await flush(); stopFn();
-  return { headers, types: trackers.map((x) => ({ type: x.type, nullable: x.nullable })), rows, sample };
+  return { headers, types: trackers.map((x) => ({ type: x.type, nullable: x.nullable })), rows: rows + (F ? F.rows : 0), sample };
 }
 
 // Helper-worker side of an import: parse and send bytes back, at most CREDITS buffers ahead of the packer.
@@ -2758,6 +2814,7 @@ async function parseSegment(m) {
   const limit = Math.max(m.e, start), headers = m.headers, plan = m.plan;
   const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
   let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
+  const F = headers && !m.headerOnly ? makeFast(headers, plan, trackers, m.delimiter) : null;
   let buf = new Uint8Array(1 << 20);
   const drain = () => { if (!accN) return; if (buf.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(buf.length * 2, pos + acc.length * 3)); n.set(buf.subarray(0, pos)); buf = n; } pos += enc.encodeInto(acc, buf.subarray(pos)).written; acc = ''; accN = 0; };
   const flushOut = async () => { drain(); if (!pos) return; const b = buf.slice(0, pos); pos = 0; if (m.emit) await m.emit(b); else pieces.push(b); };
@@ -2776,6 +2833,9 @@ async function parseSegment(m) {
     const to = Math.min(size, at + SL), b = new Uint8Array(await pre); pre = to < size ? file.slice(to, Math.min(size, to + SL)).arrayBuffer() : null;   // the next slice loads while this one is parsed
     let i = 0; const from = Math.max(0, limit - at);
     while (i < b.length) {
+      if (F && !F.off && sample.length >= 20 && cleanState(parser)) { drain(); const io = { buf, pos }; i = F.run(b, i, from, parser, io); buf = io.buf; pos = io.pos; if (i >= b.length) break; }
+      const k1 = F && !F.off ? b.indexOf(10, i) : -1;   // one line by the character parser, then the byte path may take over again
+      if (k1 >= 0 && k1 < from) { parser.feed(dec.decode(b.subarray(i, k1 + 1), { stream: true }), false); i = k1 + 1; continue; }
       const k = from < b.length ? b.indexOf(10, Math.max(from, i)) : -1;
       if (k < 0) { parser.feed(dec.decode(b.subarray(i), { stream: true }), false); i = b.length; break; }
       parser.feed(dec.decode(b.subarray(i, k + 1), { stream: true }), false); i = k + 1;
@@ -2787,7 +2847,7 @@ async function parseSegment(m) {
   if (!finished) { end = size; parser.feed(dec.decode(), true); }
   await flushOut();
   const snap = trackers ? trackers.map((x) => ({ n: x.n, empty: x.empty, int: x.int, num: x.num, bool: x.bool, date: x.date })) : null;
-  return { startPos: start, endPos: end, pieces, rows, lines: parser.line - 1, header, sample, trackers: snap, eof: !finished };
+  return { startPos: start, endPos: end, pieces, rows: rows + (F ? F.rows : 0), fast: F ? F.rows : 0, lines: parser.line - 1, header, sample, trackers: snap, eof: !finished };
 }
 
 // Pack worker side (LFC-pack 0.7.0): pack one chunk of JSON lines into block bytes; the importer appends the results in order with pushPacked.
@@ -2849,7 +2909,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
       for (const b of r.pieces) await packBytes(b);
-      rows += r.rows; r.trackers.forEach((x, i) => agg[i].merge(x)); for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
+      rows += r.rows; t.fastRows = (t.fastRows || 0) + (r.fast || 0); r.trackers.forEach((x, i) => agg[i].merge(x)); for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
       expect = r.endPos; lineBase += r.lines; progress(r.endPos, rows);
       if (r.eof) break;
     }
@@ -2899,7 +2959,7 @@ async function importFile(m) {
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
     let finishPacking = async () => {};
-    const packWorkers = m.packWorkers != null ? m.packWorkers : (/Firefox\//.test(self.navigator && self.navigator.userAgent || '') ? 2 : 0);   // measured faster only in Firefox so far
+    const packWorkers = m.packWorkers != null ? m.packWorkers : 2;   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     if (packWorkers > 0 && useSegments(m, file)) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
       const bb = m.blockBytes || 2097152, popts = Object.assign(m.level ? { level: m.level } : {}, { blockBytes: bb, share: false });
       packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
@@ -2967,7 +3027,7 @@ async function importFile(m) {
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
     const cols = headers.map((h, i) => ({ name: h, type: types[i].type, nullable: types[i].nullable }));
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
-    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0 }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
+    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0 }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
