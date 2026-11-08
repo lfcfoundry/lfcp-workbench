@@ -56,9 +56,9 @@ self.onmessage = async (e) => {
 // Reads the file in slices, parses it, tracks column types and hands JSON-lines bytes to onBytes (awaited, so the consumer sets the pace).
 // Used twice: in a helper worker (parse on one thread while the import worker packs and writes on another), or inline when a helper cannot start.
 let scratch = new Uint8Array(0);
-async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t) {
+async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t, plan) {
   await loadCore();
-  const { DelimitedParser, IngestError, cleanHeaders, TypeTracker } = core;
+  const { DelimitedParser, IngestError, cleanHeaders, TypeTracker, typedCell } = core;
   let headers = null, trackers = null, rows = 0, pos = 0, queued = 0, lastProg = 0; const sample = [];
   let acc = '', accN = 0;
   const drain = () => { if (!accN) return; if (scratch.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(scratch.length * 2, pos + acc.length * 3)); n.set(scratch.subarray(0, pos)); scratch = n; } pos += enc.encodeInto(acc, scratch.subarray(pos)).written; queued += acc.length; acc = ''; accN = 0; };
@@ -67,7 +67,7 @@ async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t) {
     if (!headers) { headers = cleanHeaders(f); trackers = headers.map(() => new TypeTracker()); return; }
     if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
     const rec = Object.create(null);
-    for (let i = 0; i < headers.length; i++) { rec[headers[i]] = f[i]; trackers[i].add(f[i]); }
+    for (let i = 0; i < headers.length; i++) { rec[headers[i]] = plan && plan[i] ? typedCell(f[i]) : f[i]; trackers[i].add(f[i]); }
     rows++; if (sample.length < 20) sample.push(rec);
     acc += JSON.stringify(rec) + '\n'; if (++accN >= 64) drain();
   });
@@ -96,7 +96,7 @@ async function parseJob(m) {
     const r = await parseStream(m.file, m.delimiter, () => {}, async (bytes) => {
       while (parseCredits <= 0) await new Promise((res) => { credit = res; });
       parseCredits--; self.postMessage({ type: 'lines', bytes }, [bytes.buffer]);
-    }, (bytes, rows) => self.postMessage({ type: 'progress', bytes, rows }), t);
+    }, (bytes, rows) => self.postMessage({ type: 'progress', bytes, rows }), t, m.plan);
     self.postMessage({ type: 'parsed', result: r, t });
   } catch (err) { self.postMessage({ type: 'perror', message: String(err && err.message || err), line: err && err.line || null }); }
 }
@@ -114,14 +114,14 @@ const cleanState = (p) => p.mode === 0 && !p.seen && p.row.length === 0 && p.fie
 // m: file, delimiter, headers (null for the header scan), headerOnly, first, hdrEnd, s (cut), e (next cut), startAt, lineBase, trackers, emit, stopFn.
 async function parseSegment(m) {
   await loadCore();
-  const { DelimitedParser, IngestError, cleanHeaders, TypeTracker } = core;
+  const { DelimitedParser, IngestError, cleanHeaders, TypeTracker, typedCell } = core;
   const file = m.file, size = file.size, SL = 1048576;
   let start = 0;
   if (m.startAt != null) start = m.startAt;
   else if (m.headerOnly) start = 0;
   else if (m.first) start = m.hdrEnd;
   else { start = size; for (let o = m.s; o < size; o += 65536) { const b = new Uint8Array(await file.slice(o, Math.min(size, o + 65536)).arrayBuffer()); const k = b.indexOf(10); if (k >= 0) { start = o + k + 1; break; } } }
-  const limit = Math.max(m.e, start), headers = m.headers;
+  const limit = Math.max(m.e, start), headers = m.headers, plan = m.plan;
   const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null);
   let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
   let buf = new Uint8Array(1 << 20);
@@ -131,7 +131,7 @@ async function parseSegment(m) {
     if (m.headerOnly) { if (!header) header = cleanHeaders(f); return; }
     if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
     const rec = Object.create(null);
-    for (let i = 0; i < headers.length; i++) { rec[headers[i]] = f[i]; trackers[i].add(f[i]); }
+    for (let i = 0; i < headers.length; i++) { rec[headers[i]] = plan && plan[i] ? typedCell(f[i]) : f[i]; trackers[i].add(f[i]); }
     rows++; if (sample.length < 20) sample.push(rec);
     acc += JSON.stringify(rec) + '\n'; if (++accN >= 64) drain();
   });
@@ -170,7 +170,7 @@ async function segJob(m) {
 
 // Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
-async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB) {
+async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan) {
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
@@ -196,7 +196,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB) 
       while (!quit && nextD < total) {
         if (nextD >= nextP + SEG_WINDOW) { await wait(); continue; }
         const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
-        done.set(k, await rpc(h, { file, delimiter, headers, first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
+        done.set(k, await rpc(h, { file, delimiter, headers, plan, first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
         signal();
       }
     };
@@ -207,7 +207,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB) 
       let r = done.get(k); done.delete(k); nextP = k + 1; signal(); stop(job);
       if (r.error || r.startPos !== expect) {   // a guessed start sat inside quotes: parse this piece again from the verified spot
         t.redos = (t.redos || 0) + 1;
-        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
+        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
         stop(job);
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
@@ -219,13 +219,29 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB) 
     quit = true; signal();
     if (serial || expect < file.size) {   // pieces did not fit together (or one failed): parse the rest in order, from the last verified spot
       closeAll();
-      const r = await parseSegment({ file, delimiter, headers, startAt: expect, e: file.size, lineBase, trackers: agg, emit: packBytes, stopFn: () => stop(job) });
+      const r = await parseSegment({ file, delimiter, headers, plan, startAt: expect, e: file.size, lineBase, trackers: agg, emit: packBytes, stopFn: () => stop(job) });
       rows += r.rows; for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
       t.serialTail = true;
     }
     t.parseMs = performance.now() - t0; t.readMs = 0;
     return { headers, types: agg.map((x) => ({ type: x.type, nullable: x.nullable })), rows, sample, pieces: total };
   } finally { closeAll(); }
+}
+
+// Which columns are stored as numbers: those whose first 2,000 rows (from the first MB) are all plain whole numbers or empty, with at least one number.
+// Decided once from the sample so every piece and helper agrees; a later value that is not a plain whole number stays text in its cell.
+async function samplePlan(file, delimiter) {
+  try {
+    await loadCore(); const { DelimitedParser, TypeTracker } = core;
+    const text = new TextDecoder().decode(new Uint8Array(await file.slice(0, 1048576).arrayBuffer()));
+    const rows = []; const parser = new DelimitedParser(delimiter, (f) => { if (rows.length < 2001) rows.push(f); });
+    try { parser.feed(text, file.size <= 1048576); } catch { /* a bad row in the sample: use the rows before it */ }
+    if (rows.length < 2) return null;
+    const cols = rows[0].length, tr = Array.from({ length: cols }, () => new TypeTracker());
+    for (let r = 1; r < rows.length; r++) { if (rows[r].length !== cols) return null; for (let c = 0; c < cols; c++) tr[c].add(rows[r][c]); }
+    const plan = tr.map((x) => x.type === 'integer' && x.n > x.empty);
+    return plan.some(Boolean) ? plan : null;
+  } catch { return null; }
 }
 
 async function importFile(m) {
@@ -241,12 +257,13 @@ async function importFile(m) {
     name = safe(file.name) + '-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: delimiter === '\t' ? 'tsv' : 'csv', sourceName: String(file.name).slice(0, 200), sourceBytes: file.size, tables: [{ name: 'rows', rows: 0, columns: [] }] };
-    const packer = LfcPack.packStream({ blockBytes: 262144, share: true, meta });
+    const packer = LfcPack.packStream({ blockBytes: m.blockBytes || 262144, share: true, meta });
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     const packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
+    const plan = m.untyped ? null : await samplePlan(file, delimiter);
     let res = null;
-    if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES);
+    if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan);
     if (!res) try { helper = m.inline ? null : new Worker(self.location.href); } catch { helper = null; }
     if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
@@ -262,9 +279,9 @@ async function importFile(m) {
             else if (d.type === 'perror') reject(Object.assign(new IngestError(d.message), { line: d.line, message: d.message }));
           }).catch(reject);
         };
-        helper.postMessage({ type: 'parseJob', file, delimiter });
+        helper.postMessage({ type: 'parseJob', file, delimiter, plan });
       });
-    } else res = await parseStream(file, delimiter, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t);
+    } else res = await parseStream(file, delimiter, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, plan);
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     await write(packer.finish());
@@ -274,7 +291,7 @@ async function importFile(m) {
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
     const cols = headers.map((h, i) => ({ name: h, type: types[i].type, nullable: types[i].nullable }));
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
-    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0 }, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
+    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0 }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
@@ -351,6 +368,38 @@ async function loadColumns(names, stream) {
   }
   const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
 }
+// Number ranges per block (LFC-pack 0.5.9 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
+// A block with no range (text cells, empty cells, or an older file) is always kept. Used only when it keeps at most a fifth of the blocks.
+async function zonePlan(filters, active) {
+  const need = [];
+  for (const name of active) {
+    const col = view.columns.find((c) => c.name === name); if (!col) continue;
+    const { filter: f } = queryMod.parseFilter(filters[name], col.type); if (!f) continue;
+    if (col.type === 'integer' && f.kind === 'num' && f.op !== 'ne') need.push([name, f.op, f.value]);
+    else if (col.type === 'integer' && f.op === 'eq' && /^-?(0|[1-9]\d{0,14})$/.test(f.value)) need.push([name, 'eq', +f.value]);
+  }
+  if (!need.length || view.R.blocks.length < 8) return null;
+  const blocks = [];
+  for (let b = 0; b < view.R.blocks.length; b++) {
+    let keep = true;
+    for (const [name, op, v] of need) {
+      const z = await view.R.zone(b, name); if (!z) continue;
+      if (op === 'gt' ? z.max <= v : op === 'gte' ? z.max < v : op === 'lt' ? z.min >= v : op === 'lte' ? z.min > v : (v < z.min || v > z.max)) { keep = false; break; }
+    }
+    if (keep) blocks.push(b);
+  }
+  if (blocks.length * 5 > view.R.blocks.length) return null;
+  let n = 0; for (const b of blocks) n += view.R.blocks[b].rows;
+  const rowOf = new Uint32Array(n); let at = 0;
+  for (const b of blocks) { const bl = view.R.blocks[b]; for (let i = 0; i < bl.rows; i++) rowOf[at++] = bl.first + i; }
+  return { blocks, n, rowOf };
+}
+async function loadBlocks(zp, names) {
+  const out = {}; for (const nm of names) out[nm] = new Array(zp.n);
+  let at = 0;
+  for (const b of zp.blocks) { const e = await view.R.columns(b, { keys: names }); for (const nm of names) { const src = e.cols[nm], dst = out[nm]; for (let i = 0; i < e.n; i++) dst[at + i] = src ? src[i] : ''; } at += e.n; }
+  return out;
+}
 // Row objects for some row numbers, grouped by block so each block is decoded once. Keeps a few decoded blocks for scrolling back and forth.
 async function rowsAt(idx, from, to) {
   if (view.rows) { const o = []; for (let i = from; i < to; i++) o.push(view.rows[idx[i]]); return o; }
@@ -373,6 +422,13 @@ async function queryView(m) {
   if (colOk) {
     const names = [...new Set(active.concat(m.sort ? [m.sort.col] : []))].filter((n) => view.columns.some((c) => c.name === n));
     if (m.stream) view.cols.clear();   // test hook: force the block-by-block path
+    const zp = m.stream || m.noZones ? null : await zonePlan(m.filters, active);
+    if (zp) {   // only the blocks whose number ranges can hold a match are decoded
+      const cols = await loadBlocks(zp, names), r = colMod.runColumnQuery(cols, zp.n, view.columns, { filters: m.filters, sort: m.sort }), out = new Uint32Array(r.indices.length);
+      for (let k = 0; k < out.length; k++) out[k] = zp.rowOf[r.indices[k]];
+      view.indices = out; view.filtered = true;
+      return send('queried', m.id, { count: out.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, zoneBlocks: zp.blocks.length, blocks: view.R.blocks.length });
+    }
     const cols = await loadColumns(names, m.stream), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort });
     view.indices = r.indices; view.filtered = true;
     return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names });
@@ -385,16 +441,17 @@ async function queryView(m) {
   view.indices = r.indices; view.filtered = true;
   send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: true });
 }
+const cellText = (v) => v == null ? '' : typeof v === 'string' ? v : String(v);
 async function pageView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let out, numbers;
   if (!view.filtered) {
     const n = Math.max(0, Math.min(m.count, view.total - m.start));
     const objs = n ? await view.R.rows({ from: m.start, count: n }) : [];
-    out = objs.map((r) => view.columns.map((c) => r[c.name] ?? '')); numbers = objs.map((_, i) => m.start + i + 1);
+    out = objs.map((r) => view.columns.map((c) => cellText(r[c.name]))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
     const end = Math.min(view.indices.length, m.start + m.count), objs = await rowsAt(view.indices, m.start, end);
-    out = objs.map((r) => view.columns.map((c) => r[c.name] ?? '')); numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
+    out = objs.map((r) => view.columns.map((c) => cellText(r[c.name]))); numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
   send('paged', m.id, { start: m.start, rows: out, numbers });
 }

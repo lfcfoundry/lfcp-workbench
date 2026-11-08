@@ -22,7 +22,12 @@ export function parseFilter(text, type) {
 }
 
 export function matches(f, cell) {
-  const v = cell == null ? '' : String(cell);
+  if (typeof cell === 'number' && f.kind === 'num') {   // stored whole numbers: compare without making text first
+    return f.op === 'gt' ? cell > f.value : f.op === 'gte' ? cell >= f.value : f.op === 'lt' ? cell < f.value : f.op === 'lte' ? cell <= f.value : matchText(f, String(cell));
+  }
+  return matchText(f, cell == null ? '' : String(cell));
+}
+function matchText(f, v) {
   switch (f.op) {
     case 'empty': return v === '';
     case 'notEmpty': return v !== '';

@@ -19,3 +19,7 @@ The "Export CSV" button in the data view saves the rows now shown (filter and so
 
 ## Import in pieces
 For files of 48 MB and more, Chromium and WebKit browsers cut the file into 8 MB pieces and let two helpers parse them at the same time while the import worker packs and writes in file order. A piece starts at the first line break after its cut, which is only a guess (the break may sit inside quotes). Each piece must end exactly where the next one started; if not, that piece is parsed again from the last verified spot, so the stored data is always identical to a one-thread import. Firefox keeps the one-helper path, because two helpers slowed each other down there in our measurements.
+
+## Whole-number columns
+When a column's first 2,000 rows are all plain whole numbers (or empty), the Workbench stores those cells as numbers instead of text: files get about a fifth smaller and a number filter such as `id>=19990` decodes only the blocks whose stored number range can hold a match (a 7 million row file: about 1 second down to about 10 ms). Only plain whole numbers (an optional minus, no leading zeros, up to 15 digits, not `-0`) convert, so a cell reads back as exactly the same text; an empty cell is stored as null and still shows and exports as empty. A cell in such a column that is not a plain whole number (for example `n/a` or `007`) stays text. Decimal columns stay text, because `12.50` must stay `12.50`. Files imported before this change keep working and are read as before.
+
