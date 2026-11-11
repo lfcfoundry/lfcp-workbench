@@ -1,0 +1,100 @@
+[
+  {
+    "artifact": "vendor/lfcp/0.4.19/lfc-pack.js",
+    "version": "0.4.19",
+    "results": [
+      {
+        "name": "empty-first-distinct",
+        "rows": 4,
+        "outputBytes": 388,
+        "rowEqual": false,
+        "columnEqual": false,
+        "decodedValues": [
+          1,
+          1,
+          1,
+          null
+        ]
+      },
+      {
+        "name": "mixed-length-without-empty",
+        "rows": 6,
+        "outputBytes": 434,
+        "rowEqual": true,
+        "columnEqual": true,
+        "decodedValues": [
+          1,
+          8,
+          40,
+          256,
+          1024,
+          4096
+        ]
+      },
+      {
+        "name": "mixed-length-with-empty",
+        "rows": 6,
+        "outputBytes": 431,
+        "rowEqual": false,
+        "columnEqual": false,
+        "decodedValues": [
+          8,
+          40,
+          256,
+          1024,
+          4096,
+          null
+        ]
+      }
+    ]
+  },
+  {
+    "artifact": "vendor/lfcp/0.7.2/lfc-pack.js",
+    "version": "0.7.2",
+    "results": [
+      {
+        "name": "empty-first-distinct",
+        "rows": 4,
+        "outputBytes": 386,
+        "rowEqual": true,
+        "columnEqual": true,
+        "decodedValues": [
+          0,
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "name": "mixed-length-without-empty",
+        "rows": 6,
+        "outputBytes": 434,
+        "rowEqual": true,
+        "columnEqual": true,
+        "decodedValues": [
+          1,
+          8,
+          40,
+          256,
+          1024,
+          4096
+        ]
+      },
+      {
+        "name": "mixed-length-with-empty",
+        "rows": 6,
+        "outputBytes": 434,
+        "rowEqual": true,
+        "columnEqual": true,
+        "decodedValues": [
+          0,
+          8,
+          40,
+          256,
+          1024,
+          4096
+        ]
+      }
+    ]
+  }
+]
