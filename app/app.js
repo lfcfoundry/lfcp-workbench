@@ -68,7 +68,7 @@
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
-    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones });
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
@@ -201,6 +201,16 @@
       add('scrolling to row 15000 shows the right rows', G.start > 0 && JSON.stringify(G.rows[10]) === JSON.stringify(G.cols.map((c) => expected[G.start + 10][c.name])), 'window starts at ' + G.start);
       G.filters = { id: '>=19990' }; G.sort = { col: 'id', dir: 'desc' }; buildHead(); let q = await applyQuery();
       add('numeric filter id>=19990 gives 10 rows', q.count === 10, String(q.count));
+      {   // filters every row satisfies are skipped; the rows must be the same as testing every row
+        const same = []; let okAll = true;
+        for (const [f, srt] of [['>=0', null], ['<=19999', null], ['>-5', { col: 'id', dir: 'desc' }], ['>=1', null], ['<19999', null]]) {
+          const A = await call({ type: 'query', filters: { id: f }, sort: srt, noInside: true }), B = await call({ type: 'query', filters: { id: f }, sort: srt });
+          const pa = await call({ type: 'page', start: 0, count: 5 }); const rowsB = pa.rows.map((r) => r.join('|')).join(';');
+          await call({ type: 'query', filters: { id: f }, sort: srt, noInside: true }); const pb = await call({ type: 'page', start: 0, count: 5 });
+          const ok = A.count === B.count && rowsB === pb.rows.map((r) => r.join('|')).join(';'); okAll = okAll && ok; same.push(f + ':' + B.count + (B.allInside ? ' skipped' : ''));
+        }
+        add('a filter every row satisfies gives the same rows as testing every row', okAll, same.join(' '));
+      }
       add('filtering reads only the columns it needs', q.decodedAll === false && !!q.columnsOnly && q.columnsOnly.join() === 'id', q.columnsOnly && q.columnsOnly.join());
       add('sorted high to low: first row id 19999', G.rows[0] && G.rows[0][0] === '19999', G.rows[0] && G.rows[0][0]);
       G.filters = { name: 'xxxxxxxxxxxxxxxxxxxxxx' }; G.sort = { col: 'score', dir: 'asc' }; buildHead(); q = await applyQuery();
@@ -259,6 +269,14 @@
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
       G.sort = { col: 'score', dir: 'asc' }; buildHead(); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s);
       G.sort = { col: 'note', dir: 'asc' }; buildHead(); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
+      T.fullMatch = {};   // a filter every row satisfies (id >= 0): first query on a freshly opened dataset (cold) and the same again (warm), with and without the full-match shortcut
+      for (const ni of [true, false]) {
+        await openGrid(d.name); G.sort = null; G.noInside = ni; G.filters = { id: '>=0' }; buildHead();
+        s = performance.now(); const f1 = await applyQuery(); const cold = Math.round(performance.now() - s);
+        s = performance.now(); const f2 = await applyQuery(); const warm = Math.round(performance.now() - s);
+        T.fullMatch[ni ? 'perRow' : 'shortcut'] = [cold, warm]; add('a filter every row satisfies keeps all rows (' + (ni ? 'tested per row' : 'shortcut') + ')', f1.count === g.rows && f2.count === g.rows && !!G.rows[0] && same(G.rows[0], 0), f1.count + ' rows' + (f1.allInside ? ', no per-row test' : ''));
+      }
+      G.noInside = false; G.filters = {};
       G.sort = { col: 'score', dir: 'asc' }; buildHead(); await applyQuery();
       add('sorting by score keeps empty scores last', q3.count === g.rows && G.rows[0] && G.rows[0][2] !== '', G.rows[0] && G.rows[0][2]);
       $('gridbox').hidden = true; await call({ type: 'delete', name: d.name });

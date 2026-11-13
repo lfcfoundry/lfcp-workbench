@@ -488,6 +488,21 @@ async function loadColumns(names, stream) {
   }
   const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
 }
+// A number filter that every row of every block provably satisfies (the footer's range holds for all rows of the block, no empty cells) changes nothing, so it is dropped before
+// any column is decoded: no per-row test, and the filter column is not read at all unless the sort needs it.
+async function dropFullMatch(filters, active) {
+  const keep = {}; let dropped = 0;
+  for (const name of active) {
+    const col = view.columns.find((c) => c.name === name), parsed = col && col.type === 'integer' ? queryMod.parseFilter(filters[name], col.type) : null, f = parsed && parsed.filter;
+    let all = !!f && f.kind === 'num' && f.op !== 'ne' && view.R.blocks.length > 0;
+    for (let b = 0; all && b < view.R.blocks.length; b++) {
+      const z = await view.R.zone(b, name);
+      all = !!z && z.count === view.R.blocks[b].rows && (f.op === 'gt' ? z.min > f.value : f.op === 'gte' ? z.min >= f.value : f.op === 'lt' ? z.max < f.value : z.max <= f.value);
+    }
+    if (all) dropped++; else keep[name] = filters[name];
+  }
+  return dropped ? keep : null;
+}
 // Number ranges per block (LFC-pack 0.7.0 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
 // A block with no range (text cells, empty cells, or an older file) is always kept. Used only when it keeps at most a fifth of the blocks.
 async function zonePlan(filters, active) {
@@ -539,6 +554,15 @@ async function queryView(m) {
   const t0 = performance.now(), active = Object.keys(m.filters || {}).filter((k) => m.filters[k]), plain = !m.sort && !active.length;
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
   const colOk = view.flat && view.total <= MAX_COLUMN_ROWS;
+  if (colOk && !m.noInside) {
+    const rest = await dropFullMatch(m.filters, active);
+    if (rest) {   // every row matches some filters: run the query with the others only
+      const left = Object.keys(rest);
+      if (!left.length && !m.sort) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: Math.round(performance.now() - t0), decodedAll: !!view.rows, allInside: true }); }
+      m = Object.assign({}, m, { filters: rest });
+      return queryView(Object.assign(m, { noInside: true }));
+    }
+  }
   if (colOk) {
     const names = [...new Set(active.concat(m.sort ? [m.sort.col] : []))].filter((n) => view.columns.some((c) => c.name === n));
     if (m.stream) view.cols.clear();   // test hook: force the block-by-block path
