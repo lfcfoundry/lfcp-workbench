@@ -215,6 +215,7 @@ function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink) {
     },
   };
 }
+const dupChunk = (c) => ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.bytes ? { bytes: x.bytes.slice(), start: x.start.slice(), end: x.end.slice() } : x.slice())) });
 const chunkBuffers = (c) => { const o = []; for (const x of c.cols) { if (x.bytes) o.push(x.bytes.buffer, x.start.buffer, x.end.buffer); else o.push(x.buffer); } return o; };
 // Pack worker side: join the chunks of one block (columns side by side, text offsets moved to the joined bytes) and pack them (LFC-pack packBlock over columns).
 async function packColsJob(m) {
@@ -380,7 +381,8 @@ async function packBlockJob(m) {
 async function segJob(m) {
   try {
     const r = await parseSegment(m);
-    self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer).concat(...r.chunks.map(chunkBuffers)));
+    if (m.dup) r.chunks2 = r.chunks.map(dupChunk);   // live columns: a second copy made here, in parallel, so the import worker keeps one and forwards the other to the pack workers
+    self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer).concat(...r.chunks.map(chunkBuffers), ...(r.chunks2 || []).map(chunkBuffers)));
   } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed) } }); }
 }
 
@@ -416,7 +418,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       while (!quit && nextD < total) {
         if (nextD >= nextP + SEG_WINDOW) { await wait(); continue; }
         const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
-        done.set(k, await rpc(h, { file, delimiter, headers, plan, cols, first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
+        done.set(k, await rpc(h, { file, delimiter, headers, plan, cols, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
         signal();
       }
     };
@@ -433,7 +435,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
       for (const b of r.pieces) await packBytes(b);
-      if (col) for (const c of r.chunks) await col.push(c);
+      if (col) for (let q = 0; q < r.chunks.length; q++) await col.push(r.chunks[q], r.chunks2 && r.chunks2[q]);
       rows += r.rows; t.fastRows = (t.fastRows || 0) + (r.fast || 0); r.trackers.forEach((x, i) => agg[i].merge(x)); for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
       expect = r.endPos; lineBase += r.lines; progress(r.endPos, rows);
       if (r.eof) break;
@@ -492,7 +494,7 @@ async function importOnce(m) {
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
-    let finishPacking = async () => {}, col = null, colFlush = async () => {};
+    let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null;
     const packWorkers = m.packWorkers != null ? m.packWorkers : 2;   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
     if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(new Worker(self.location.href)); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
@@ -517,9 +519,13 @@ async function importOnce(m) {
       const dispatch = (chunk) => send1({ type: 'packBlock', c: chunk, o: popts }, [chunk.buffer]);
       if (columnsOk(m)) {   // staged columns: chunks of typed columns are grouped into blocks of about colBlock bytes of CSV and packed by the pack workers
         const colBlock = m.colBlockBytes || (bb >> 1); let cq = [], cqBytes = 0, cqRows = 0, colHeaders = null;
-        const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; await send1({ type: 'packCols', chunks: list, headers: colHeaders, o: popts }, [].concat(...list.map(chunkBuffers))); };
-        colFlush = async () => { if (cq.length) await sendCols(); };
-        col = { begin: async (h) => { colHeaders = h; }, push: async (c) => { stop(job); cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
+        // Live columns (desktop, file up to LIVE_MAX): the chunks are kept so the grid can read them as soon as parsing ends, while the pack workers still work through their queue.
+        // Blocks wait in blockQ and go to the pack workers as copies (the kept chunks are not transferred), so parsing never waits for packing.
+        liveChunks = m.live === true && file.size <= LIVE_MAX ? [] : null; let blockQ = [], pumping = null, pumpErr = null;
+        const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b = blockQ.shift(); await send1({ type: 'packCols', chunks: b, headers: colHeaders, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
+        const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; if (liveChunks) { blockQ.push(list); pump(); } else await send1({ type: 'packCols', chunks: list, headers: colHeaders, o: popts }, [].concat(...list.map(chunkBuffers))); };
+        colFlush = async () => { if (cq.length) await sendCols(); while (pumping) await pumping; if (pumpErr) throw pumpErr; };
+        col = { begin: async (h) => { colHeaders = h; }, dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { liveChunks.push(c); cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
       }
       const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
       packBytes = async (bytes) => {
@@ -562,16 +568,19 @@ async function importOnce(m) {
     } else res = await parseStream(file, delimiter, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, plan);
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
+    const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
+    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); }
     await finishPacking();
     await write(packer.finish());
     await writable.close(); closed = true; writable = null;
     // Complete only after the footer is validated, then recorded in the catalog.
     const v = await validate(name, rows);
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
-    const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
+    if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { R: R2, f: f2, flat: R2.blocks.length > 0 && R2.blocks.every((b) => b.kind === 'f' && !b.table), live: null }); liveChunks = null; } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
+    if (view && view.live && view.name === name) { view = null; send('liveclosed', m.id, {}); }
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
     if (err && err.mixed && !m.noColumns) restart = true;
@@ -626,6 +635,7 @@ const ensureFull = () => { if (view.pending) { const f = view.pending.full(); vi
 const MAX_COLUMN_ROWS = 20000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
 let view = null, queryMod = null, colMod = null;
 async function openView(m) {
+  if (view && view.live && view.name === m.name) return send('opened', m.id, { name: m.name, total: view.total, columns: view.columns });   // still being saved: the kept columns answer
   try {
     await LfcPack.init({ readOnly: true });
     queryMod ||= MODS() || await import('../src/query/query.mjs');
@@ -651,6 +661,26 @@ async function openView(m) {
 // Two ways, same result. A stored file up to WHOLE_FILE_MAX is read once and all wanted columns decoded together (2 to 3 times faster in all three
 // browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.7.0), so memory stays at the kept columns plus one block.
 const WHOLE_FILE_MAX = 384 * 1048576;
+// ---- Live columns: the grid reads the kept column chunks while the file is still being saved ----
+const LIVE_MAX = 600 * 1048576;   // about 1.04x the CSV in memory while the import runs; bigger files wait for the save
+async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
+  queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
+  const n = headers.length, starts = new Uint32Array(chunks.length + 1); for (let i = 0; i < chunks.length; i++) starts[i + 1] = starts[i] + chunks[i].n;
+  const nums = new Map(), kindOf = headers.map((_, k) => !!(plan && (plan[k] === true || (typeof plan[k] === 'number' && plan[k] > 0)))), dec = new TextDecoder();
+  for (let k = 0; k < n; k++) if (kindOf[k]) { const a = new Float64Array(rows); for (let i = 0; i < chunks.length; i++) a.set(chunks[i].cols[k], starts[i]); nums.set(headers[k], a); }
+  const find = (r) => { let lo = 0, hi = chunks.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= r) lo = mid; else hi = mid - 1; } return lo; };
+  const L = {
+    row(r) { const o = {}, c = find(r), i = r - starts[c]; for (let k = 0; k < n; k++) { if (kindOf[k]) { const x = nums.get(headers[k])[r]; o[headers[k]] = x !== x ? null : x; } else { const x = chunks[c].cols[k]; o[headers[k]] = dec.decode(x.bytes.subarray(x.start[i], x.end[i])); } } return o; },
+    column(nm) {   // a text column (or a number column that stayed text) as an array of strings, made the first time a filter or sort needs it
+      const k = headers.indexOf(nm), out = new Array(rows); let at = 0;
+      for (const ch of chunks) { const x = ch.cols[k]; for (let r = 0; r < ch.n; r++) out[at++] = dec.decode(x.bytes.subarray(x.start[r], x.end[r])); }
+      return out;
+    },
+  };
+  view = { name, R: null, f: null, total: rows, rows: null, columns: colsMeta, indices: null, filtered: false, cols: nums, flat: true, cache: new Map(), live: L };
+  send('live', id, { name, total: rows, columns: colsMeta });
+  setTimeout(() => { if (colMod.primeTopN) for (const a of nums.values()) colMod.primeTopN(a); }, 0);
+}
 async function warmColumn(n) {
   if (view.cols.has(n)) return;
   const v = view, c = v.columns.find((x) => x.name === n), num = c && (c.type === 'integer' || c.type === 'number');
@@ -659,6 +689,7 @@ async function warmColumn(n) {
   if (view === v && got[n] && !v.cols.has(n)) { v.cols.set(n, got[n]); if (ArrayBuffer.isView(got[n]) && colMod && colMod.primeTopN) colMod.primeTopN(got[n]); }
 }
 async function loadColumns(names, stream, plain) {
+  if (view.live) { for (const n of names) if (!view.cols.has(n)) view.cols.set(n, view.live.column(n)); const out = {}; for (const n of names) out[n] = view.cols.get(n); return out; }
   const want = names.filter((n) => !view.cols.has(n));
   if (want.length) {
     const isNum = want.map((n) => { const c = view.columns.find((x) => x.name === n); return !plain && !!c && (c.type === 'integer' || c.type === 'number'); }), bad = [];
@@ -676,6 +707,7 @@ async function loadColumns(names, stream, plain) {
 // A number filter that every row of every block provably satisfies (the footer's range holds for all rows of the block, no empty cells) changes nothing, so it is dropped before
 // any column is decoded: no per-row test, and the filter column is not read at all unless the sort needs it.
 async function dropFullMatch(filters, active) {
+  if (view.live) return null;
   const keep = {}; let dropped = 0;
   for (const name of active) {
     const col = view.columns.find((c) => c.name === name), parsed = col && col.type === 'integer' ? queryMod.parseFilter(filters[name], col.type) : null, f = parsed && parsed.filter;
@@ -695,6 +727,7 @@ let posMod = null;
 // A number range or equality by row numbers is only exact when every cell of the column is a stored number: a block without a number range may hold text cells.
 async function allBlocksHaveZone(col) { if (col.type !== 'integer') return true; for (let b = 0; b < view.R.blocks.length; b++) if (!(await view.R.zone(b, col.name))) return false; return true; }
 async function zonePlan(filters, active) {
+  if (view.live) return null;
   const need = [];
   for (const name of active) {
     const col = view.columns.find((c) => c.name === name); if (!col) continue;
@@ -726,6 +759,7 @@ async function loadBlocks(zp, names) {
 }
 // Row objects for some row numbers, grouped by block so each block is decoded once. Keeps a few decoded blocks for scrolling back and forth.
 async function rowsAt(idx, from, to) {
+  if (view.live) { const o = []; for (let i = from; i < to; i++) o.push(view.live.row(idx[i])); return o; }
   if (view.rows) { const o = []; for (let i = from; i < to; i++) o.push(view.rows[idx[i]]); return o; }
   if (view.columns.length && view.columns.every((c) => view.cols.has(c.name))) {   // every column is already warmed: read the visible rows from them, not 28 whole blocks (223 to 57 ms for a score sort of 7M rows)
     const o = [];
@@ -761,7 +795,7 @@ async function queryView(m) {
       return queryView(Object.assign(m, { noInside: true }));
     }
   }
-  if (colOk && !m.noPositions && !m.stream && !m.sort && active.length === 1 && !view.cols.has(active[0]) && view.f.size <= WHOLE_FILE_MAX) {
+  if (colOk && !m.noPositions && !m.stream && !m.sort && active.length === 1 && !view.live && !view.cols.has(active[0]) && view.f.size <= WHOLE_FILE_MAX) {
     // One filter on a column that is not decoded yet: ask LFC-pack for just the matching row numbers (blocks that cannot match are skipped, no row objects, no whole-column decode)
     try {
       const col = view.columns.find((c) => c.name === active[0]), q = col && (posMod ||= MODS() || await import('../src/query/positions.mjs')).positionsQuery(m.filters[active[0]], col);
@@ -805,7 +839,7 @@ async function pageView(m) {
   let out, numbers;
   if (!view.filtered) {
     const n = Math.max(0, Math.min(m.count, view.total - m.start));
-    const objs = n ? await view.R.rows({ from: m.start, count: n }) : [];
+    const objs = n ? (view.live ? Array.from({ length: n }, (_, i) => view.live.row(m.start + i)) : await view.R.rows({ from: m.start, count: n })) : [];
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name], c))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
     if (view.pending && m.start + m.count > view.pending.topN) ensureFull();
@@ -825,7 +859,7 @@ async function exportView(m) {
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
       if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => cellText(r[c.name], c)));
-      else rows = (await view.R.rows({ from: start, count: n })).map((r) => view.columns.map((c) => cellText(r[c.name], c)));
+      else rows = (view.live ? Array.from({ length: n }, (_, i) => view.live.row(start + i)) : await view.R.rows({ from: start, count: n })).map((r) => view.columns.map((c) => cellText(r[c.name], c)));
       parts.push(csvLines(rows, d));
     }
     const blob = new Blob(parts, { type: 'text/csv;charset=utf-8' });

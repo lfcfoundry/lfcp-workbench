@@ -12,8 +12,11 @@
   worker.onmessage = (e) => {
     const m = e.data || {};
     if (m.type === 'progress') { $('prog').value = m.total ? m.bytes / m.total : 0; status(m.rows.toLocaleString() + ' rows · ' + fmt(m.bytes) + ' of ' + fmt(m.total)); return; }
+    if (m.type === 'live') { liveSeen = performance.now(); liveDone = (liveHook || ((x) => { status('Reading while the file is saved…'); return openGrid(x.name); }))(m); return; }   // the worker has parsed the file and keeps the columns: the grid can open before the save ends
+    if (m.type === 'liveclosed') { $('gridbox').hidden = true; return; }
     const w = waiters.get(m.id); if (w) { waiters.delete(m.id); w(m); }
   };
+  let liveHook = null, liveDone = null, liveSeen = 0;
   worker.onerror = (e) => status('Worker stopped: ' + (e.message || 'unknown error'), true);
 
   function show(d, extra) {
@@ -256,13 +259,32 @@
     status('Generating about ' + mb + ' MB of CSV…'); let s = performance.now();
     const g = await call({ type: 'gen', mb }); T.generateMs = Math.round(performance.now() - s);
     add('file generated', g.type === 'generated', g.message || `${g.rows} rows, ${fmt(g.bytes)}, ${g.onDisk ? 'on disk (OPFS)' : 'in memory'}`);
-    let res = null;
-    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; const pw = /[?&]pw=(\d+)/.exec(location.search); if (pw) o.packWorkers = +pw[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
+    let res = null; const liveOn = /[?&]live=1/.test(location.search);
+    if (liveOn) liveHook = async (lm) => {   // time to a usable grid: the worker says the columns are ready; filter, sort and page right away, before the save ends
+      T.liveReadyMs = Math.round(performance.now() - s); if (/[?&]liveq=0/.test(location.search)) return; const o = await openGrid(lm.name); T.liveOpenMs = Math.round(performance.now() - s);
+      const sm = (row, i) => JSON.stringify(row) === JSON.stringify(cells(i));
+      add('live: first rows are right', sm(G.rows[0], 0) && sm(G.rows[7], 7));
+      G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); let e0 = performance.now(); const q1 = await applyQuery(); T.liveFilterMs = Math.round(performance.now() - e0); T.liveFilterAtMs = Math.round(performance.now() - s);
+      add('live: filter finds the last 10 rows', q1.count === 10 && sm(G.rows[0], g.rows - 10) && sm(G.rows[9], g.rows - 1), JSON.stringify(q1).slice(0, 200));
+      G.filters = {}; G.sort = { col: 'score', dir: 'asc' }; buildHead(); e0 = performance.now(); const q2 = await applyQuery(); T.liveSortScoreMs = Math.round(performance.now() - e0); T.liveSortAtMs = Math.round(performance.now() - s);
+      T.liveScoreFirst = JSON.stringify(G.rows[0]);
+      G.sort = { col: 'note', dir: 'asc' }; buildHead(); e0 = performance.now(); await applyQuery(); T.liveSortTextMs = Math.round(performance.now() - e0); T.liveTextFirst = JSON.stringify(G.rows[0]);
+      G.filters = { note: 'note 7000' }; G.sort = null; buildHead(); e0 = performance.now(); const q3 = await applyQuery(); T.liveTextFilterMs = Math.round(performance.now() - e0); T.liveTextCount = q3.count; T.liveTextFirstRow = JSON.stringify(G.rows[0]);
+      G.filters = {}; G.sort = null; buildHead(); await applyQuery();
+    };
+    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (liveOn) o.live = true; if (/[?&]livexfer=1/.test(location.search)) o.liveXfer = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; const pw = /[?&]pw=(\d+)/.exec(location.search); if (pw) o.packWorkers = +pw[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
       const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing; T.colTypes = d.columns.map((c) => c.name + ':' + c.type + (c.decimals ? '.' + c.decimals : '')).join(',');
       s = performance.now(); const o = await openGrid(d.name); T.openMs = Math.round(performance.now() - s); T.kinds = o && o.kinds;
       add('data view opens', o && o.total === g.rows, o && String(o.total));
+      if (liveOn && !/[?&]liveq=0/.test(location.search)) {   // same answers from the saved file as from the kept columns
+        await liveDone; add('live: grid was ready before the import finished', T.liveReadyMs > 0 && T.liveReadyMs < T.importMs, T.liveReadyMs + ' vs ' + T.importMs + ' ms');
+        G.sort = { col: 'score', dir: 'asc' }; buildHead(); await applyQuery(); add('live: score sort first row equals the saved file', JSON.stringify(G.rows[0]) === T.liveScoreFirst, T.liveScoreFirst + ' | ' + JSON.stringify(G.rows[0]));
+        G.sort = { col: 'note', dir: 'asc' }; buildHead(); await applyQuery(); add('live: text sort first row equals the saved file', JSON.stringify(G.rows[0]) === T.liveTextFirst, T.liveTextFirst + ' | ' + JSON.stringify(G.rows[0]));
+        G.filters = { note: 'note 7000' }; G.sort = null; buildHead(); const qa = await applyQuery(); add('live: text filter count and first row equal the saved file', qa.count === T.liveTextCount && JSON.stringify(G.rows[0]) === T.liveTextFirstRow, qa.count + ' vs ' + T.liveTextCount);
+        G.filters = {}; G.sort = null; buildHead(); await applyQuery();
+      }
       const same = (row, i) => JSON.stringify(row) === JSON.stringify(cells(i));
       add('first rows are right', same(G.rows[0], 0) && same(G.rows[7], 7));
       { const t1 = performance.now(); for (const f of [0.11, 0.37, 0.52, 0.73, 0.94]) await call({ type: 'page', start: Math.floor(g.rows * f), count: 30 }); T.pageColdMs = Math.round((performance.now() - t1) / 5 * 10) / 10; }   // average time to fetch 30 rows from far apart places
@@ -318,7 +340,7 @@
   function reportBack() { if (/[?&]report=1/.test(location.search)) { try { const pm = /[?&]port=(\d+)/.exec(location.search); fetch((pm ? 'http://127.0.0.1:' + pm[1] : '') + '/result', { method: 'POST', body: report(), mode: pm ? 'no-cors' : 'same-origin' }); } catch {} } }
 
   $('file').addEventListener('change', () => { const f = $('file').files[0]; $('go').disabled = !f; if (f) status(fmt(f.size) + ' selected. No upload happens.'); });
-  $('go').addEventListener('click', () => { const f = $('file').files[0]; if (f) runImport(f); });
+  $('go').addEventListener('click', () => { const f = $('file').files[0]; if (f) runImport(f, false, { live: true }); });
   $('cancel').addEventListener('click', () => { if (active) { worker.postMessage({ type: 'cancel', id: active }); status('Stopping…'); } });
   $('selftest').addEventListener('click', selfTest);
   $('copy').addEventListener('click', async () => {
