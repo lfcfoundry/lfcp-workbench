@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-Mq6RD9++ew2M5lqlcM3cT1VvcgXBDmn6JvxlVQ3IduE=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-IlDOxy2QeW83s1ggf5zWf1253r/Twmvww6nrm2fQe9o=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCP Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -26,7 +26,7 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 
 </head>
 <body>
-<header><h1>LFCP Workbench <small id="ver">2026.11.14.0848</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<header><h1>LFCP Workbench <small id="ver">2026.11.14.0930</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
 <main>
   <section>
     <h2>Import</h2>
@@ -294,6 +294,25 @@ function runQuery(rows, columns, { filters = {}, sort = null } = {}) {
   return { indices: Uint32Array.from(idx), errors };
 }
 
+// Filters that LFC-pack 0.10.19 can answer with row numbers alone (unpack(file, { equals | range, positions: true })), without decoding the whole column.
+// Returns the lfc-pack query for one filter, or null when the Workbench's own rules cannot be mapped exactly (then the column path runs as before).
+// Exactness rules (same rows as matches() in query.mjs):
+//   ranges (> >= < <=) are NOT mapped: measured slower than the column path when many rows match (100 MB, half the rows: 95 to 133 ms), and zonePlan already covers the selective ones
+//   whole-number column, =number    : only the canonical text of an integer (5, not 05 or 5.0), because matches() compares text
+//   text column, =text              : a non-empty trimmed value; strict equality on string cells, as matches() does
+
+const BIG = Number.MAX_SAFE_INTEGER;
+function positionsQuery(text, col) {
+  const { filter: f, error } = parseFilter(text, col.type); if (error || !f) return null;
+  const key = col.name;
+  if (col.type === 'integer') {
+    if (f.op === 'eq' && /^-?(0|[1-9]\d{0,14})$/.test(f.value) && f.value !== '-0') return { equals: { key, value: +f.value } };
+    return null;
+  }
+  if (col.type === 'string' && f.op === 'eq' && f.value !== '') return { equals: { key, value: f.value } };
+  return null;
+}
+
 // Same filter and sort as query.mjs (runQuery), but over whole columns instead of row objects:
 // cols = { columnName: array of cell values, one entry per row }, n = row count.
 // Returns the same {indices, errors}. Used when only the filtered or sorted columns were decoded from the dataset
@@ -452,13 +471,13 @@ function cells(i) {
 }
 const line = (i) => cells(i).join(',') + '\n';
 
-return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, typedCell, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
+return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, typedCell, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, topSortIndices, positionsQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
 })();
 /*!
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
  * Part of JS-modules, https://github.com/lfcfoundry/JS-modules
  * Copyright (c) 2026 LFC Foundry. MIT License (see LICENSE at the repository root).
- * Version 0.10.18 (API 0)
+ * Version 0.10.19 (API 0)
  *
  * Needs WebAssembly (zstd, the tokenizer and the string deduplicator are compiled from C; page policy 'wasm-unsafe-eval' and nothing else). No other dependency, one file.
  * Contains zstd 1.5.7 (BSD-3-Clause, Meta Platforms), compiled to wasm32; see NOTICE-zstd.txt next to this file.
@@ -2370,6 +2389,37 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     }
     function assembleKeep(F, want, rk, min, max) { var r = assemble(F, want), out = [], i, x; for (i = 0; i < r.length; i++) { x = r[i][rk]; if (typeof x === 'number' && x >= min && x <= max) out.push(r[i]); } return out; }
     readSel = guard(readSel);
+    // W1: positions: the block-local numbers of the rows readSel / readEq would return, as an Int32Array, with no row objects made; null means the row path is needed (same rules as readSel / readEq)
+    function readPos(bytes, rk, val, mode, min, max) {
+      if (gen || lazyOn) return null;
+      var want = null;
+      var rg = mode === 'range', codes = mode === 'codes', F = flatFrames(zs, bytes, want, false, false, codes), meta = F.meta, n = F.n, pl = F.pl, keys = meta.keys, jr = keys.indexOf(rk), i, c, s, m = 0, x, rv;
+      if (F.ordList || keys.indexOf('__proto__') >= 0) return null;
+      if (jr < 0 || F.cols[jr] === null) return new Int32Array(0);
+      var cm = meta.cols[jr], col = F.cols[jr], pb = (n + 7) >> 3, sel = new Int32Array(n), dense = cm.n === n, isN = cm.t === 'N';
+      if (rg) {
+        rv = col.pre ? col.pre : decodeColumn(cm, zs, col.fr);
+        if (rv.length === n) { for (i = 0; i < n; i++) { x = rv[i]; if (typeof x === 'number' && x >= min && x <= max) sel[m++] = i; } }
+        else { for (i = 0, c = 0, s = jr * pb; i < n; i++) if ((pl[s + (i >> 3)] >> (i & 7)) & 1) { x = rv[c++]; if (typeof x === 'number' && x >= min && x <= max) sel[m++] = i; } }
+      } else if (codes && (cm.t === 'D' || (isN && cm.p.t === 'D'))) {
+        var dp = isN ? cm.p.p : cm.p, cnt = isN ? cm.p.m : cm.n, o = isN ? 1 : 0, c0 = -1, anyv = val instanceof AnyOf, amk = null, anull = anyv && val.set.has(null);
+        if (anyv) { var alb = tdr.decode(frOne(col, o)).split('\0'), az; amk = new Uint8Array(alb.length + 1); for (az = 0; az < alb.length; az++) if (val.set.has(alb[az])) { amk[az] = 1; c0 = 0; } if (c0 < 0 && !(isN && anull)) return new Int32Array(0); }
+        else if (typeof val === 'string') c0 = tdr.decode(frOne(col, o)).split('\0').indexOf(val);
+        if (c0 < 0 && !(isN && val === null) && !anyv) return new Int32Array(0);
+        var cf = frOne(col, o + 1), cd = dp.w ? bitunpack(cf, cnt, dp.w) : dp.wide ? new Uint16Array(cf.buffer.slice(cf.byteOffset, cf.byteOffset + cnt * 2)) : cf, np = isN ? frOne(col, 0) : null, k = 0, at = 0;
+        for (i = 0, s = jr * pb; i < n; i++) { if (!dense && !((pl[s + (i >> 3)] >> (i & 7)) & 1)) continue;
+          if (np && (np[at >> 3] >> (at & 7)) & 1) { at++; if (val === null || anull) sel[m++] = i; continue; } at++;
+          if (anyv ? amk[cd[k++]] : (cd[k++] === c0 && c0 >= 0)) sel[m++] = i; }
+      } else {
+        var kvA = val instanceof AnyOf ? new Array(n) : null, cfr = codes ? frAll(col) : col.fr; m = p14Sel(cm, cfr, val, pl, jr * pb, n, sel, kvA);
+        if (m < 0) { m = 0; rv = decodeColumn(cm, zs, cfr);
+          if (kvA) { var vs = val.set; if (rv.length === n) { for (i = 0; i < n; i++) if (vs.has(rv[i])) sel[m++] = i; } else { for (i = 0, c = 0, s = jr * pb; i < n; i++) if ((pl[s + (i >> 3)] >> (i & 7)) & 1) { if (vs.has(rv[c++])) sel[m++] = i; } } }
+          else if (rv.length === n) { for (i = 0; i < n; i++) if (rv[i] === val) sel[m++] = i; }
+          else { for (i = 0, c = 0, s = jr * pb; i < n; i++) if ((pl[s + (i >> 3)] >> (i & 7)) & 1) { if (rv[c++] === val) sel[m++] = i; } } }
+      }
+      return sel.subarray(0, m);
+    }
+    readPos = guard(readPos);
     // B19: rows of a block whose value under key rk === val. mode 'plain' or 'codes' (see the patch notes). Same objects and key order as filtering readBlock(...)
     function readEq(bytes, want, verify, rk, val, mode, bc) {
       if (gen || lazyOn) return null;
@@ -2539,7 +2589,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       }
       return { n: n, keys: Object.keys(cols), cols: cols, present: present };
     }
-    return { generated: function (on) { gen = !!on; }, lazy: function (on) { lazyOn = on; }, readBlock: readBlock, readRange: readRange, readSel: readSel, readEq: readEq, assemble: assemble, columns: columns, columnsOf: function (bytes, want, verify) { return columns(flatFrames(zs, bytes, want, false, verify), want); } };
+    return { generated: function (on) { gen = !!on; }, lazy: function (on) { lazyOn = on; }, readBlock: readBlock, readRange: readRange, readSel: readSel, readPos: readPos, readEq: readEq, assemble: assemble, columns: columns, columnsOf: function (bytes, want, verify) { return columns(flatFrames(zs, bytes, want, false, verify), want); } };
   }
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
@@ -2984,6 +3034,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       w.readBlock = function (a, b, c) { return waRun(zs, a, function () { return rd.readBlock(a, b, c); }); };
       if (rd.readRange) w.readRange = function (a, b, c) { return waRun(zs, a, function () { return rd.readRange(a, b, c); }); };
       if (rd.readSel) w.readSel = function (a, b, c, d, e, f) { return waRun(zs, a, function () { return rd.readSel(a, b, c, d, e, f); }); };
+      if (rd.readPos) w.readPos = function (a, b, c, d, e, f) { return waRun(zs, a, function () { return rd.readPos(a, b, c, d, e, f); }); };
       if (rd.readEq) w.readEq = function (a, b, c, d, e, f, g) { return waRun(zs, a, function () { return rd.readEq(a, b, c, d, e, f, g); }); };
       return w;
     }
@@ -2992,6 +3043,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     r.readBlock = function (a, b, c) { arenaReset(); return rd.readBlock(a, b, c); };
     if (rd.readRange) r.readRange = function (a, b, c) { arenaReset(); return rd.readRange(a, b, c); };
     if (rd.readSel) r.readSel = function (a, b, c, d, e, f) { arenaReset(); return rd.readSel(a, b, c, d, e, f); };
+    if (rd.readPos) r.readPos = function (a, b, c, d, e, f) { arenaReset(); return rd.readPos(a, b, c, d, e, f); };
     if (rd.readEq) r.readEq = function (a, b, c, d, e, f, g) { arenaReset(); return rd.readEq(a, b, c, d, e, f, g); };
     return r;
   }
@@ -3063,7 +3115,35 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     }
     return out;
   }
+  // W1: unpack(file, { equals | range, positions: true }) -> a Uint32Array of the row numbers (in the order unpack(file) returns the rows; with `table`, in that table's rows) of the rows the same query would return, and no row objects; keys, rows and cache have no effect
+  function unpackPositions(bytes, opts) {
+    var eq = opts.equals, range = opts.range || null;
+    if (!eq && !range) throw new Error('LfcPack: positions needs equals or range');
+    var file = openFile(bytes), rn = arenaReader(makeNestedReader(arenaZs(S.zdec), sharedOf(file))), rf = arenaReader(makeFlatReader(arenaZs(S.zdec))), i, j, r, kd, base = 0, got = new Uint32Array(1024), m = 0, tb;
+    var evOk = !eq || !eq.anyOf || NX_C === 'on', ev = eq ? (eq.anyOf && NX_C === 'on' ? new AnyOf(eq.anyOf) : eq.value) : null, md = eq ? (opts._eq || 'codes') : 'range';
+    var EQF = eq && evOk && file.blocks.length > 1 ? eqfOf(bytes, file) : null, EQN = EQF ? eqNeedles(ev) : null, es = eq && eq.anyOf ? new Set(eq.anyOf) : null;
+    for (i = 0; i < file.blocks.length; i++) {
+      tb = file.blocks[i][5] || 0;
+      if (opts.table != null && tb !== opts.table) continue;
+      var nb = file.blocks[i][3], b0 = base; base += nb; kd = file.blocks[i][4]; r = null;
+      if (range && !blockMayMatch(file, i, range)) continue;
+      if (eq && kd === 'f' && EQF && EQF[i] && eqSkipBlock(EQF[i], eq.key, EQN)) continue;
+      if (kd === 'f' && md !== 'off' && evOk) r = rf.readPos(blockBytes(file, i), eq ? eq.key : range.key, ev, md, range ? range.min : 0, range ? range.max : 0);
+      if (!r) {   // other blocks, and flat blocks the fast path declines: the rows are read and tested as the row queries test them
+        var rows = kd === 'r' ? rawRows(readRawBlock(S.zdec, blockBytes(file, i))) : (kd === 'f' ? rf.readBlock(blockBytes(file, i), null) : rn.readBlock(blockBytes(file, i), null)), q = [], v;
+        for (j = 0; j < rows.length; j++) {
+          if (range) { v = rows[j][range.key]; if (typeof v === 'number' && v >= range.min && v <= range.max) q.push(j); }
+          else if (es ? Object.prototype.hasOwnProperty.call(rows[j], eq.key) && es.has(rows[j][eq.key]) : rows[j][eq.key] === eq.value) q.push(j);
+        }
+        r = q;
+      }
+      if (m + r.length > got.length) { var g2 = new Uint32Array(Math.max(got.length * 2, m + r.length)); g2.set(got.subarray(0, m)); got = g2; }
+      for (j = 0; j < r.length; j++) got[m++] = b0 + r[j];
+    }
+    return got.slice(0, m);
+  }
   function unpackSome(bytes, opts) {
+    if (opts.positions) return unpackPositions(bytes, opts);
     if (opts.equals) return unpackEq(bytes, opts);
     var file = openFile(bytes), rn = arenaReader(makeNestedReader(arenaZs(S.zdec), sharedOf(file))), rf = arenaReader(makeFlatReader(arenaZs(S.zdec))), out = [], i, j, r, kd, want = null, range = opts.range || null;
     rf.generated(opts.rows === 'generated'); rf.lazy(opts.rows === 'lazy' ? 1 : opts.rows === 'lazycols' ? 2 : false);
@@ -3312,7 +3392,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     }); }).then(function (ok) { return ok && later(function () { unpackTables(file); file = null; return true; }); }).then(function (ok) { return ok === true; }, function () { return false; });
     return warmP;
   }
-  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.10.18', apiVersion: 0 };
+  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.10.19', apiVersion: 0 };
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
   // ================================================================ delta saves v2 (prototype, off by default): packTables(x, { base }) / unpackTables(file, { base })
@@ -4440,6 +4520,9 @@ async function dropFullMatch(filters, active) {
 // Number ranges per block (LFC-pack 0.7.0 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
 // A block with no range (text cells, empty cells, or an older file) is always kept. Used only when it keeps at most a fifth of the blocks.
 let zoneMinBlocks = 0;   // test hook (gate=N in the page address): the fewest blocks that make a zone plan worth trying
+let posMod = null;
+// A number range or equality by row numbers is only exact when every cell of the column is a stored number: a block without a number range may hold text cells.
+async function allBlocksHaveZone(col) { if (col.type !== 'integer') return true; for (let b = 0; b < view.R.blocks.length; b++) if (!(await view.R.zone(b, col.name))) return false; return true; }
 async function zonePlan(filters, active) {
   const need = [];
   for (const name of active) {
@@ -4499,6 +4582,17 @@ async function queryView(m) {
       return queryView(Object.assign(m, { noInside: true }));
     }
   }
+  if (colOk && !m.noPositions && !m.stream && !m.sort && active.length === 1 && !view.cols.has(active[0]) && view.f.size <= WHOLE_FILE_MAX) {
+    // One filter on a column that is not decoded yet: ask LFC-pack for just the matching row numbers (blocks that cannot match are skipped, no row objects, no whole-column decode)
+    try {
+      const col = view.columns.find((c) => c.name === active[0]), q = col && (posMod ||= MODS() || await import('../src/query/positions.mjs')).positionsQuery(m.filters[active[0]], col);
+      if (q && await allBlocksHaveZone(col)) {
+        const idx = LfcPack.unpack(new Uint8Array(await view.f.arrayBuffer()), Object.assign({ positions: true }, q));
+        view.indices = idx; view.filtered = true;
+        return send('queried', m.id, { count: idx.length, total: view.total, errors: {}, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: [], byPositions: true });
+      }
+    } catch (err) { view.posError = String(err && err.message || err); }   // anything unexpected: the column path below gives the answer
+  }
   if (colOk) {
     const names = [...new Set(active.concat(m.sort ? [m.sort.col] : []))].filter((n) => view.columns.some((c) => c.name === n));
     if (m.stream) view.cols.clear();   // test hook: force the block-by-block path
@@ -4515,7 +4609,7 @@ async function queryView(m) {
       return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad, selMs: Math.round(performance.now() - tq0) });
     }
     view.indices = r.indices; view.filtered = true;
-    return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, loadMs: tLoad });
+    return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, loadMs: tLoad, posError: view.posError });
   }
   if (!view.rows) {
     if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + (view.flat ? MAX_COLUMN_ROWS : MAX_DECODE_ROWS).toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
@@ -4813,6 +4907,25 @@ function runQuery(rows, columns, { filters = {}, sort = null } = {}) {
   return { indices: Uint32Array.from(idx), errors };
 }
 
+// Filters that LFC-pack 0.10.19 can answer with row numbers alone (unpack(file, { equals | range, positions: true })), without decoding the whole column.
+// Returns the lfc-pack query for one filter, or null when the Workbench's own rules cannot be mapped exactly (then the column path runs as before).
+// Exactness rules (same rows as matches() in query.mjs):
+//   ranges (> >= < <=) are NOT mapped: measured slower than the column path when many rows match (100 MB, half the rows: 95 to 133 ms), and zonePlan already covers the selective ones
+//   whole-number column, =number    : only the canonical text of an integer (5, not 05 or 5.0), because matches() compares text
+//   text column, =text              : a non-empty trimmed value; strict equality on string cells, as matches() does
+
+const BIG = Number.MAX_SAFE_INTEGER;
+function positionsQuery(text, col) {
+  const { filter: f, error } = parseFilter(text, col.type); if (error || !f) return null;
+  const key = col.name;
+  if (col.type === 'integer') {
+    if (f.op === 'eq' && /^-?(0|[1-9]\d{0,14})$/.test(f.value) && f.value !== '-0') return { equals: { key, value: +f.value } };
+    return null;
+  }
+  if (col.type === 'string' && f.op === 'eq' && f.value !== '') return { equals: { key, value: f.value } };
+  return null;
+}
+
 // Same filter and sort as query.mjs (runQuery), but over whole columns instead of row objects:
 // cols = { columnName: array of cell values, one entry per row }, n = row count.
 // Returns the same {indices, errors}. Used when only the filtered or sorted columns were decoded from the dataset
@@ -4971,7 +5084,7 @@ function cells(i) {
 }
 const line = (i) => cells(i).join(',') + '\n';
 
-return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, typedCell, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
+return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, typedCell, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, topSortIndices, positionsQuery, csvField, csvLines, csvHeader, HEADER, cells, line };
 })();
 window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsrc").textContent], { type: "text/javascript" }));
 'use strict';
@@ -5044,7 +5157,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
-    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search), gate: +((/[?&]gate=(\d+)/.exec(location.search) || [])[1] || 0) });
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search), noPositions: /[?&]nopos=1/.test(location.search), gate: +((/[?&]gate=(\d+)/.exec(location.search) || [])[1] || 0) });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
@@ -5240,6 +5353,11 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       await jump(0.5); const mid = G.rows[5]; add('middle of the file shows a consistent row', mid && same(mid, Number(mid[0])) && Number(mid[0]) > g.rows * 0.4 && Number(mid[0]) < g.rows * 0.6, mid && mid[0]);
       G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); s = performance.now(); const q = await applyQuery(); T.filterMs = Math.round(performance.now() - s);
       add('filter finds the last 10 rows', q.count === 10, String(q.count));
+      G.filters = { name: '=Name 5' }; buildHead(); s = performance.now(); const qe = await applyQuery(); T.eqMs = Math.round(performance.now() - s); T.eqByPositions = !!qe.byPositions; T.posError = qe.posError;
+      add('text equality filter finds every row of that name', qe.count === Math.floor((g.rows - 6) / 97) + 1, String(qe.count));
+      G.filters = { id: '>=' + Math.floor(g.rows * 0.5) }; buildHead(); s = performance.now(); const qr = await applyQuery(); T.rangeMs = Math.round(performance.now() - s);
+      add('range filter on half the rows', qr.count === g.rows - Math.floor(g.rows * 0.5), String(qr.count));
+      G.filters = { id: '>=' + (g.rows - 10) };
       add('the filtered rows are the last 10', G.rows.length === 10 && same(G.rows[0], g.rows - 10) && same(G.rows[9], g.rows - 1), G.rows[0] && G.rows[0][0]);
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
@@ -5264,7 +5382,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0848 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0930 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
