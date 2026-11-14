@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-yVM5edTPjZ9uxBKQoGRIrKskOUoYYSh5Y/HmThXGxwI=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-Mq6RD9++ew2M5lqlcM3cT1VvcgXBDmn6JvxlVQ3IduE=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
-<title>LFCFoundry Workbench (import)</title>
+<title>LFCP Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
 @media(prefers-color-scheme:dark){:root{--bg:#121416;--fg:#ececec;--mut:#a6a6a6;--line:#33383d;--acc:#5db8e8;--bad:#ff8a8c}}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -26,7 +26,7 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 
 </head>
 <body>
-<header><h1>LFCFoundry Workbench <small id="ver">2026.11.14.0829</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<header><h1>LFCP Workbench <small id="ver">2026.11.14.0848</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
 <main>
   <section>
     <h2>Import</h2>
@@ -4394,7 +4394,9 @@ async function openView(m) {
     // Warm the sort columns: whole-number, decimal and date columns are decoded on helper threads while the person looks at the first page,
     // so the first sort of one of them only has the selection scan left (the decode was most of a first sort).
     if (!m.noWarm && view.flat && total <= MAX_WARM_ROWS && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory <= 4) && LfcPack.unpackColumnsParallel && view.f.size <= WHOLE_FILE_MAX) {
-      const v = view, names = v.columns.filter((c) => c.type === 'integer' || c.type === 'number' || c.type === 'date').map((c) => c.name);
+      // Text columns are warmed too when memory allows (about 40 bytes a cell): up to 3 million rows anywhere, up to 10 million on a desktop browser that does not report less than 8 GB.
+      const warmText = !m.noWarmText && (total <= 3000000 || (total <= MAX_WARM_ROWS && !/Mobi|Android/.test(navigator.userAgent) && !(navigator.deviceMemory < 8)));
+      const v = view, names = v.columns.filter((c) => c.type === 'integer' || c.type === 'number' || c.type === 'date' || (warmText && c.type === 'string')).map((c) => c.name);
       setTimeout(async () => { for (const n of names) { if (view !== v) return; try { await warmColumn(n); } catch {} } }, 300);
     }
   } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
@@ -4437,6 +4439,7 @@ async function dropFullMatch(filters, active) {
 }
 // Number ranges per block (LFC-pack 0.7.0 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
 // A block with no range (text cells, empty cells, or an older file) is always kept. Used only when it keeps at most a fifth of the blocks.
+let zoneMinBlocks = 0;   // test hook (gate=N in the page address): the fewest blocks that make a zone plan worth trying
 async function zonePlan(filters, active) {
   const need = [];
   for (const name of active) {
@@ -4445,7 +4448,7 @@ async function zonePlan(filters, active) {
     if (col.type === 'integer' && f.kind === 'num' && f.op !== 'ne') need.push([name, f.op, f.value]);
     else if (col.type === 'integer' && f.op === 'eq' && /^-?(0|[1-9]\d{0,14})$/.test(f.value)) need.push([name, 'eq', +f.value]);
   }
-  if (!need.length || view.R.blocks.length < 8) return null;
+  if (!need.length || view.R.blocks.length < (zoneMinBlocks || 8)) return null;
   const blocks = [];
   for (let b = 0; b < view.R.blocks.length; b++) {
     let keep = true;
@@ -4484,7 +4487,7 @@ async function rowsAt(idx, from, to) {
 async function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   const t0 = performance.now(), active = Object.keys(m.filters || {}).filter((k) => m.filters[k]), plain = !m.sort && !active.length;
-  view.pending = null;
+  view.pending = null; zoneMinBlocks = m.gate || 0;
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
   const colOk = view.flat && view.total <= MAX_COLUMN_ROWS;
   if (colOk && !m.noInside) {
@@ -5041,7 +5044,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
-    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search) });
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search), gate: +((/[?&]gate=(\d+)/.exec(location.search) || [])[1] || 0) });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
@@ -5061,7 +5064,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
   async function openGrid(name) {
     status('Opening ' + name + '…');
-    const r = await call({ type: 'open', name, noWarm: /[?&]nowarm=1/.test(location.search) });
+    const r = await call({ type: 'open', name, noWarm: /[?&]nowarm=1/.test(location.search), noWarmText: /[?&]nowarmtext=1/.test(location.search) });
     if (r.type === 'error') { status(r.message, true); return; }
     Object.assign(G, { cols: r.columns, filters: {}, sort: null }); $('gridbox').hidden = false; $('gridtitle').textContent = 'Data: ' + r.name; buildHead(); await applyQuery(); status('Opened. Type in a filter box or click a column name.');
     return r;
@@ -5241,7 +5244,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
       G.sort = { col: 'score', dir: 'asc' }; buildHead(); await new Promise((r) => setTimeout(r, 4000)); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s); T.scoreLoadMs = q3.loadMs;
-      G.sort = { col: 'note', dir: 'asc' }; buildHead(); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); T.textLoadMs = q4.loadMs; add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
+      G.sort = { col: 'note', dir: 'asc' }; buildHead(); await new Promise((r) => setTimeout(r, 6000)); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); T.textLoadMs = q4.loadMs; add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
       T.fullMatch = {};   // a filter every row satisfies (id >= 0): first query on a freshly opened dataset (cold) and the same again (warm), with and without the full-match shortcut
       for (const ni of [true, false]) {
         await openGrid(d.name); G.sort = null; G.noInside = ni; G.filters = { id: '>=0' }; buildHead();
@@ -5261,7 +5264,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
 
   function report() {
-    const L = ['LFCFoundry Workbench results', 'Workbench version: 2026.11.14.0829 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0848 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }

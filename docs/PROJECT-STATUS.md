@@ -2,7 +2,7 @@
 
 ## Current state
 
-LFC Workbench is a browser-based data multitool project for ingestion, pipelining, and analysis. The repository is in the documentation and feasibility stage. It has no production application, package/build system, or general query and transformation engine. Statements in architecture documents distinguish established direction from proposals.
+LFCP Workbench is a browser-based data multitool project for ingestion, pipelining, and analysis. The repository is in the documentation and feasibility stage. It has no production application, package/build system, or general query and transformation engine. Statements in architecture documents distinguish established direction from proposals.
 
 ## Completed work
 
