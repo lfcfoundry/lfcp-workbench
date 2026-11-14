@@ -1,0 +1,16 @@
+# Credits
+
+LFCP Workbench borrows ideas from other projects and papers. Where an optimized part uses such an idea, the part lives in its own file (or clearly marked section) and its header names the source. The code is our own implementation; no code was copied from the projects below. If a credit here is wrong or missing, please open an issue.
+
+| Our part | Where | Idea from | Original authors and project |
+|---|---|---|---|
+| Top-N sort: keep the best k rows with one comparison per row | [`src/query/topn.mjs`](../src/query/topn.mjs) | Bounded-heap "TopN" operator | DuckDB: Mark Raasveldt, Hannes Muehleisen and the DuckDB contributors ([duckdb.org](https://duckdb.org/)); the technique itself is the textbook top-k heap selection |
+| Skip whole blocks that cannot hold a top-N row (per-block minimum and maximum) | [`src/query/topn.mjs`](../src/query/topn.mjs) | Zone maps, "Small Materialized Aggregates" | Guido Moerkotte, VLDB 1998 ([paper](http://www.vldb.org/conf/1998/p476.pdf)); also in Apache Parquet row-group statistics ([Parquet format](https://parquet.apache.org/docs/file-format/)) and DuckDB row-group statistics |
+| Typed decimals: a decimal cell stored as a whole number scaled by 10^d, text kept when not exact | [`src/ingest/infer.mjs`](../src/ingest/infer.mjs) (`typedDecimal`, `sampleDecimals`, `formatScaled`), [`src/query/query.mjs`](../src/query/query.mjs) | Fixed-point DECIMAL columns | Apache Parquet DECIMAL logical type ([spec](https://parquet.apache.org/docs/file-format/types/logicaltypes/)); DuckDB DECIMAL ([docs](https://duckdb.org/docs/stable/sql/data_types/numeric)) |
+| One-of filter `=a\|b` | [`src/query/query.mjs`](../src/query/query.mjs), [`src/query/positions.mjs`](../src/query/positions.mjs) | SQL `IN (...)` list tested with a hash set | ISO SQL; see DuckDB's [IN operator](https://duckdb.org/docs/stable/sql/expressions/in); LFC-pack's own `anyOf` row-number query does the work on columns not decoded yet |
+| Wasm row builder (when shipped) | `app/worker.js` | Compiling a small C routine to WebAssembly (SIMD) | [WebAssembly](https://webassembly.org/) community group; [LLVM / clang](https://llvm.org/) |
+| Compression, row numbers, zone ranges | `vendor/lfcp/` | LFC-pack | LFC Foundry; zstd by Yann Collet and Meta ([zstd](https://facebook.github.io/zstd/)), see [`vendor/lfcp/0.10.24/NOTICE-zstd.txt`](../vendor/lfcp/0.10.24/NOTICE-zstd.txt) |
+
+Rivals we measure against (no code used): DuckDB-WASM, SQLite-WASM, Arquero, Papa Parse, Perspective, Glide Data Grid. Each results file records the exact versions tested.
+
+Links checked live on 2026-11-14 (Detroit time) from the build container: duckdb.org, duckdb.org numeric types page, VLDB 1998 paper (http://www.vldb.org/conf/1998/p476.pdf), parquet.apache.org file-format and logical-types pages, webassembly.org, llvm.org, facebook.github.io/zstd. All returned HTTP 200. Re-check before each release with `curl -sIL <url>`.

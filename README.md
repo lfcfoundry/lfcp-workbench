@@ -21,6 +21,7 @@ The experiment uses the pinned LFC-pack 0.4.19/API 0 build in [`vendor/lfcp/0.4.
 ## Project map
 
 - [`docs/architecture/`](docs/architecture/) — system boundaries and unresolved decisions.
+- [`docs/CREDITS.md`](docs/CREDITS.md) — the projects, papers and authors whose ideas our optimized parts build on, each with a link.
 - [`docs/lfcp/`](docs/lfcp/) — Workbench-derived requirements and an evidence-based LFCP evolution process.
 - [`experiments/`](experiments/) — prototypes that remain explicitly separate from production code.
 - [`vendor/`](vendor/) — pinned third-party or shared build artifacts with provenance and notices.

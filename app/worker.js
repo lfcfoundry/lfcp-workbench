@@ -69,7 +69,7 @@ function numBytes(b, s, f) {   // the same rule as NUM in infer.mjs: -?(0|[1-9]\
 function makeFast(headers, plan, trackers, delimiter) {
   const n = headers.length, D = delimiter.charCodeAt(0);
   if (n === 0 || n > 512 || D > 126) return null;
-  const keys = headers.map((h, i) => enc.encode((i ? ',' : '{') + JSON.stringify(h) + ':')), isInt = headers.map((_, i) => !!(plan && plan[i]));
+  const keys = headers.map((h, i) => enc.encode((i ? ',' : '{') + JSON.stringify(h) + ':')), isInt = headers.map((_, i) => !!(plan && plan[i] === true)), decN = headers.map((_, i) => (plan && typeof plan[i] === 'number' ? plan[i] : 0));
   const extra = keys.reduce((a, k) => a + k.length, 0) + 8 * n + 4, fs = new Int32Array(n), fe = new Int32Array(n), tdec = new TextDecoder();
   const F = { off: false, rows: 0, miss: 0 };
   // Parses the plain lines of b[i..) whose line break is before lim; returns where it stopped (the caller handles the next line another way).
@@ -86,11 +86,25 @@ function makeFast(headers, plan, trackers, delimiter) {
       for (let c = 0; c < n; c++) {
         const key = keys[c]; for (let q = 0; q < key.length; q++) out[o++] = key[q];
         const s0 = fs[c], f0 = fe[c], len = f0 - s0, t = trackers[c];
-        if (len === 0) { if (isInt[c]) { out[o++] = 110; out[o++] = 117; out[o++] = 108; out[o++] = 108; } else { out[o++] = 34; out[o++] = 34; } t.n++; t.empty++; continue; }
+        if (len === 0) { if (isInt[c] || decN[c]) { out[o++] = 110; out[o++] = 117; out[o++] = 108; out[o++] = 108; } else { out[o++] = 34; out[o++] = 34; } t.n++; t.empty++; continue; }
         let plain = false;
         if (isInt[c]) {
           const neg = b[s0] === 45 ? 1 : 0;
           if (len > neg && len - neg <= 15) { const c0 = b[s0 + neg]; if (c0 === 48) plain = len === 1; else if (c0 > 48 && c0 <= 57) { plain = true; for (let q = s0 + neg + 1; q < f0; q++) if (b[q] < 48 || b[q] > 57) { plain = false; break; } } }
+        }
+        else if (decN[c]) {   // decimal column: a plain decimal with exactly decN digits after the point (see typedDecimal in infer.mjs) is written as a number
+          const d = decN[c], neg = b[s0] === 45 ? 1 : 0, dot = len - d - 1;
+          if (dot > neg && b[s0 + dot] === 46 && len - neg - 1 <= 15 && !(b[s0 + neg] === 48 && dot - neg > 1)) {
+            plain = true; let nz = false;
+            for (let q = s0 + neg; q < f0; q++) { if (q === s0 + dot) continue; const c0 = b[q]; if (c0 < 48 || c0 > 57) { plain = false; break; } if (c0 !== 48) nz = true; }
+            if (plain && neg && !nz) plain = false;
+          }
+          if (plain) {   // written as the whole number scaled by 10^d: no point, no leading zeros (12.30 -> 1230, -0.05 -> -5, 0.00 -> 0)
+            if (neg) out[o++] = 45; let st = false;
+            for (let q = s0 + neg; q < f0; q++) { if (q === s0 + dot) continue; const c0 = b[q]; if (!st && c0 === 48) continue; st = true; out[o++] = c0; }
+            if (!st) out[o++] = 48;
+            if (!t.int && t.num && !t.bool && !t.date) t.n++; else t.add(tdec.decode(b.subarray(s0, f0))); continue;
+          }
         }
         if (plain) { for (let q = s0; q < f0; q++) out[o++] = b[q]; if (t.int && !t.bool && !t.date) t.n++; else t.add(tdec.decode(b.subarray(s0, f0))); continue; }
         out[o++] = 34; for (let q = s0; q < f0; q++) out[o++] = b[q]; out[o++] = 34;
@@ -103,24 +117,60 @@ function makeFast(headers, plan, trackers, delimiter) {
   return F;
 }
 
+let X = null; // instance of the row-builder module (null if WebAssembly is missing or refused)
+const loadX = () => { if (X === null) { try { const s = atob('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'), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); X = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch (e) { X = false; } } return X; };
+// Row builder in WebAssembly (clang, scalar, bulk-memory): the same job as makeFast. It checks each cell against the column's type flags (int, number, boolean, date) and stops at any row
+// that would change them, so the JavaScript trackers see exactly the rows they saw before. Dates already accepted are remembered in a table so they need no string.
+function makeFastW(headers, plan, trackers, delimiter) {
+  const n = headers.length, D = delimiter.charCodeAt(0);
+  if (n === 0 || n > 64 || D > 126 || typeof WebAssembly === 'undefined' || !loadX()) return null;
+  const keys = headers.map((h, i) => enc.encode((i ? ',' : '{') + JSON.stringify(h) + ':'));
+  const extra = keys.reduce((a, k) => a + k.length, 0) + 8 * n + 4; if (extra > 8000) return null;
+  X.setup(n, D, extra);
+  const IN = (X.__heap_base.value + 15) & ~15, OUT = IN + 2097152 + 64, CAP = 6291456, SLOTS = 8;
+  const m8 = new Uint8Array(X.memory.buffer); if (m8.length < OUT + CAP) return null;
+  const kp = X.keys_ptr(), flagsP = X.flags_ptr(), cn = new Uint32Array(X.memory.buffer, X.cnt_n_ptr(), 64), ce = new Uint32Array(X.memory.buffer, X.cnt_e_ptr(), 64);
+  let off = 0, slotNo = 0; const slot = new Uint8Array(n).fill(255), synced = new Int32Array(n);
+  for (let c = 0; c < n; c++) { m8.set(keys[c], kp + off); X.set_col(c, off, keys[c].length, plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 && plan[c] < 10 ? 16 + plan[c] : 0, 255); off += keys[c].length; }
+  const F = { off: false, rows: 0, miss: 0 };
+  F.run = (b, i, lim, parser, io) => {
+    for (let c = 0; c < n; c++) {
+      const t = trackers[c]; if (t.date && slot[c] === 255 && slotNo < SLOTS) { slot[c] = slotNo++; X.set_slot(c, slot[c]); } m8[flagsP + c] = (t.int ? 1 : 0) | (t.num ? 2 : 0) | (t.bool ? 4 : 0) | (t.date ? 8 : 0);
+      if (t.date && slot[c] !== 255 && t.okDates.size > synced[c]) { for (const v of t.okDates) { const e = enc.encode(v); m8.set(e, IN); X.cache_add(slot[c], IN, e.length); } synced[c] = t.okDates.size; }
+    }
+    let out = io.buf, o = io.pos, count = 0; const end = Math.min(b.length, lim);
+    while (i < end && !F.off) {
+      const len = Math.min(end - i, 2097152); m8.set(b.subarray(i, i + len), IN);
+      const used = X.build(IN, len, OUT, CAP), ol = X.out_len(), r = X.rows(), bail = X.bail();
+      if (ol) { if (out.length - o < ol) { const g = new Uint8Array(Math.max(out.length * 2, o + ol)); g.set(out.subarray(0, o)); out = g; } out.set(m8.subarray(OUT, OUT + ol), o); o += ol; }
+      if (r) { for (let c = 0; c < n; c++) { trackers[c].n += cn[c]; trackers[c].empty += ce[c]; } parser.line += r; parser.startLine = parser.line; count += r; F.miss = 0; }
+      i += used;
+      if (bail) { if (++F.miss >= 64) F.off = true; break; }
+      if (used === 0) break;
+    }
+    io.buf = out; io.pos = o; F.rows += count; return i;
+  };
+  return F;
+}
+
 // Reads the file in slices, parses it, tracks column types and hands JSON-lines bytes to onBytes (awaited, so the consumer sets the pace).
 // Used twice: in a helper worker (parse on one thread while the import worker packs and writes on another), or inline when a helper cannot start.
 // One JSON line per row, built as text without making a row object. A string that needs no escaping gets its quotes added directly (a regex test
 // is much cheaper than JSON.stringify in Firefox); anything else goes through JSON.stringify, so the line is valid JSON with the same values.
 const NEEDS_ESC = /["\\\u0000-\u001f]/;
 function lineBuilder(headers, plan, trackers, typedCell) {
-  const n = headers.length, keyQ = headers.map((h, i) => (i ? ',' : '{') + JSON.stringify(h) + ':'), isInt = headers.map((_, i) => !!(plan && plan[i]));
+  const n = headers.length, keyQ = headers.map((h, i) => (i ? ',' : '{') + JSON.stringify(h) + ':'), isInt = headers.map((_, i) => !!(plan && plan[i] === true)), decN = headers.map((_, i) => (plan && typeof plan[i] === 'number' ? plan[i] : 0));
   return (f) => {
     let line = '';
     for (let i = 0; i < n; i++) {
       const raw = f[i]; trackers[i].add(raw);
-      const v = isInt[i] ? typedCell(raw) : raw;
-      line += keyQ[i] + (typeof v === 'string' ? (NEEDS_ESC.test(v) ? JSON.stringify(v) : '"' + v + '"') : v === null ? 'null' : v);
+      const v = isInt[i] ? typedCell(raw) : decN[i] ? core.typedDecimal(raw, decN[i]) : raw;
+      line += keyQ[i] + (typeof v === 'string' ? (NEEDS_ESC.test(v) ? JSON.stringify(v) : '"' + v + '"') : v === null ? 'null' : v);   // a decimal column's value is the whole number scaled by 10^decimals (typedDecimal)
     }
     return line + '}\n';
   };
 }
-const sampleRecord = (headers, plan, f, typedCell) => { const rec = Object.create(null); for (let i = 0; i < headers.length; i++) rec[headers[i]] = plan && plan[i] ? typedCell(f[i]) : f[i]; return rec; };
+const sampleRecord = (headers, plan, f, typedCell) => { const rec = Object.create(null); for (let i = 0; i < headers.length; i++) rec[headers[i]] = plan && plan[i] === true ? typedCell(f[i]) : f[i]; return rec; };
 let scratch = new Uint8Array(0);
 async function parseStream(file, delimiter, stopFn, onBytes, onProgress, t, plan) {
   await loadCore();
@@ -196,7 +246,7 @@ async function parseSegment(m) {
   const limit = Math.max(m.e, start), headers = m.headers, plan = m.plan;
   const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
   let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
-  const F = headers && !m.headerOnly ? makeFast(headers, plan, trackers, m.delimiter) : null;
+  const F = headers && !m.headerOnly ? ((m.wasmRows !== false && makeFastW(headers, plan, trackers, m.delimiter)) || makeFast(headers, plan, trackers, m.delimiter)) : null;
   let buf = new Uint8Array(1 << 20);
   const drain = () => { if (!accN) return; if (buf.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(buf.length * 2, pos + acc.length * 3)); n.set(buf.subarray(0, pos)); buf = n; } pos += enc.encodeInto(acc, buf.subarray(pos)).written; acc = ''; accN = 0; };
   const flushOut = async () => { drain(); if (!pos) return; const b = buf.slice(0, pos); pos = 0; if (m.emit) await m.emit(b); else pieces.push(b); };
@@ -318,7 +368,12 @@ async function samplePlan(file, delimiter) {
     if (rows.length < 2) return null;
     const cols = rows[0].length, tr = Array.from({ length: cols }, () => new TypeTracker());
     for (let r = 1; r < rows.length; r++) { if (rows[r].length !== cols) return null; for (let c = 0; c < cols; c++) tr[c].add(rows[r][c]); }
-    const plan = tr.map((x) => x.type === 'integer' && x.n > x.empty);
+    const plan = tr.map((x, c) => {
+      if (x.type === 'integer' && x.n > x.empty) return true;
+      if (x.type !== 'number') return false;
+      const d = core.sampleDecimals(rows.slice(1).map((r) => r[c]));   // decimals: stored as numbers, with the count kept in the catalog
+      return d > 0 && x.n > x.empty ? d : false;
+    });
     return plan.some(Boolean) ? plan : null;
   } catch { return null; }
 }
@@ -409,7 +464,7 @@ async function importFile(m) {
     // Complete only after the footer is validated, then recorded in the catalog.
     const v = await validate(name, rows);
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
-    const cols = headers.map((h, i) => ({ name: h, type: types[i].type, nullable: types[i].nullable }));
+    const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0 }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
@@ -490,17 +545,23 @@ async function openView(m) {
 const WHOLE_FILE_MAX = 384 * 1048576;
 async function warmColumn(n) {
   if (view.cols.has(n)) return;
-  const v = view, got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), { keys: [n] });
+  const v = view, c = v.columns.find((x) => x.name === n), num = c && (c.type === 'integer' || c.type === 'number');
+  // a number column comes back as a typed array (NaN = empty cell): half the memory, and the top-N sort can scan it without parsing (src/query/topn.mjs)
+  const got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), num ? { keys: [n], nulls: 'NaN' } : { keys: [n] });
   if (view === v && got[n] && !v.cols.has(n)) v.cols.set(n, got[n]);
 }
-async function loadColumns(names, stream) {
+async function loadColumns(names, stream, plain) {
   const want = names.filter((n) => !view.cols.has(n));
   if (want.length) {
-    const out = want.map(() => new Array(view.total)); let at = 0;
-    const put = (e) => { for (let k = 0; k < want.length; k++) { const src = e.cols[want[k]], dst = out[k]; for (let i = 0; i < e.n; i++) dst[at + i] = src ? src[i] : ''; } at += e.n; };
+    const isNum = want.map((n) => { const c = view.columns.find((x) => x.name === n); return !plain && !!c && (c.type === 'integer' || c.type === 'number'); }), bad = [];
+    const out = want.map((_, k) => (isNum[k] ? new Float64Array(view.total) : new Array(view.total))); let at = 0;
+    const put = (e) => { for (let k = 0; k < want.length; k++) { const src = e.cols[want[k]], dst = out[k]; if (isNum[k]) { for (let i = 0; i < e.n; i++) { const x = src ? src[i] : null; if (typeof x === 'number') dst[at + i] = x; else { dst[at + i] = NaN; if (x != null && x !== '') bad[k] = true; } } } else for (let i = 0; i < e.n; i++) dst[at + i] = src ? src[i] : ''; } at += e.n; };
     if (!stream && view.f.size <= WHOLE_FILE_MAX) { const bytes = new Uint8Array(await view.f.arrayBuffer()); for (const e of LfcPack.unpackColumns(bytes, { keys: want })) put(e); }
     else for (let b = 0; b < view.R.blocks.length; b++) put(await view.R.columns(b, { keys: want }));
-    want.forEach((n, k) => view.cols.set(n, out[k]));
+    // a cell that is text in a number column (a decimal that did not fit the typed form) cannot live in a typed array: that column is read again as plain cells
+    const again = want.filter((n, k) => bad[k]);
+    want.forEach((n, k) => { if (!bad[k]) view.cols.set(n, out[k]); });
+    if (again.length) await loadColumns(again, stream, true);
   }
   const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
 }
@@ -558,6 +619,11 @@ async function loadBlocks(zp, names) {
 // Row objects for some row numbers, grouped by block so each block is decoded once. Keeps a few decoded blocks for scrolling back and forth.
 async function rowsAt(idx, from, to) {
   if (view.rows) { const o = []; for (let i = from; i < to; i++) o.push(view.rows[idx[i]]); return o; }
+  if (view.columns.length && view.columns.every((c) => view.cols.has(c.name))) {   // every column is already warmed: read the visible rows from them, not 28 whole blocks (223 to 57 ms for a score sort of 7M rows)
+    const o = [];
+    for (let i = from; i < to; i++) { const r = idx[i], row = {}; for (const c of view.columns) { const x = view.cols.get(c.name)[r]; row[c.name] = x !== x ? null : x; } o.push(row); }
+    return o;
+  }
   const R = view.R, firsts = R.blocks.map((b) => b.first), out = new Array(to - from), byBlock = new Map();
   for (let i = from; i < to; i++) {
     const r = idx[i]; let lo = 0, hi = firsts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (firsts[mid] <= r) lo = mid; else hi = mid - 1; }
@@ -621,18 +687,19 @@ async function queryView(m) {
   view.indices = r.indices; view.filtered = true;
   send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: true });
 }
-const cellText = (v) => v == null ? '' : typeof v === 'string' ? v : String(v);
+const formatScaled = (n, d) => { const a = String(Math.abs(n)).padStart(d + 1, '0'); return (n < 0 ? '-' : '') + a.slice(0, a.length - d) + '.' + a.slice(a.length - d); };   // the same as in query.mjs
+const cellText = (v, c) => v == null ? '' : typeof v === 'string' ? v : typeof v === 'number' && c && c.decimals ? formatScaled(v, c.decimals) : String(v);   // a number in a decimal column reads back as the text it was imported from
 async function pageView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let out, numbers;
   if (!view.filtered) {
     const n = Math.max(0, Math.min(m.count, view.total - m.start));
     const objs = n ? await view.R.rows({ from: m.start, count: n }) : [];
-    out = objs.map((r) => view.columns.map((c) => cellText(r[c.name]))); numbers = objs.map((_, i) => m.start + i + 1);
+    out = objs.map((r) => view.columns.map((c) => cellText(r[c.name], c))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
     if (view.pending && m.start + m.count > view.pending.topN) ensureFull();
     const end = Math.min(view.indices.length, m.start + m.count), objs = await rowsAt(view.indices, m.start, end);
-    out = objs.map((r) => view.columns.map((c) => cellText(r[c.name]))); numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
+    out = objs.map((r) => view.columns.map((c) => cellText(r[c.name], c))); numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
   send('paged', m.id, { start: m.start, rows: out, numbers });
 }
@@ -646,8 +713,8 @@ async function exportView(m) {
     const count = view.filtered ? view.indices.length : view.total, parts = [...(m.bom ? ['\uFEFF'] : []), csvHeader(view.columns, d)];
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
-      if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => r[c.name] ?? ''));
-      else rows = (await view.R.rows({ from: start, count: n })).map((r) => view.columns.map((c) => r[c.name] ?? ''));
+      if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => cellText(r[c.name], c)));
+      else rows = (await view.R.rows({ from: start, count: n })).map((r) => view.columns.map((c) => cellText(r[c.name], c)));
       parts.push(csvLines(rows, d));
     }
     const blob = new Blob(parts, { type: 'text/csv;charset=utf-8' });

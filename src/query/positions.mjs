@@ -8,7 +8,13 @@ import { parseFilter } from './query.mjs';
 const BIG = Number.MAX_SAFE_INTEGER;
 export function positionsQuery(text, col) {
   const { filter: f, error } = parseFilter(text, col.type); if (error || !f) return null;
+  if (col.decimals) return null;   // a column that stores decimals as numbers reads as text with fixed decimals: the column path compares that text
   const key = col.name;
+  if (f.op === 'in') {
+    if (col.type === 'string') return f.values.every((v) => v !== '') ? { equals: { key, anyOf: f.values } } : null;
+    if (col.type === 'integer') return f.values.every((v) => /^-?(0|[1-9]\d{0,14})$/.test(v) && v !== '-0') ? { equals: { key, anyOf: f.values.map(Number) } } : null;
+    return null;
+  }
   if (col.type === 'integer') {
     if (f.op === 'eq' && /^-?(0|[1-9]\d{0,14})$/.test(f.value) && f.value !== '-0') return { equals: { key, value: +f.value } };
     return null;

@@ -13,8 +13,8 @@ const out = process.argv[2]; const test = process.argv.includes('--test');
 if (!out) { console.error('usage: node tools/build-single.mjs OUT.html [--test]'); process.exit(2); }
 const rd = (p) => readFileSync(join(root, p), 'utf8');
 const strip = (src) => src.replace(/^import .*$/gm, '').replace(/^export (class|function|const) /gm, '$1 ');
-const mods = '(function(){\n' + ['src/ingest/delimited.mjs', 'src/ingest/infer.mjs', 'src/ingest/records.mjs', 'src/query/query.mjs', 'src/query/positions.mjs', 'src/query/columnar.mjs', 'src/export/csv.mjs', 'app/bigdata.mjs'].map((f) => strip(rd(f))).join('\n') +
-  '\nreturn { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, typedCell, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, topSortIndices, positionsQuery, csvField, csvLines, csvHeader, HEADER, cells, line };\n})()';
+const mods = '(function(){\n' + ['src/ingest/delimited.mjs', 'src/ingest/infer.mjs', 'src/ingest/records.mjs', 'src/query/query.mjs', 'src/query/positions.mjs', 'src/query/topn.mjs', 'src/query/columnar.mjs', 'src/export/csv.mjs', 'app/bigdata.mjs'].map((f) => strip(rd(f))).join('\n') +
+  '\nreturn { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, typedCell, typedDecimal, sampleDecimals, cellFormat, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, topSortIndices, positionsQuery, csvField, csvLines, csvHeader, HEADER, cells, line };\n})()';
 const lfc = rd('vendor/lfcp/0.10.22/lfc-pack.js');
 const worker = rd('app/worker.js').replace(/^importScripts\(.*$/m, '');
 const workerSrc = 'self.__M = ' + mods + ';\n' + lfc + '\n;\n' + worker;
