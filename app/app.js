@@ -68,7 +68,7 @@
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
-    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search), gate: +((/[?&]gate=(\d+)/.exec(location.search) || [])[1] || 0) });
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search), noPositions: /[?&]nopos=1/.test(location.search), gate: +((/[?&]gate=(\d+)/.exec(location.search) || [])[1] || 0) });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
@@ -264,6 +264,11 @@
       await jump(0.5); const mid = G.rows[5]; add('middle of the file shows a consistent row', mid && same(mid, Number(mid[0])) && Number(mid[0]) > g.rows * 0.4 && Number(mid[0]) < g.rows * 0.6, mid && mid[0]);
       G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); s = performance.now(); const q = await applyQuery(); T.filterMs = Math.round(performance.now() - s);
       add('filter finds the last 10 rows', q.count === 10, String(q.count));
+      G.filters = { name: '=Name 5' }; buildHead(); s = performance.now(); const qe = await applyQuery(); T.eqMs = Math.round(performance.now() - s); T.eqByPositions = !!qe.byPositions; T.posError = qe.posError;
+      add('text equality filter finds every row of that name', qe.count === Math.floor((g.rows - 6) / 97) + 1, String(qe.count));
+      G.filters = { id: '>=' + Math.floor(g.rows * 0.5) }; buildHead(); s = performance.now(); const qr = await applyQuery(); T.rangeMs = Math.round(performance.now() - s);
+      add('range filter on half the rows', qr.count === g.rows - Math.floor(g.rows * 0.5), String(qr.count));
+      G.filters = { id: '>=' + (g.rows - 10) };
       add('the filtered rows are the last 10', G.rows.length === 10 && same(G.rows[0], g.rows - 10) && same(G.rows[9], g.rows - 1), G.rows[0] && G.rows[0][0]);
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
@@ -288,7 +293,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0848 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0930 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
