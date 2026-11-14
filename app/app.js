@@ -63,10 +63,11 @@
     host.innerHTML = G.rows.map((r) => '<div class="gr">' + r.map((v, i) => '<div class="gc' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? ' num' : '') + '" title="' + esc(v) + '">' + esc(v) + '</div>').join('') + '</div>').join('');
     return first;
   }
+  let winSeq = 0;   // the newest request wins: a slower, older reply (scrolling fast, or the worker busy) must not replace the rows for the place the person is now at
   async function loadWindow() {
-    const sc = $('gridscroll'), first = Math.max(0, topIndex() - 10);
+    const sc = $('gridscroll'), first = Math.max(0, topIndex() - 10), mine = ++winSeq;
     if (G.start >= 0 && Math.abs(first - G.start) < 10 && G.rows.length) { $('gridhead').scrollLeft = sc.scrollLeft; return; }
-    const r = await call({ type: 'page', start: first, count: WINDOW });
+    const r = await call({ type: 'page', start: first, count: WINDOW }); if (mine !== winSeq) return;
     G.start = r.start; G.rows = r.rows; G.numbers = r.numbers; renderRows(); $('gridhead').scrollLeft = sc.scrollLeft;
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
@@ -298,7 +299,7 @@
         await new Promise((ok) => { const vis = Math.ceil(sc.clientHeight / ROW); let blank = 0, blankRows = 0; const step = (now) => { gaps.push(now - last); last = now; const top = topIndex(), have0 = G.start, have1 = G.start + G.rows.length, miss = Math.max(0, Math.min(top + vis, g.rows) - Math.max(top, have0)) ; const unc = Math.min(top + vis, g.rows) - top - miss; if (unc > 0) { blank++; blankRows += unc; } T.blankFrames = blank; T.blankRowsAvg = +(blankRows / Math.max(1, gaps.length)).toFixed(2); const pos = Math.min(total, (now - t0) / 6000 * total); sc.scrollTop = pos; if (pos >= total) ok(); else requestAnimationFrame(step); }; requestAnimationFrame(step); });
         gaps.shift(); const so = gaps.slice().sort((a, b) => a - b), n = gaps.length, avg = gaps.reduce((a, b) => a + b, 0) / n;
         T.scroll = { rows: g.rows, frames: n, avgMs: +avg.toFixed(2), p99: +so[Math.floor(n * .99)].toFixed(1), maxMs: +so[n - 1].toFixed(1), over33: gaps.filter((x) => x > 33.4).length };
-        await new Promise((r) => setTimeout(r, 600)); const endRow = G.rows[G.rows.length - 1]; add('after the scroll the last row is shown', endRow && same(endRow, g.rows - 1), endRow && endRow[0]);
+        { const w0 = performance.now(); let endRow = null; do { await new Promise((r) => setTimeout(r, 100)); endRow = G.rows[G.rows.length - 1]; } while (!(endRow && same(endRow, g.rows - 1)) && performance.now() - w0 < 5000); T.scrollSettleMs = Math.round(performance.now() - w0); add('after the scroll the last row is shown', endRow && same(endRow, g.rows - 1), (endRow && endRow[0]) + ', settled in ' + T.scrollSettleMs + ' ms'); }   // the page loads on the next frame after the scroll stops: wait for it (up to 5 s) and record how long it took instead of a fixed 600 ms
       }
       G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); s = performance.now(); const q = await applyQuery(); T.filterMs = Math.round(performance.now() - s);
       add('filter finds the last 10 rows', q.count === 10, String(q.count));
