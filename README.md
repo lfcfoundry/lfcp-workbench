@@ -21,6 +21,7 @@ The experiment uses the pinned LFC-pack 0.4.19/API 0 build in [`vendor/lfcp/0.4.
 ## Project map
 
 - [`docs/architecture/`](docs/architecture/) — system boundaries and unresolved decisions.
+- **Data view (filters and sort):** whole-number and decimal columns are stored as numbers (decimals as exact scaled whole numbers, text kept when a cell would not read back unchanged), the top rows of a sort come back first through a typed top-N with block skipping, and `=a|b` keeps rows equal to any value. Details: [`app/README.md`](app/README.md); credits for the ideas borrowed from other projects: [`docs/CREDITS.md`](docs/CREDITS.md).
 - [`docs/CREDITS.md`](docs/CREDITS.md) — the projects, papers and authors whose ideas our optimized parts build on, each with a link.
 - [`docs/lfcp/`](docs/lfcp/) — Workbench-derived requirements and an evidence-based LFCP evolution process.
 - [`experiments/`](experiments/) — prototypes that remain explicitly separate from production code.
