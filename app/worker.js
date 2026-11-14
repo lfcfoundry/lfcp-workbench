@@ -457,6 +457,8 @@ async function remove(m) {
 // Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
 const MAX_DECODE_ROWS = 1000000;          // fallback path (decodes every row): used only when the file cannot be read by column
+const FIRST_PAGE_ROWS = 1000;   // a sort answers with this many rows first
+const ensureFull = () => { if (view.pending) { const f = view.pending.full(); view.indices = f; view.pending = null; } };
 const MAX_COLUMN_ROWS = 20000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
 let view = null, queryMod = null, colMod = null;
 async function openView(m) {
@@ -552,6 +554,7 @@ async function rowsAt(idx, from, to) {
 async function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   const t0 = performance.now(), active = Object.keys(m.filters || {}).filter((k) => m.filters[k]), plain = !m.sort && !active.length;
+  view.pending = null;
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
   const colOk = view.flat && view.total <= MAX_COLUMN_ROWS;
   if (colOk && !m.noInside) {
@@ -573,9 +576,13 @@ async function queryView(m) {
       view.indices = out; view.filtered = true;
       return send('queried', m.id, { count: out.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, zoneBlocks: zp.blocks.length, blocks: view.R.blocks.length });
     }
-    const cols = await loadColumns(names, m.stream), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort });
+    const cols = await loadColumns(names, m.stream), tLoad = Math.round(performance.now() - t0), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
+    if (r.first) {   // first page first: the best rows now, the full order only when a page beyond them (or an export) needs it
+      view.indices = new Uint32Array(r.count); view.indices.set(r.first); view.pending = { topN: r.first.length, full: r.full }; view.filtered = true;
+      return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad });
+    }
     view.indices = r.indices; view.filtered = true;
-    return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names });
+    return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, loadMs: tLoad });
   }
   if (!view.rows) {
     if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + (view.flat ? MAX_COLUMN_ROWS : MAX_DECODE_ROWS).toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
@@ -594,6 +601,7 @@ async function pageView(m) {
     const objs = n ? await view.R.rows({ from: m.start, count: n }) : [];
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name]))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
+    if (view.pending && m.start + m.count > view.pending.topN) ensureFull();
     const end = Math.min(view.indices.length, m.start + m.count), objs = await rowsAt(view.indices, m.start, end);
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name]))); numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
@@ -605,6 +613,7 @@ async function exportView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
     const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
+    ensureFull();
     const count = view.filtered ? view.indices.length : view.total, parts = [...(m.bom ? ['\uFEFF'] : []), csvHeader(view.columns, d)];
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
