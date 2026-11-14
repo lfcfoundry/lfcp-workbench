@@ -14,17 +14,20 @@ if (!out) { console.error('usage: node tools/build-single.mjs OUT.html [--test]'
 const rd = (p) => readFileSync(join(root, p), 'utf8');
 const strip = (src) => src.replace(/^import .*$/gm, '').replace(/^export (class|function|const) /gm, '$1 ');
 const mods = '(function(){\n' + ['src/ingest/delimited.mjs', 'src/ingest/infer.mjs', 'src/ingest/records.mjs', 'src/query/query.mjs', 'src/query/positions.mjs', 'src/query/topn.mjs', 'src/query/columnar.mjs', 'src/export/csv.mjs', 'app/bigdata.mjs'].map((f) => strip(rd(f))).join('\n') +
-  '\nreturn { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, typedCell, typedDecimal, sampleDecimals, cellFormat, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, topSortIndices, positionsQuery, csvField, csvLines, csvHeader, HEADER, cells, line };\n})()';
-const lfc = rd('vendor/lfcp/0.10.25/lfc-pack.js');
+  '\nreturn { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracker, typedCell, typedDecimal, sampleDecimals, cellFormat, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, primeTopN, topSortIndices, positionsQuery, csvField, csvLines, csvHeader, HEADER, cells, line };\n})()';
+const lfc = rd('vendor/lfcp/0.10.28/lfc-pack.js');
 const worker = rd('app/worker.js').replace(/^importScripts\(.*$/m, '');
 const workerSrc = 'self.__M = ' + mods + ';\n' + lfc + '\n;\n' + worker;
 for (const [n, t] of [['worker source', workerSrc], ['mods', mods]]) if (/<\/script|<!--/i.test(t)) throw new Error(n + ' contains a sequence that cannot sit inside a script element');
 const css = rd('app/app.css').trim();
-const app = 'window.__M = ' + mods + ';\nwindow.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsrc").textContent], { type: "text/javascript" }));\n' + rd('app/app.js');
+const app = 'window.__M = ' + mods + ';\nwindow.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsrc").textContent], { type: "text/javascript" }));\n' + rd('app/app.js')
+// --autobig=N: the page runs the N MB big-file test by itself when it opens (a phone cannot add ?bigtest=N to a downloaded file)
+const autoBig = (process.argv.find((a) => a.startsWith('--autobig=')) || '').slice(10);
+const appFinal = autoBig ? app.replace('const bt = /[?&]bigtest=(\\d+)/.exec(location.search);', 'const bt = /[?&]bigtest=(\\d+)/.exec(location.search) || [0, ' + Number(autoBig) + '];') : app;
 const h = (t) => "'sha256-" + createHash('sha256').update(t).digest('base64') + "'";
 let html = rd('app/index.html');
-html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${h(app)} 'wasm-unsafe-eval'; style-src ${h(css)}; worker-src blob:; connect-src ${test ? 'http://127.0.0.1:*' : "'none'"}; object-src 'none'; base-uri 'none'; form-action 'none'">`);
+html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${h(appFinal)} 'wasm-unsafe-eval'; style-src ${h(css)}; worker-src blob:; connect-src ${test ? 'http://127.0.0.1:*' : "'none'"}; object-src 'none'; base-uri 'none'; form-action 'none'">`);
 html = html.replace('<link rel="stylesheet" href="app.css">', '<style>' + css + '</style>').replace('<script defer src="app.js"></script>', '');
-html = html.replace('</body>', '<script type="text/plain" id="wsrc">' + workerSrc + '</script>\n<script>' + app + '</script>\n</body>');
+html = html.replace('</body>', '<script type="text/plain" id="wsrc">' + workerSrc + '</script>\n<script>' + appFinal + '</script>\n</body>');
 writeFileSync(out, html);
 console.log('wrote ' + out + ' (' + (html.length / 1024).toFixed(0) + ' KB)' + (test ? ' [test build]' : ''));

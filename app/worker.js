@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.10.25/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.10.28/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -550,7 +550,7 @@ async function warmColumn(n) {
   const v = view, c = v.columns.find((x) => x.name === n), num = c && (c.type === 'integer' || c.type === 'number');
   // a number column comes back as a typed array (NaN = empty cell): half the memory, and the top-N sort can scan it without parsing (src/query/topn.mjs)
   const got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), num ? { keys: [n], nulls: 'NaN' } : { keys: [n] });
-  if (view === v && got[n] && !v.cols.has(n)) v.cols.set(n, got[n]);
+  if (view === v && got[n] && !v.cols.has(n)) { v.cols.set(n, got[n]); if (ArrayBuffer.isView(got[n]) && colMod && colMod.primeTopN) colMod.primeTopN(got[n]); }
 }
 async function loadColumns(names, stream, plain) {
   const want = names.filter((n) => !view.cols.has(n));
@@ -562,7 +562,7 @@ async function loadColumns(names, stream, plain) {
     else for (let b = 0; b < view.R.blocks.length; b++) put(await view.R.columns(b, { keys: want }));
     // a cell that is text in a number column (a decimal that did not fit the typed form) cannot live in a typed array: that column is read again as plain cells
     const again = want.filter((n, k) => bad[k]);
-    want.forEach((n, k) => { if (!bad[k]) view.cols.set(n, out[k]); });
+    want.forEach((n, k) => { if (!bad[k]) { view.cols.set(n, out[k]); if (isNum[k] && colMod && colMod.primeTopN) colMod.primeTopN(out[k]); } });
     if (again.length) await loadColumns(again, stream, true);
   }
   const cols = {}; for (const n of names) cols[n] = view.cols.get(n); return cols;
@@ -632,7 +632,10 @@ async function rowsAt(idx, from, to) {
     let list = byBlock.get(lo); if (!list) byBlock.set(lo, list = []); list.push(i);
   }
   for (const [b, list] of byBlock) {
-    let rows = view.cache.get(b); if (!rows) { rows = await R.block(b); view.cache.set(b, rows); if (view.cache.size > 8) view.cache.delete(view.cache.keys().next().value); }
+    let rows = view.cache.get(b);
+    if (rows) { for (const i of list) out[i - from] = rows[idx[i] - firsts[b]]; continue; }
+    if (list.length <= 64) { const got = await R.block(b, { rows: list.map((i) => idx[i] - firsts[b]) }); for (let k = 0; k < list.length; k++) out[list[k] - from] = got[k]; continue; }   // few rows of this block: read just those (LFC-pack 0.10.26)
+    rows = await R.block(b); view.cache.set(b, rows); if (view.cache.size > 8) view.cache.delete(view.cache.keys().next().value);
     for (const i of list) out[i - from] = rows[idx[i] - firsts[b]];
   }
   return out;

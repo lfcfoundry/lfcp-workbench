@@ -13,7 +13,7 @@ import { TypeTracker, typedCell, typedDecimal, sampleDecimals, cellFormat, forma
 import { runQuery } from '../src/query/query.mjs';
 import { runColumnQuery } from '../src/query/columnar.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
-const lib = createRequire(import.meta.url)(join(here, '../vendor/lfcp/0.10.25/lfc-pack.js')); await lib.init();
+const lib = createRequire(import.meta.url)(join(here, '../vendor/lfcp/0.10.28/lfc-pack.js')); await lib.init();
 let seed = 4242; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296, ri = (n) => Math.floor(rnd() * n), pick = (a) => a[ri(a.length)];
 
 // 1. round trip

@@ -9,7 +9,7 @@ LFCP Workbench borrows ideas from other projects and papers. Where an optimized 
 | Typed decimals: a decimal cell stored as a whole number scaled by 10^d, text kept when not exact | [`src/ingest/infer.mjs`](../src/ingest/infer.mjs) (`typedDecimal`, `sampleDecimals`, `formatScaled`), [`src/query/query.mjs`](../src/query/query.mjs) | Fixed-point DECIMAL columns | Apache Parquet DECIMAL logical type ([spec](https://parquet.apache.org/docs/file-format/types/logicaltypes/)); DuckDB DECIMAL ([docs](https://duckdb.org/docs/stable/sql/data_types/numeric)) |
 | One-of filter `=a\|b` | [`src/query/query.mjs`](../src/query/query.mjs), [`src/query/positions.mjs`](../src/query/positions.mjs) | SQL `IN (...)` list tested with a hash set | ISO SQL; see DuckDB's [IN operator](https://duckdb.org/docs/stable/sql/expressions/in); LFC-pack's own `anyOf` row-number query does the work on columns not decoded yet |
 | Wasm row builder (when shipped) | `app/worker.js` | Compiling a small C routine to WebAssembly (SIMD) | [WebAssembly](https://webassembly.org/) community group; [LLVM / clang](https://llvm.org/) |
-| Compression, row numbers, zone ranges | `vendor/lfcp/` | LFC-pack | LFC Foundry; zstd by Yann Collet and Meta ([zstd](https://facebook.github.io/zstd/)), see [`vendor/lfcp/0.10.25/NOTICE-zstd.txt`](../vendor/lfcp/0.10.25/NOTICE-zstd.txt) |
+| Compression, row numbers, zone ranges | `vendor/lfcp/` | LFC-pack | LFC Foundry; zstd by Yann Collet and Meta ([zstd](https://facebook.github.io/zstd/)), see [`vendor/lfcp/0.10.28/NOTICE-zstd.txt`](../vendor/lfcp/0.10.28/NOTICE-zstd.txt) |
 
 Rivals we measure against (no code used): DuckDB-WASM, SQLite-WASM, Arquero, Papa Parse, Perspective, Glide Data Grid. Each results file records the exact versions tested.
 

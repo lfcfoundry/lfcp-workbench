@@ -19,6 +19,8 @@ function blockSummary(a, B) {
   for (let b = 0; b < nb; b++) { let lo = Infinity, hi = -Infinity; const e = Math.min(a.length, (b + 1) * B); for (let i = b * B; i < e; i++) { const x = a[i]; if (x < lo) lo = x; if (x > hi) hi = x; } mn[b] = lo; mx[b] = hi; }
   s = { B, mn, mx }; SUMMARIES.set(a, s); return s;
 }
+// Builds the block summaries ahead of the first sort (the warm-up calls this once a number column is decoded, so a person's first sort skips the one pass over every value).
+export function primeSummary(a, B = BLOCK) { if (a && a.length > B) blockSummary(a, B); }
 export function topSortTyped(a, k, sign, B = BLOCK) {
   if (k <= 0 || a.length <= k) return null;
   const hv = new Float64Array(k), hi = new Int32Array(k); let size = 0;

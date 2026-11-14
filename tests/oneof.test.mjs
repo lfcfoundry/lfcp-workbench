@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { positionsQuery } from '../src/query/positions.mjs';
 import { runColumnQuery } from '../src/query/columnar.mjs';
-const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.10.25/lfc-pack.js')); await lib.init();
+const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.10.28/lfc-pack.js')); await lib.init();
 let seed = 777; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
 const n = 6000, rows = [];
 for (let i = 0; i < n; i++) rows.push({ id: i, k: rnd() < 0.08 ? null : Math.floor(rnd() * 50) - 10, name: rnd() < 0.1 ? null : 'Name ' + Math.floor(rnd() * 40), note: 'note ' + i });

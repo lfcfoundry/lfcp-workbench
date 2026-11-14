@@ -3,7 +3,8 @@
 // Returns the same {indices, errors}. Used when only the filtered or sorted columns were decoded from the dataset
 // (LfcPack.unpackColumns), which skips making a row object per row and decoding the other columns.
 import { parseFilter, matches, sortKeyFor, formatScaled } from './query.mjs';
-import { topSortTyped, BLOCK } from './topn.mjs';   // typed top-N with block skipping: see the credits in that file
+import { topSortTyped, BLOCK, primeSummary } from './topn.mjs';   // typed top-N with block skipping: see the credits in that file
+export function primeTopN(a) { primeSummary(a); }
 
 export function runColumnQuery(cols, n, columns, { filters = {}, sort = null, top = 0 } = {}, opts = {}) {
   const errors = {}, active = [];
@@ -11,6 +12,10 @@ export function runColumnQuery(cols, n, columns, { filters = {}, sort = null, to
     const text = filters[c.name]; if (!text) continue;
     const { filter, error } = parseFilter(text, c.type);
     if (error) errors[c.name] = error; else if (filter) active.push([cols[c.name], filter, c.decimals]);
+  }
+  if (top && sort && sort.col && cols[sort.col] && !active.length && ArrayBuffer.isView(cols[sort.col]) && cols[sort.col].length === n) {   // whole typed column, no filter: the answer needs no row-number array (7M numbers to allocate and fill)
+    const col = columns.find((c) => c.name === sort.col), numeric = col && (col.type === 'integer' || col.type === 'number' || col.type === 'date');
+    if (numeric) { const first = topSortTyped(cols[sort.col], top, sort.dir === 'desc' ? -1 : 1, opts.block || BLOCK); if (first) return { first, count: n, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices }; }
   }
   let idx;
   if (!active.length) { idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; }
