@@ -494,8 +494,8 @@ async function importOnce(m) {
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
-    let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null;
-    const packWorkers = m.packWorkers != null ? m.packWorkers : 2;   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
+    let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
+    const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? 1 : 2);   // live columns: one pack worker while parsing (the cores go to the parse helpers), three more when parsing is done   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
     if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(new Worker(self.location.href)); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
     if (pws) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
@@ -510,6 +510,7 @@ async function importOnce(m) {
         pump();
       };
       for (const w of pws) { w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
+      morePack = (k) => { try { for (let i = 0; i < k; i++) { const w = new Worker(self.location.href); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); } pump(); } catch { /* the workers we have keep going */ } };   // parsing is done: its cores join the packing
       job.abort = () => { failed = Object.assign(new Error('Import cancelled.'), { cancelled: true }); pump(); };
       const send1 = async (msg, tr) => {
         while (!idle.length && !failed) await new Promise((r) => { wake = r; });
@@ -569,7 +570,7 @@ async function importOnce(m) {
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
-    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); }
+    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (morePack && m.morePack !== 0) morePack(m.morePack || 3); }
     await finishPacking();
     await write(packer.finish());
     await writable.close(); closed = true; writable = null;
@@ -666,14 +667,18 @@ const LIVE_MAX = 600 * 1048576;   // about 1.04x the CSV in memory while the imp
 async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
   const n = headers.length, starts = new Uint32Array(chunks.length + 1); for (let i = 0; i < chunks.length; i++) starts[i + 1] = starts[i] + chunks[i].n;
-  const nums = new Map(), kindOf = headers.map((_, k) => !!(plan && (plan[k] === true || (typeof plan[k] === 'number' && plan[k] > 0)))), dec = new TextDecoder();
+  const nums = new Map(), kindOf = headers.map((_, k) => !!(plan && (plan[k] === true || (typeof plan[k] === 'number' && plan[k] > 0)))), dec = new TextDecoder(), latin = new TextDecoder('latin1');
   for (let k = 0; k < n; k++) if (kindOf[k]) { const a = new Float64Array(rows); for (let i = 0; i < chunks.length; i++) a.set(chunks[i].cols[k], starts[i]); nums.set(headers[k], a); }
   const find = (r) => { let lo = 0, hi = chunks.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= r) lo = mid; else hi = mid - 1; } return lo; };
   const L = {
     row(r) { const o = {}, c = find(r), i = r - starts[c]; for (let k = 0; k < n; k++) { if (kindOf[k]) { const x = nums.get(headers[k])[r]; o[headers[k]] = x !== x ? null : x; } else { const x = chunks[c].cols[k]; o[headers[k]] = dec.decode(x.bytes.subarray(x.start[i], x.end[i])); } } return o; },
     column(nm) {   // a text column (or a number column that stayed text) as an array of strings, made the first time a filter or sort needs it
       const k = headers.indexOf(nm), out = new Array(rows); let at = 0;
-      for (const ch of chunks) { const x = ch.cols[k]; for (let r = 0; r < ch.n; r++) out[at++] = dec.decode(x.bytes.subarray(x.start[r], x.end[r])); }
+      for (const ch of chunks) {
+        const x = ch.cols[k], b = x.bytes; let ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; }
+        if (ascii) { const s = latin.decode(b); for (let r = 0; r < ch.n; r++) out[at++] = s.substring(x.start[r], x.end[r]); }   // plain ASCII chunk: one decode, then slices
+        else for (let r = 0; r < ch.n; r++) out[at++] = dec.decode(b.subarray(x.start[r], x.end[r]));
+      }
       return out;
     },
   };
