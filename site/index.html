@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-YRl5Zc52Z3s8daM1wDnLugBRm+WqkUoOxWgo7Sk6B/w=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-yVM5edTPjZ9uxBKQoGRIrKskOUoYYSh5Y/HmThXGxwI=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -26,7 +26,7 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 
 </head>
 <body>
-<header><h1>LFCFoundry Workbench <small id="ver">2026.11.14.0811</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<header><h1>LFCFoundry Workbench <small id="ver">2026.11.14.0829</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
 <main>
   <section>
     <h2>Import</h2>
@@ -413,7 +413,8 @@ function topSortIndices(idx, src, key, sign, text, k) {
   let thrOn = false, thrNum = 0, thrStr = '';
   const setThr = () => { if (hrank[0] === 0) { thrOn = true; thrNum = sign * hnum[0]; thrStr = hstr ? hstr[0] : ''; } else thrOn = false; };
   for (let t = 0; t < len; t++) {
-    const i = idx[t], v = src[i];
+    const i = idx[t];
+    const v = src[i];
     if (thrOn && v != null && v !== '') {
       if (text) { const s0 = String(v); if (sign > 0 ? s0 >= thrStr : s0 <= thrStr) continue; }
       else { const x0 = key(v); if (x0 === x0 && sign * x0 >= thrNum) continue; }
@@ -4374,6 +4375,7 @@ async function remove(m) {
 // Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
 const MAX_DECODE_ROWS = 1000000;          // fallback path (decodes every row): used only when the file cannot be read by column
+const MAX_WARM_ROWS = 10000000;   // background decode of the number columns: 10 million rows at most, and not on devices that report 4 GB of memory or less
 const FIRST_PAGE_ROWS = 1000;   // a sort answers with this many rows first
 const ensureFull = () => { if (view.pending) { const f = view.pending.full(); view.indices = f; view.pending = null; } };
 const MAX_COLUMN_ROWS = 20000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
@@ -4389,6 +4391,12 @@ async function openView(m) {
     const R = await LfcPack.open(f), total = R.info.rows;
     view = { name: m.name, R, f, total, rows: null, columns: entry.columns, indices: null, filtered: false, cols: new Map(), flat: R.blocks.length > 0 && R.blocks.every((b) => b.kind === 'f' && !b.table), cache: new Map() };
     send('opened', m.id, { name: m.name, total, columns: entry.columns });
+    // Warm the sort columns: whole-number, decimal and date columns are decoded on helper threads while the person looks at the first page,
+    // so the first sort of one of them only has the selection scan left (the decode was most of a first sort).
+    if (!m.noWarm && view.flat && total <= MAX_WARM_ROWS && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory <= 4) && LfcPack.unpackColumnsParallel && view.f.size <= WHOLE_FILE_MAX) {
+      const v = view, names = v.columns.filter((c) => c.type === 'integer' || c.type === 'number' || c.type === 'date').map((c) => c.name);
+      setTimeout(async () => { for (const n of names) { if (view !== v) return; try { await warmColumn(n); } catch {} } }, 300);
+    }
   } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
 }
 // Column path: only the columns a filter or sort needs are decoded (LfcPack.unpackColumns), kept per column so typing in a filter box does not decode again.
@@ -4396,6 +4404,11 @@ async function openView(m) {
 // Two ways, same result. A stored file up to WHOLE_FILE_MAX is read once and all wanted columns decoded together (2 to 3 times faster in all three
 // browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.7.0), so memory stays at the kept columns plus one block.
 const WHOLE_FILE_MAX = 384 * 1048576;
+async function warmColumn(n) {
+  if (view.cols.has(n)) return;
+  const v = view, got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), { keys: [n] });
+  if (view === v && got[n] && !v.cols.has(n)) v.cols.set(n, got[n]);
+}
 async function loadColumns(names, stream) {
   const want = names.filter((n) => !view.cols.has(n));
   if (want.length) {
@@ -4493,10 +4506,10 @@ async function queryView(m) {
       view.indices = out; view.filtered = true;
       return send('queried', m.id, { count: out.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, zoneBlocks: zp.blocks.length, blocks: view.R.blocks.length });
     }
-    const cols = await loadColumns(names, m.stream), tLoad = Math.round(performance.now() - t0), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
+    const cols = await loadColumns(names, m.stream), tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
     if (r.first) {   // first page first: the best rows now, the full order only when a page beyond them (or an export) needs it
       view.indices = new Uint32Array(r.count); view.indices.set(r.first); view.pending = { topN: r.first.length, full: r.full }; view.filtered = true;
-      return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad });
+      return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad, selMs: Math.round(performance.now() - tq0) });
     }
     view.indices = r.indices; view.filtered = true;
     return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, loadMs: tLoad });
@@ -4916,7 +4929,8 @@ function topSortIndices(idx, src, key, sign, text, k) {
   let thrOn = false, thrNum = 0, thrStr = '';
   const setThr = () => { if (hrank[0] === 0) { thrOn = true; thrNum = sign * hnum[0]; thrStr = hstr ? hstr[0] : ''; } else thrOn = false; };
   for (let t = 0; t < len; t++) {
-    const i = idx[t], v = src[i];
+    const i = idx[t];
+    const v = src[i];
     if (thrOn && v != null && v !== '') {
       if (text) { const s0 = String(v); if (sign > 0 ? s0 >= thrStr : s0 <= thrStr) continue; }
       else { const x0 = key(v); if (x0 === x0 && sign * x0 >= thrNum) continue; }
@@ -5047,7 +5061,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
   async function openGrid(name) {
     status('Opening ' + name + '…');
-    const r = await call({ type: 'open', name });
+    const r = await call({ type: 'open', name, noWarm: /[?&]nowarm=1/.test(location.search) });
     if (r.type === 'error') { status(r.message, true); return; }
     Object.assign(G, { cols: r.columns, filters: {}, sort: null }); $('gridbox').hidden = false; $('gridtitle').textContent = 'Data: ' + r.name; buildHead(); await applyQuery(); status('Opened. Type in a filter box or click a column name.');
     return r;
@@ -5226,7 +5240,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       add('the filtered rows are the last 10', G.rows.length === 10 && same(G.rows[0], g.rows - 10) && same(G.rows[9], g.rows - 1), G.rows[0] && G.rows[0][0]);
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
-      G.sort = { col: 'score', dir: 'asc' }; buildHead(); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s); T.scoreLoadMs = q3.loadMs;
+      G.sort = { col: 'score', dir: 'asc' }; buildHead(); await new Promise((r) => setTimeout(r, 4000)); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s); T.scoreLoadMs = q3.loadMs;
       G.sort = { col: 'note', dir: 'asc' }; buildHead(); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); T.textLoadMs = q4.loadMs; add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
       T.fullMatch = {};   // a filter every row satisfies (id >= 0): first query on a freshly opened dataset (cold) and the same again (warm), with and without the full-match shortcut
       for (const ni of [true, false]) {
@@ -5247,7 +5261,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
 
   function report() {
-    const L = ['LFCFoundry Workbench results', 'Workbench version: 2026.11.14.0811 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCFoundry Workbench results', 'Workbench version: 2026.11.14.0829 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }

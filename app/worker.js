@@ -457,6 +457,7 @@ async function remove(m) {
 // Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
 const MAX_DECODE_ROWS = 1000000;          // fallback path (decodes every row): used only when the file cannot be read by column
+const MAX_WARM_ROWS = 10000000;   // background decode of the number columns: 10 million rows at most, and not on devices that report 4 GB of memory or less
 const FIRST_PAGE_ROWS = 1000;   // a sort answers with this many rows first
 const ensureFull = () => { if (view.pending) { const f = view.pending.full(); view.indices = f; view.pending = null; } };
 const MAX_COLUMN_ROWS = 20000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
@@ -472,6 +473,12 @@ async function openView(m) {
     const R = await LfcPack.open(f), total = R.info.rows;
     view = { name: m.name, R, f, total, rows: null, columns: entry.columns, indices: null, filtered: false, cols: new Map(), flat: R.blocks.length > 0 && R.blocks.every((b) => b.kind === 'f' && !b.table), cache: new Map() };
     send('opened', m.id, { name: m.name, total, columns: entry.columns });
+    // Warm the sort columns: whole-number, decimal and date columns are decoded on helper threads while the person looks at the first page,
+    // so the first sort of one of them only has the selection scan left (the decode was most of a first sort).
+    if (!m.noWarm && view.flat && total <= MAX_WARM_ROWS && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory <= 4) && LfcPack.unpackColumnsParallel && view.f.size <= WHOLE_FILE_MAX) {
+      const v = view, names = v.columns.filter((c) => c.type === 'integer' || c.type === 'number' || c.type === 'date').map((c) => c.name);
+      setTimeout(async () => { for (const n of names) { if (view !== v) return; try { await warmColumn(n); } catch {} } }, 300);
+    }
   } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
 }
 // Column path: only the columns a filter or sort needs are decoded (LfcPack.unpackColumns), kept per column so typing in a filter box does not decode again.
@@ -479,6 +486,11 @@ async function openView(m) {
 // Two ways, same result. A stored file up to WHOLE_FILE_MAX is read once and all wanted columns decoded together (2 to 3 times faster in all three
 // browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.7.0), so memory stays at the kept columns plus one block.
 const WHOLE_FILE_MAX = 384 * 1048576;
+async function warmColumn(n) {
+  if (view.cols.has(n)) return;
+  const v = view, got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), { keys: [n] });
+  if (view === v && got[n] && !v.cols.has(n)) v.cols.set(n, got[n]);
+}
 async function loadColumns(names, stream) {
   const want = names.filter((n) => !view.cols.has(n));
   if (want.length) {
@@ -576,10 +588,10 @@ async function queryView(m) {
       view.indices = out; view.filtered = true;
       return send('queried', m.id, { count: out.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, zoneBlocks: zp.blocks.length, blocks: view.R.blocks.length });
     }
-    const cols = await loadColumns(names, m.stream), tLoad = Math.round(performance.now() - t0), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
+    const cols = await loadColumns(names, m.stream), tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
     if (r.first) {   // first page first: the best rows now, the full order only when a page beyond them (or an export) needs it
       view.indices = new Uint32Array(r.count); view.indices.set(r.first); view.pending = { topN: r.first.length, full: r.full }; view.filtered = true;
-      return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad });
+      return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad, selMs: Math.round(performance.now() - tq0) });
     }
     view.indices = r.indices; view.filtered = true;
     return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, loadMs: tLoad });
