@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-dpZX9RgCAvrBmEneCDx3HNdnA1GqUKomxEr7iYc17Tg=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-YRl5Zc52Z3s8daM1wDnLugBRm+WqkUoOxWgo7Sk6B/w=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -26,7 +26,7 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 
 </head>
 <body>
-<header><h1>LFCFoundry Workbench <small id="ver">2026.11.14.0636</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<header><h1>LFCFoundry Workbench <small id="ver">2026.11.14.0811</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
 <main>
   <section>
     <h2>Import</h2>
@@ -5247,7 +5247,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
 
   function report() {
-    const L = ['LFCFoundry Workbench results', 'Workbench version: 2026.11.14.0636 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCFoundry Workbench results', 'Workbench version: 2026.11.14.0811 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
