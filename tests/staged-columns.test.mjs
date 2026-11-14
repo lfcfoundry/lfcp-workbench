@@ -47,7 +47,6 @@ for (const n of [1, 5, 60, 2500]) {
 }
 // bail rules
 assert.equal(buildColumns(enc.encode('007,a,1.50,2026-11-01,n\n'), headers, plan, ',').bail, 'mixed');
-assert.equal(buildColumns(enc.encode('1,"q",1.50,2026-11-01,n\n'), headers, plan, ',').bail, 'line');
 assert.equal(buildColumns(enc.encode('1,a,1.50,2026-11-01\n'), headers, plan, ',').bail, 'line');
 const part = buildColumns(enc.encode('1,a,1.50,2026-11-01,n\n2,b,2.50,2026-11-02,m\n3,c,3'), headers, plan, ',');
 assert.equal(part.n, 2); assert.equal(part.bail, null);   // an unfinished last line waits
@@ -71,9 +70,66 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
     chunks++;
   }
   // bail rules agree
-  for (const t of ['007,a,1.50,2026-11-01,n\n', '1,"q",1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01\n', '1,a,1.5,2026-11-01,n\n', '1,a,-0.00,2026-11-01,n\n', '-0,a,1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01,é\n']) {
+  for (const t of ['007,a,1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01\n', '1,a,1.5,2026-11-01,n\n', '1,a,-0.00,2026-11-01,n\n', '-0,a,1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01,é\n']) {
     const w = B.build(enc.encode(t)), r = buildColumns(enc.encode(t), headers, plan, ',');
     assert.equal(w.bail, r.bail, t); assert.equal(w.n, r.n, t);
   }
   console.log(`ok: wasm column builder equals the JavaScript reference (${chunks} chunks, bail rules)`);
+}
+
+// Quoted cells in the wasm builder: quoted cells (also with delimiters, line breaks and CRLF inside) land in the same columns as the character parser makes;
+// cells with an escaped quote (""), a backslash, non-ASCII text or a wrong field count stop the chunk at that record (bail 'line') for the character parser.
+{
+  const { make } = await import('../src/ingest/colbuild.mjs');
+  const { readFileSync } = await import('node:fs');
+  const { DelimitedParser } = await import('../src/ingest/delimited.mjs');
+  const wasm = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../wasm/colbuild.wasm'));
+  const hs = ['id', 'name', 'score', 'note'], pl = [true, false, 2, false];
+  const q = (v) => '"' + v + '"';
+  const rec = (i, kind) => {
+    const id = String(i), sc = (i % 7 ? ((i % 90) + '.25') : '');
+    switch (kind) {
+      case 0: return [id, 'plain ' + i, sc, 'n' + i].join(',');
+      case 1: return [q(id), q('quoted ' + i), q(sc), q('note ' + i)].join(',');
+      case 2: return [q(id), q('has, comma ' + i), sc, q('line\nbreak\r\nand tab\t' + i)].join(',');
+      case 3: return [id, q(''), q(''), ''].join(',');
+      case 4: return [q(id), q('esc "" quote'), sc, 'x'].join(',');   // weird: escaped quote
+      case 5: return [id, 'back\\slash', sc, 'x'].join(',');   // weird: backslash
+      case 6: return [id, 'caf\u00e9', sc, 'x'].join(',');   // weird: non-ASCII
+      case 7: return [id, 'only two'].join(',');   // weird: wrong field count
+      case 8: return [id, 'mid"quote', sc, 'x'].join(',');   // weird: a quote inside an unquoted cell
+      default: return [id, q('a'), sc, q('b') + 'x'].join(',');   // weird: text after the closing quote
+    }
+  };
+  const weird = new Set([4, 5, 6, 7, 8, 9]);
+  let seed2 = 99; const r2 = () => (seed2 = (seed2 * 1103515245 + 12345) >>> 0) / 4294967296;
+  for (const eol of ['\n', '\r\n']) {
+    const recs = [], kinds = []; for (let i = 0; i < 4000; i++) { const k = r2() < 0.08 ? 4 + Math.floor(r2() * 6) : Math.floor(r2() * 4); kinds.push(k); recs.push(rec(i, k)); }
+    const offs = [0]; const text = recs.map((r) => r + eol).join(''); for (const r of recs) offs.push(offs[offs.length - 1] + enc.encode(r).length + eol.length);
+    const bytes = enc.encode(text);
+    // oracle: the character parser's cells, one well-formed record at a time
+    const oracle = new Map(); for (let k = 0; k < recs.length; k++) if (!weird.has(kinds[k])) { const out = []; new DelimitedParser(',', (f) => out.push(f)).feed(recs[k] + eol, true); assert.equal(out.length, 1); oracle.set(k, out[0]); }
+    const B = await make(wasm, hs, pl, ',', { capRows: 512, chunkBytes: 1 << 20 });
+    let pos = 0, idx = 0, built = 0, bails = 0;
+    while (pos < bytes.length) {
+      const w = B.build(bytes.subarray(pos)); let rows = w.n;
+      for (let r = 0; r < rows; r++, idx++) {
+        assert.ok(!weird.has(kinds[idx]), 'record ' + idx + ' kind ' + kinds[idx] + ' should have stopped the chunk');
+        const f = oracle.get(idx);
+        const num = (s) => (s === '' ? NaN : typedCell(s)), dec = (s) => (s === '' ? NaN : typedDecimal(s, 2));
+        const g = (c) => w.cols[hs[c]];
+        const txt = (c) => { const x = g(c); return new TextDecoder().decode(x.bytes.subarray(x.start[r], x.end[r])); };
+        assert.deepEqual([g(0)[r], g(2)[r] !== g(2)[r] ? 'NaN' : g(2)[r], txt(1), txt(3)], [num(f[0]), dec(f[2]) !== dec(f[2]) ? 'NaN' : dec(f[2]), f[1], f[3]], 'record ' + idx + ' ' + JSON.stringify(recs[idx]));
+        built++;
+      }
+      assert.equal(w.used, offs[idx] - pos, 'used covers exactly the built records');
+      pos = offs[idx];
+      if (w.bail === 'line') {  assert.ok(weird.has(kinds[idx]), 'bailed on a well-formed record ' + idx + ' ' + JSON.stringify(recs[idx])); pos = offs[idx + 1]; idx++; bails++; }
+      else if (w.bail) assert.fail('unexpected bail ' + w.bail);
+      else if (rows === 0 && w.used === 0) { pos = offs[idx + 1]; idx++; }
+    }
+    // line count: the builder reports the physical lines of the records it built
+    const w2 = B.build(enc.encode([rec(1, 2), rec(2, 1)].join(eol) + eol)); assert.equal(w2.n, 2); assert.equal(B.exports.nlines(), 4 + (eol === '\r\n' ? 0 : 0) + 0 - 0, 'physical lines: 2 breaks inside the first record plus 2 record ends');
+    console.log(`ok: quoted cells (${eol === '\n' ? 'LF' : 'CRLF'}): ${built} records built, ${bails} weird records stopped the chunk`);
+  }
 }
