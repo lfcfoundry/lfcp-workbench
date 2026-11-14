@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-IlDOxy2QeW83s1ggf5zWf1253r/Twmvww6nrm2fQe9o=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ET8ZUJwriY0+m8XBvb9n2AX8tHUGtcfIfTJ6kp5YrAI=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCP Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -26,7 +26,7 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 
 </head>
 <body>
-<header><h1>LFCP Workbench <small id="ver">2026.11.14.0930</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<header><h1>LFCP Workbench <small id="ver">2026.11.14.0941</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
 <main>
   <section>
     <h2>Import</h2>
@@ -477,7 +477,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
  * Part of JS-modules, https://github.com/lfcfoundry/JS-modules
  * Copyright (c) 2026 LFC Foundry. MIT License (see LICENSE at the repository root).
- * Version 0.10.19 (API 0)
+ * Version 0.10.20 (API 0)
  *
  * Needs WebAssembly (zstd, the tokenizer and the string deduplicator are compiled from C; page policy 'wasm-unsafe-eval' and nothing else). No other dependency, one file.
  * Contains zstd 1.5.7 (BSD-3-Clause, Meta Platforms), compiled to wasm32; see NOTICE-zstd.txt next to this file.
@@ -2763,7 +2763,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     if (inputs[ti].rowsArr) {   // B18b: row objects, in slices of about one block of text
       var RA = inputs[ti].rowsArr, est = JSON.stringify(RA.slice(0, 1024)).length / Math.min(1024, RA.length) + 1, stp = Math.max(1024, Math.floor(bb / est)), ra, sl, cnt;
       var hb0 = opts._hb && headOn(est * RA.length, bb) ? Math.max(1, Math.ceil(HEAD_BYTES / est)) : 0;   // P13i: the B22 head block for tables that took the text path before
-      for (ra = 0, cnt = hb0 || stp;   /* B22 is for the text path: a head block on row saves made the first saves 1.2x slower (10 MB table, Chromium) */ ra < RA.length; ra += cnt, cnt = stp) { sl = RA.slice(ra, ra + cnt); blk = writeFlatBlock(ctx, { rowsIn: sl }, opts); if (!blk) return packManyNow([{ name: inputs[ti].name, bytes: rowsBytes(RA) }], opts);
+      for (ra = 0, cnt = hb0 || stp;   /* B22 is for the text path: a head block on row saves made the first saves 1.2x slower (10 MB table, Chromium) */ ra < RA.length; ra += cnt, cnt = stp) { sl = RA.slice(ra, ra + cnt); blk = writeFlatBlock(ctx, { rowsIn: sl }, opts); if (!blk) return packManyNow([{ name: inputs[ti].name, bytes: rowsBytes(RA) }], opts); if (blk.rows <= B39_ROWS && ra === 0 && sl.length === RA.length && inputs.length === 1) { blk = b39Small(ctx, blk, sl, opts, st); if (blk.kind === 'r') NMARK = nm0; }
         blocks.push(blockEntry(opts, off, blk.bytes, blk.rows, blk.kind || 'n', ti)); zone.push(blk.zone); var eqb = blk.kind === 'f' ? eqOf(blk) : 0; eqf.push(eqb); if (eqb) eqAny = true; parts.push(blk.bytes); off += blk.bytes.length; rows += blk.rows; }
       tail = true; continue;
     }
@@ -2789,6 +2789,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
         if (mid < 0 || mid + 1 >= e) throw err;
         retry.push([mid + 1, e], [s0, mid + 1]); continue;
       }
+      if (!exact && s0 === 0 && e === b.length && inputs.length === 1 && !retry.length) { blk = b39Small(ctx, blk, chunk, opts, st); if (blk.kind === 'r') NMARK = nm0; }
       if (exact) { ex = exceptionsOf(blk, chunk, blk.kind || 'n'); if (ex) { if (ex.raw.length) exc[blocks.length] = ex.raw; if (ex.spell.length) spl[blocks.length] = ex.spell; } }
       blocks.push(blockEntry(opts, off, blk.bytes, blk.rows, blk.kind || 'n', ti, blk.kind === 'f' ? blk.prefix : undefined)); zone.push(blk.zone); var eqb = blk.kind === 'f' ? eqOf(blk) : 0; eqf.push(eqb); if (eqb) eqAny = true; parts.push(blk.bytes);
       off += blk.bytes.length; rows += blk.rows;
@@ -2802,6 +2803,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       { id: SEC_ZONE, flags: 0, payload: te.encode(JSON.stringify(zone)) },
       { id: SEC_FLAGS, flags: 1, payload: te.encode(JSON.stringify({ exact: exact, tail: tail })) }
     ];
+    if (blocks.length === 1 && rows < 100 && !opts._piece) secs.splice(2, 1);   // B39: a one-block table under 100 rows skips the zone maps (60-200 bytes; with one block they never skip anything)
     if (eqs) secs.push(eqs);
     secs = secs.concat(metaSecs(opts));
     if (st && !opts._st && st.used) secs.push(sharedSection(st));
@@ -2893,6 +2895,40 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     for (; (i = chunk.indexOf(10, i)) >= 0; i++) n++;
     if (chunk.length && chunk[chunk.length - 1] !== 10) n++;
     return { bytes: concat([u32le(chunk.length), z]), rows: n };
+  }
+  // B39 (research): the only block of a table of at most B39_ROWS rows (flat or nested) is stored as a raw block (the row text in one zstd frame) when that is smaller: under about 20-50 rows the per-column description and frames cost more than they save
+  var B39_ROWS = 32, B39_LEVEL = 3;
+  function b39Small(ctx, blk, text, opts, st) {
+    if (opts._piece || opts.block || st || !blk || ((blk.kind || 'n') !== 'f' && (blk.kind || 'n') !== 'n') || blk.rows > B39_ROWS) return blk;
+    // the raw text keeps every row's keys in the block's key order (first seen), so rows read back exactly as the flat block gives them (key order included);
+    // a row already in that order keeps its own text (or JSON.stringify for row input), only rows in another order are written again (text rows with an integer-like key too: JavaScript lists those first, and the text must read back in that order)
+    var isText = typeof text === 'string' || ArrayBuffer.isView(text), src = isText ? tdr.decode(text).split('\n').filter(function (l) { return l.trim(); }) : null, rows = isText ? src.map(function (l) { return JSON.parse(l); }) : text, K = [], seen = Object.create(null), i, k, j, q, lines = new Array(rows.length);
+    var bad = [], v, p;   // one pass: the key order (first seen, positions in seen), and the rows whose text must be written again (another key order; for row input also -0, Infinity, NaN or an object value, which JSON.stringify would not keep)
+    for (i = 0; i < rows.length; i++) { var r = rows[i], last = -1, ok = true; if (!r || typeof r !== 'object' || Array.isArray(r)) return blk;
+      for (k in r) { if (k === '__proto__') return blk; if (isText && ok && k.charCodeAt(0) < 58 && /^(0|[1-9][0-9]*)$/.test(k)) ok = false; p = seen[k]; if (p === undefined) { p = seen[k] = K.length; K.push(k); } if (p < last) ok = false; last = p;
+        if (!isText) { v = r[k]; if (typeof v === 'number' ? (v === 0 && 1 / v < 0) || v !== v || v === Infinity || v === -Infinity : v !== null && typeof v === 'object') ok = false; } }
+      if (ok) lines[i] = isText ? src[i] : JSON.stringify(r); else bad.push(i); }
+    for (q = 0; q < bad.length; q++) { i = bad[q]; var r = rows[i];
+      var parts = []; for (j = 0; j < K.length; j++) if (Object.prototype.hasOwnProperty.call(r, K[j]) && r[K[j]] !== undefined) { var jv = b39Json(r[K[j]]); if (jv === null) return blk; parts.push(JSON.stringify(K[j]) + ':' + jv); }
+      lines[i] = '{' + parts.join(',') + '}'; }
+    var raw = writeRawBlock(ctx.zs, te.encode(lines.join('\n') + '\n'), opts.level == null ? Object.assign({}, opts, { level: B39_LEVEL }) : opts);   // level 3: level 19 made tiny saves 4 to 17 times slower in browsers
+    return raw.rows === blk.rows && raw.bytes.length < blk.bytes.length ? { bytes: raw.bytes, rows: raw.rows, kind: 'r', zone: [] } : blk;
+  }
+  function b39Json(v) {   // JSON text that parses back to the same value, -0 included; null (skip the raw block) for a number JSON cannot hold
+    if (typeof v === 'number') return Object.is(v, -0) ? '-0' : isFinite(v) ? JSON.stringify(v) : null;
+    if (v && typeof v === 'object') { var p = [], q, x;
+      if (Array.isArray(v)) { for (q = 0; q < v.length; q++) { x = b39Json(v[q]); if (x === null) return null; p.push(x); } return '[' + p.join(',') + ']'; }
+      for (q in v) if (Object.prototype.hasOwnProperty.call(v, q) && v[q] !== undefined) { x = b39Json(v[q]); if (x === null) return null; p.push(JSON.stringify(q) + ':' + x); } return '{' + p.join(',') + '}'; }
+    return v === undefined ? null : JSON.stringify(v);
+  }
+  // B39: unpackColumns on a raw block builds the same column form a flat block gives: Int32Array or Float64Array for number-only keys, a plain array otherwise, and a presence bitmap when some rows lack the key
+  function b39Cols(rows, want) {
+    var keys = [], seen = {}, i, k, j, n = rows.length, cols = {}, present = {};
+    for (i = 0; i < n; i++) for (k in rows[i]) if (!seen[k] && (!want || want[k])) { seen[k] = 1; keys.push(k); }
+    for (j = 0; j < keys.length; j++) { k = keys[j]; var v = [], pr = new Uint8Array((n + 7) >> 3), all = true, num = true, int = true, x;
+      for (i = 0; i < n; i++) { if (Object.prototype.hasOwnProperty.call(rows[i], k)) { x = rows[i][k]; pr[i >> 3] |= 1 << (i & 7); v.push(x); if (typeof x !== 'number') num = false; else if (!(x === (x | 0)) || Object.is(x, -0)) int = false; } else all = false; }
+      cols[k] = num && v.length ? (int ? Int32Array.from(v) : Float64Array.from(v)) : v; if (!all) present[k] = pr; }
+    return { n: n, keys: keys, cols: cols, present: present };
   }
   function readRawBlock(zs, bytes) { return zs.decompress(bytes.subarray(4), rd32(bytes, 0)); }
   function unpackText(bytes) {   // -> Uint8Array: the NDJSON text. Byte-for-byte the input when the file was packed with { exact: true }; canonical JSON text per row otherwise
@@ -3164,7 +3200,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
   function unpackColumns(bytes, opts) {
     var file = openFile(bytes), rf = makeFlatReader(S.zdec), out = [], i, want = null, k;
     opts = opts || {}; if (opts.keys) { want = {}; for (k = 0; k < opts.keys.length; k++) want[opts.keys[k]] = 1; }
-    for (i = 0; i < file.blocks.length; i++) { if (file.blocks[i][4] !== 'f') throw new Error('LfcPack: unpackColumns needs flat-row blocks'); { var pbc = want ? partialBytes(file, i) : null; out.push(rf.columnsOf(pbc || blockBytes(file, i), want, !!pbc)); } }
+    for (i = 0; i < file.blocks.length; i++) { if (file.blocks[i][4] === 'r') { out.push(b39Cols(rawRows(readRawBlock(S.zdec, blockBytes(file, i))), want)); continue; } if (file.blocks[i][4] !== 'f') throw new Error('LfcPack: unpackColumns needs flat-row blocks'); { var pbc = want ? partialBytes(file, i) : null; out.push(rf.columnsOf(pbc || blockBytes(file, i), want, !!pbc)); } }
     return out;
   }
   // the object packTables was given: arrays come back as arrays of rows, other values as they were
@@ -3202,9 +3238,9 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
   function packStream(opts) {
     opts = packOpts(opts); need(true);
     if (opts.exact) throw new Error('LfcPack: packStream does not support exact mode yet');
-    var st = opts.share ? sharedState() : null, mopts = Object.assign({}, opts, st ? { _st: st } : {}, { _nohead: true });   // each chunk is one block: the head rule is applied here, not inside packMany
+    var st = opts.share ? sharedState() : null, mopts = Object.assign({}, opts, st ? { _st: st } : {}, { _nohead: true, _piece: true });   // each chunk is one block: the head rule is applied here, not inside packMany
     var bb = opts.blockBytes || BLOCK_BYTES, blocks = [], zone = [], off = 0, rows = 0, tail = true, done = false, fmin = 0;
-    function cut(chunk) { return add(packMany([{ name: null, bytes: chunk }], mopts)); }   // one chunk of whole lines -> its block bytes
+    var b39Last = null; function cut(chunk) { b39Last = chunk; return add(packMany([{ name: null, bytes: chunk }], mopts)); }   // one chunk of whole lines -> its block bytes
     function add(mini) {   // a one-chunk file -> its block bytes, with the table entries moved to this file's offsets
       var f = openFile(mini), out = [], i, b, e; if (f.footer.minor > fmin) fmin = f.footer.minor;
       for (i = 0; i < f.blocks.length; i++) {
@@ -3258,7 +3294,8 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
       },
       finish: function () {
         if (done) throw new Error('LfcPack: packStream is finished');
-        done = true; var out = take(true);
+        done = true; var nb0 = blocks.length, out = take(true);
+        if (nb0 === 0 && blocks.length === 1 && rows <= B39_ROWS && !st && b39Last) return [packMany([{ name: null, bytes: b39Last }], opts)];   // B39: a one-block stream is written as pack would write it (small-table layout)
         out.push(writeFooter(S.zfull, [
           { id: SEC_HEADER, flags: 1, payload: te.encode(JSON.stringify({ rows: rows, blocks: blocks.length, writer: 'lfc-pack 0.1.5' })) },
           { id: SEC_BLOCKS, flags: 1, payload: te.encode(JSON.stringify(blocks)) },
@@ -3274,7 +3311,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     opts = packOpts(opts); need(true);
     if (opts.exact) throw new Error('LfcPack: packBlock does not support exact mode');
     if (opts.share) throw new Error('LfcPack: packBlock does not support share (each worker would build its own tables); pass share: false');
-    var o = {}, k; for (k in opts) if (k !== 'meta') o[k] = opts[k];
+    var o = { _piece: true }, k; for (k in opts) if (k !== 'meta') o[k] = opts[k];
     return packMany([{ name: null, bytes: bytesOf(chunk) }], o);
   }
   // hash(bytes, kind): 'crc32' (default; the number the file's checksums use) or 'xxh64' (16 lowercase hex digits); WebAssembly when init() has run, plain JavaScript for crc32 otherwise
@@ -3392,7 +3429,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     }); }).then(function (ok) { return ok && later(function () { unpackTables(file); file = null; return true; }); }).then(function (ok) { return ok === true; }, function () { return false; });
     return warmP;
   }
-  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.10.19', apiVersion: 0 };
+  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.10.20', apiVersion: 0 };
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
   // ================================================================ delta saves v2 (prototype, off by default): packTables(x, { base }) / unpackTables(file, { base })
@@ -3530,7 +3567,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
   function runJob(m) {   // in a helper: { id, kind, buf, crc, want } -> { msg, transfer }
     try {
       if (m.kind === 'p') {   // pack one run of whole blocks: the slice is dropped as soon as it is packed
-        var eqo = []; var out = packMany([{ name: null, bytes: m.buf }], Object.assign({}, m.opts, { _eqout: eqo })); m.buf = null;
+        var eqo = []; var out = packMany([{ name: null, bytes: m.buf }], Object.assign({}, m.opts, { _eqout: eqo, _piece: true })); m.buf = null;
         var f = openFile(out);
         return { msg: { id: m.id, bytes: out, bodyEnd: f.footer.sec[SEC_EQF] ? JSON.parse(tdr.decode(f.footer.sec[SEC_EQF]))[0] : f.footer.bodyEnd, blocks: f.blocks, zone: f.zone, tail: (jsonSec(f.footer.sec[SEC_FLAGS]) || {}).tail, picked: m.opts && m.opts._picked, eqf: eqo }, transfer: [out.buffer] };
       }
@@ -3750,7 +3787,7 @@ return { DelimitedParser, IngestError, cleanHeaders, detectDelimiter, TypeTracke
     opts = opts || {};
     return init({ readOnly: true }).then(function () {
       var file = openFile(bytes), nb = file.blocks.length, n = 0, i, hc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || (typeof require === 'function' && require('os').cpus().length) || 4, w = Math.min(opts.workers || Math.max(1, hc - 1), 4);
-      for (i = 0; i < nb; i++) { if (file.blocks[i][4] !== 'f') throw new Error('LfcPack: unpackColumnsParallel needs flat-row blocks'); n += file.blocks[i][3]; }
+      for (i = 0; i < nb; i++) { if (file.blocks[i][4] !== 'f' && file.blocks[i][4] !== 'r') throw new Error('LfcPack: unpackColumnsParallel needs flat-row blocks'); n += file.blocks[i][3]; }
       if (nb < 2 || w < 1) return b35Join(unpackColumns(bytes, opts.keys ? { keys: opts.keys } : undefined), n);
       if (!B35_POOL && !(globalThis.__B35AUTO === 0)) {   // B35b auto start: the first read joins on this thread (no helper start-up to wait for), then helpers start for the next read
         var out0 = b35Join(unpackColumns(bytes, opts.keys ? { keys: opts.keys } : undefined), n);
@@ -5382,7 +5419,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0930 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0941 (LFC-pack 0.10.20)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
