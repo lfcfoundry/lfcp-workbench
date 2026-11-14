@@ -117,7 +117,8 @@ export function topSortIndices(idx, src, key, sign, text, k) {
   let thrOn = false, thrNum = 0, thrStr = '';
   const setThr = () => { if (hrank[0] === 0) { thrOn = true; thrNum = sign * hnum[0]; thrStr = hstr ? hstr[0] : ''; } else thrOn = false; };
   for (let t = 0; t < len; t++) {
-    const i = idx[t], v = src[i];
+    const i = idx[t];
+    const v = src[i];
     if (thrOn && v != null && v !== '') {
       if (text) { const s0 = String(v); if (sign > 0 ? s0 >= thrStr : s0 <= thrStr) continue; }
       else { const x0 = key(v); if (x0 === x0 && sign * x0 >= thrNum) continue; }
