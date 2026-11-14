@@ -2,26 +2,38 @@
 // cols = { columnName: array of cell values, one entry per row }, n = row count.
 // Returns the same {indices, errors}. Used when only the filtered or sorted columns were decoded from the dataset
 // (LfcPack.unpackColumns), which skips making a row object per row and decoding the other columns.
-import { parseFilter, matches, sortKeyFor } from './query.mjs';
+import { parseFilter, matches, sortKeyFor, formatScaled } from './query.mjs';
+import { topSortTyped, BLOCK, primeSummary } from './topn.mjs';   // typed top-N with block skipping: see the credits in that file
+export function primeTopN(a) { primeSummary(a); }
 
-export function runColumnQuery(cols, n, columns, { filters = {}, sort = null, top = 0 } = {}) {
+export function runColumnQuery(cols, n, columns, { filters = {}, sort = null, top = 0 } = {}, opts = {}) {
   const errors = {}, active = [];
   for (const c of columns) {
     const text = filters[c.name]; if (!text) continue;
     const { filter, error } = parseFilter(text, c.type);
-    if (error) errors[c.name] = error; else if (filter) active.push([cols[c.name], filter]);
+    if (error) errors[c.name] = error; else if (filter) active.push([cols[c.name], filter, c.decimals]);
+  }
+  if (top && sort && sort.col && cols[sort.col] && !active.length && ArrayBuffer.isView(cols[sort.col]) && cols[sort.col].length === n) {   // whole typed column, no filter: the answer needs no row-number array (7M numbers to allocate and fill)
+    const col = columns.find((c) => c.name === sort.col), numeric = col && (col.type === 'integer' || col.type === 'number' || col.type === 'date');
+    if (numeric) { const first = topSortTyped(cols[sort.col], top, sort.dir === 'desc' ? -1 : 1, opts.block || BLOCK); if (first) return { first, count: n, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices }; }
   }
   let idx;
   if (!active.length) { idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; }
   else {
     // the first filter scans every row; later filters scan only the survivors
-    const [col0, f0] = active[0], first = []; for (let i = 0; i < n; i++) if (matches(f0, col0[i])) first.push(i);
+    const [col0, f0, d0] = active[0], first = []; for (let i = 0; i < n; i++) if (matches(f0, col0[i], d0)) first.push(i);
     idx = Uint32Array.from(first);
-    for (let a = 1; a < active.length && idx.length; a++) { const [col, f] = active[a]; let m = 0; for (let k = 0; k < idx.length; k++) if (matches(f, col[idx[k]])) idx[m++] = idx[k]; idx = idx.subarray(0, m); }
+    for (let a = 1; a < active.length && idx.length; a++) { const [col, f, dd] = active[a]; let m = 0; for (let k = 0; k < idx.length; k++) if (matches(f, col[idx[k]], dd)) idx[m++] = idx[k]; idx = idx.subarray(0, m); }
   }
   if (sort && sort.col && cols[sort.col]) {
-    const col = columns.find((c) => c.name === sort.col), src = cols[sort.col], key = sortKeyFor(col ? col.type : 'string'), sign = sort.dir === 'desc' ? -1 : 1;
+    const col = columns.find((c) => c.name === sort.col), key = sortKeyFor(col ? col.type : 'string', col && col.decimals), sign = sort.dir === 'desc' ? -1 : 1;
     const text = !col || !(col.type === 'integer' || col.type === 'number' || col.type === 'date');
+    // a column that stores decimals as numbers but sorts as text (a text cell turned up in it): the text to sort is the formatted one
+    const src = text && col && col.decimals ? cols[sort.col].map((v) => (typeof v === 'number' ? formatScaled(v, col.decimals) : v)) : cols[sort.col];
+    if (top && !text && !active.length && src.length === n && ArrayBuffer.isView(src)) {   // a whole typed column, no filter: no text, no parsing, whole blocks skipped
+      const first = topSortTyped(src, top, sign, opts.block || BLOCK);
+      if (first) return { first, count: n, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices };
+    }
     if (top) { const first = topSortIndices(idx, src, key, sign, text, top); if (first) { const fidx = idx; return { first, count: fidx.length, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices }; } }
     // rank 0 normal, 1 not a number, 2 empty: empties sort last, then unparsable values, ties keep file order
     if (!text) { idx = radixSortNumbers(idx, src, key, sign); return { indices: idx, errors }; }

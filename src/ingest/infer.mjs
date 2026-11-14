@@ -41,3 +41,36 @@ export function typedCell(v) {
   for (let k = neg; k < n; k++) { const c = v.charCodeAt(k); if (c < 48 || c > 57) return v; }
   return n - neg <= 15 ? +v : v;
 }
+
+// Decimal columns (every non-empty value in the sample has the same number of digits after the point, 1 to 9) are stored as whole numbers scaled by 10^decimals
+// (12.30 with 2 decimals is 1230). The count of decimals is kept with the column (catalog `decimals`); every reader shows a stored number n as formatScaled(n, decimals),
+// the text in the file, and compares it by value n / 10^decimals, which is the same double as Number(text). A cell is stored scaled only when that round trip is exact:
+// no sign other than a leading minus, no leading zeros, the same number of decimals, at most 15 digits in all, and not negative zero ("-0.00"). Anything else stays text.
+// CREDITS: storing a decimal as a whole number scaled by 10^d is the fixed-point DECIMAL form of Apache Parquet (https://parquet.apache.org/docs/file-format/types/logicaltypes/)
+// and DuckDB (https://duckdb.org/docs/stable/sql/data_types/numeric). Our rule keeps the exact import text: a cell that would not read back unchanged stays text. See docs/CREDITS.md.
+export function typedDecimal(v, d) {
+  const n = v.length;
+  if (n === 0) return null;
+  if (n > 17) return v;
+  const neg = v.charCodeAt(0) === 45 ? 1 : 0, dot = n - d - 1;
+  if (dot <= neg || v.charCodeAt(dot) !== 46) return v;
+  if (v.charCodeAt(neg) === 48 && dot - neg > 1) return v;   // leading zero: "007.50"
+  if (n - neg - 1 > 15) return v;
+  let nonZero = false;
+  for (let k = neg; k < n; k++) { if (k === dot) continue; const c = v.charCodeAt(k); if (c < 48 || c > 57) return v; if (c !== 48) nonZero = true; }
+  if (neg && !nonZero) return v;   // "-0.00"
+  return +(v.slice(0, dot) + v.slice(dot + 1));   // 12.30 -> 1230, -0.05 -> -5
+}
+// How many decimals the sample's values share: every non-empty value is a plain decimal with the same count (1 to 9), and there is at least one; otherwise 0.
+export function sampleDecimals(values) {
+  let d = 0;
+  for (const v of values) {
+    if (v === '') continue;
+    const m = /^-?(0|[1-9]\d*)\.(\d{1,9})$/.exec(v);
+    if (!m) return 0;
+    if (d === 0) d = m[2].length; else if (d !== m[2].length) return 0;
+  }
+  return d;
+}
+export function formatScaled(n, d) { const a = String(Math.abs(n)).padStart(d + 1, '0'); return (n < 0 ? '-' : '') + a.slice(0, a.length - d) + '.' + a.slice(a.length - d); }
+export const cellFormat = (v, d) => (typeof v === 'number' && d ? formatScaled(v, d) : v == null ? '' : String(v));

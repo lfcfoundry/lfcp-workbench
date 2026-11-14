@@ -21,6 +21,8 @@ The experiment uses the pinned LFC-pack 0.4.19/API 0 build in [`vendor/lfcp/0.4.
 ## Project map
 
 - [`docs/architecture/`](docs/architecture/) — system boundaries and unresolved decisions.
+- **Data view (filters and sort):** whole-number and decimal columns are stored as numbers (decimals as exact scaled whole numbers, text kept when a cell would not read back unchanged), the top rows of a sort come back first through a typed top-N with block skipping, and `=a|b` keeps rows equal to any value. Details: [`app/README.md`](app/README.md); credits for the ideas borrowed from other projects: [`docs/CREDITS.md`](docs/CREDITS.md).
+- [`docs/CREDITS.md`](docs/CREDITS.md) — the projects, papers and authors whose ideas our optimized parts build on, each with a link.
 - [`docs/lfcp/`](docs/lfcp/) — Workbench-derived requirements and an evidence-based LFCP evolution process.
 - [`experiments/`](experiments/) — prototypes that remain explicitly separate from production code.
 - [`vendor/`](vendor/) — pinned third-party or shared build artifacts with provenance and notices.
@@ -50,6 +52,6 @@ The second test is intentionally expected to demonstrate the defect against the 
 
 ## Maturity and limitations
 
-Version 2026.11.14.1108 (date stamp, Eastern; carries LFC-pack 0.10.22). The Workbench is at the documented direction and feasibility-experiment stage. There is no production ingestion pipeline, query engine, SQL support, visualization layer, build system, or stable release. The spike demonstrates a narrow browser file-to-LFCP path and has significant storage, reader, recovery, and scale limits. LFCP architecture, schema, streaming contracts, and vendor update policy remain open; see [`docs/architecture/OPEN-DECISIONS.md`](docs/architecture/OPEN-DECISIONS.md).
+Version 2026.11.14.1108 (date stamp, Eastern; carries LFC-pack 0.10.28). The Workbench is at the documented direction and feasibility-experiment stage. There is no production ingestion pipeline, query engine, SQL support, visualization layer, build system, or stable release. The spike demonstrates a narrow browser file-to-LFCP path and has significant storage, reader, recovery, and scale limits. LFCP architecture, schema, streaming contracts, and vendor update policy remain open; see [`docs/architecture/OPEN-DECISIONS.md`](docs/architecture/OPEN-DECISIONS.md).
 
 The LFC-pack correction remains an isolated proposal. Its issue draft and Phase 11 evidence package are preserved, and the Phase 14 audit says the draft is ready for submission while production integration remains NO-GO. The Codex-to-Claude handoff is on the `codex/lfc-pack-0419-empty-string-investigation-handoff` branch in [JS-modules](https://github.com/lfcfoundry/JS-modules/tree/codex/lfc-pack-0419-empty-string-investigation-handoff). No maintainer communication has been sent.
