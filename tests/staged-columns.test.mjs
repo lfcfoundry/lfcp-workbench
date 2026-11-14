@@ -52,3 +52,28 @@ assert.equal(buildColumns(enc.encode('1,a,1.50,2026-11-01\n'), headers, plan, ',
 const part = buildColumns(enc.encode('1,a,1.50,2026-11-01,n\n2,b,2.50,2026-11-02,m\n3,c,3'), headers, plan, ',');
 assert.equal(part.n, 2); assert.equal(part.bail, null);   // an unfinished last line waits
 console.log(`ok: staged columns through packBlock equal the JSON-lines values (${blocks} packed chunks, bail rules)`);
+// WebAssembly builder equals the JavaScript reference chunk by chunk
+{
+  const { make } = await import('../src/ingest/colbuild.mjs');
+  const { readFileSync } = await import('node:fs');
+  const wasm = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../wasm/colbuild.wasm'));
+  const B = await make(wasm, headers, plan, ',', { capRows: 4096 });
+  let chunks = 0;
+  for (const n of [1, 7, 300, 3000]) {
+    const text = mk(n, false), body = enc.encode(text), data = body.subarray(body.indexOf(10) + 1);
+    const w = B.build(data), r = buildColumns(data, headers, plan, ',');
+    assert.equal(w.bail, r.bail); assert.equal(w.n, r.n); assert.equal(w.used, r.used);
+    for (const h of headers) {
+      const a = w.cols[h], b = r.cols[h];
+      if (a instanceof Float64Array) assert.deepEqual(Array.from(a, (x) => (x !== x ? 'NaN' : x)), Array.from(b, (x) => (x !== x ? 'NaN' : x)), `${h} n=${n}`);
+      else { const sa = Array.from(a.start, (s, i) => new TextDecoder().decode(a.bytes.subarray(s, a.end[i]))), sb = Array.from(b.start, (s, i) => new TextDecoder().decode(b.bytes.subarray(s, b.end[i]))); assert.deepEqual(sa, sb, `${h} n=${n}`); }
+    }
+    chunks++;
+  }
+  // bail rules agree
+  for (const t of ['007,a,1.50,2026-11-01,n\n', '1,"q",1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01\n', '1,a,1.5,2026-11-01,n\n', '1,a,-0.00,2026-11-01,n\n', '-0,a,1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01,é\n']) {
+    const w = B.build(enc.encode(t)), r = buildColumns(enc.encode(t), headers, plan, ',');
+    assert.equal(w.bail, r.bail, t); assert.equal(w.n, r.n, t);
+  }
+  console.log(`ok: wasm column builder equals the JavaScript reference (${chunks} chunks, bail rules)`);
+}
