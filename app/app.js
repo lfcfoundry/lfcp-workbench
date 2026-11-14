@@ -258,17 +258,25 @@
       const same = (row, i) => JSON.stringify(row) === JSON.stringify(cells(i));
       add('first rows are right', same(G.rows[0], 0) && same(G.rows[7], 7));
       { const t1 = performance.now(); for (const f of [0.11, 0.37, 0.52, 0.73, 0.94]) await call({ type: 'page', start: Math.floor(g.rows * f), count: 30 }); T.pageColdMs = Math.round((performance.now() - t1) / 5 * 10) / 10; }   // average time to fetch 30 rows from far apart places
+      { G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); const e0 = performance.now(); const qq = await applyQuery(); T.earlyFilterMs = Math.round(performance.now() - e0); add('first filter, right after opening, finds the last 10 rows', qq.count === 10, String(qq.count)); G.filters = { score: '>=99.9' }; buildHead(); const e1 = performance.now(); await applyQuery(); T.earlyScoreMs = Math.round(performance.now() - e1); G.filters = {}; buildHead(); await applyQuery(); }   // while the background warm-up is still running; the score column is a decimal that needs decoding
       const sc = $('gridscroll'), jump = async (frac) => { sc.scrollTop = Math.round((sc.scrollHeight - sc.clientHeight) * frac); await new Promise((r) => setTimeout(r, 600)); };
       s = performance.now(); await jump(1); T.lastPageMs = Math.round(performance.now() - s - 600);
       const lastRow = G.rows[G.rows.length - 1]; add('scrolling to the end shows the last row', lastRow && same(lastRow, g.rows - 1), lastRow && lastRow[0] + ' vs ' + (g.rows - 1));
       await jump(0.5); const mid = G.rows[5]; add('middle of the file shows a consistent row', mid && same(mid, Number(mid[0])) && Number(mid[0]) > g.rows * 0.4 && Number(mid[0]) < g.rows * 0.6, mid && mid[0]);
+      { // scroll test: top to bottom in 6 s, one position per frame, frame gaps recorded (same method as the Glide Data Grid check)
+        sc.scrollTop = 0; await new Promise((r) => setTimeout(r, 800)); const total = sc.scrollHeight - sc.clientHeight, gaps = []; let last = performance.now(); const t0 = last;
+        await new Promise((ok) => { const vis = Math.ceil(sc.clientHeight / ROW); let blank = 0, blankRows = 0; const step = (now) => { gaps.push(now - last); last = now; const top = topIndex(), have0 = G.start, have1 = G.start + G.rows.length, miss = Math.max(0, Math.min(top + vis, g.rows) - Math.max(top, have0)) ; const unc = Math.min(top + vis, g.rows) - top - miss; if (unc > 0) { blank++; blankRows += unc; } T.blankFrames = blank; T.blankRowsAvg = +(blankRows / Math.max(1, gaps.length)).toFixed(2); const pos = Math.min(total, (now - t0) / 6000 * total); sc.scrollTop = pos; if (pos >= total) ok(); else requestAnimationFrame(step); }; requestAnimationFrame(step); });
+        gaps.shift(); const so = gaps.slice().sort((a, b) => a - b), n = gaps.length, avg = gaps.reduce((a, b) => a + b, 0) / n;
+        T.scroll = { rows: g.rows, frames: n, avgMs: +avg.toFixed(2), p99: +so[Math.floor(n * .99)].toFixed(1), maxMs: +so[n - 1].toFixed(1), over33: gaps.filter((x) => x > 33.4).length };
+        await new Promise((r) => setTimeout(r, 600)); const endRow = G.rows[G.rows.length - 1]; add('after the scroll the last row is shown', endRow && same(endRow, g.rows - 1), endRow && endRow[0]);
+      }
       G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); s = performance.now(); const q = await applyQuery(); T.filterMs = Math.round(performance.now() - s);
       add('filter finds the last 10 rows', q.count === 10, String(q.count));
       G.filters = { name: '=Name 5' }; buildHead(); s = performance.now(); const qe = await applyQuery(); T.eqMs = Math.round(performance.now() - s); T.eqByPositions = !!qe.byPositions; T.posError = qe.posError;
       add('text equality filter finds every row of that name', qe.count === Math.floor((g.rows - 6) / 97) + 1, String(qe.count));
       G.filters = { id: '>=' + Math.floor(g.rows * 0.5) }; buildHead(); s = performance.now(); const qr = await applyQuery(); T.rangeMs = Math.round(performance.now() - s);
       add('range filter on half the rows', qr.count === g.rows - Math.floor(g.rows * 0.5), String(qr.count));
-      G.filters = { id: '>=' + (g.rows - 10) };
+      G.filters = { id: '>=' + (g.rows - 10) }; buildHead(); await applyQuery();
       add('the filtered rows are the last 10', G.rows.length === 10 && same(G.rows[0], g.rows - 10) && same(G.rows[9], g.rows - 1), G.rows[0] && G.rows[0][0]);
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
@@ -293,7 +301,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0941 (LFC-pack 0.10.20)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.1108 (LFC-pack 0.10.22)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
