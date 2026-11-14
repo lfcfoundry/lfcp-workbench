@@ -476,7 +476,9 @@ async function openView(m) {
     // Warm the sort columns: whole-number, decimal and date columns are decoded on helper threads while the person looks at the first page,
     // so the first sort of one of them only has the selection scan left (the decode was most of a first sort).
     if (!m.noWarm && view.flat && total <= MAX_WARM_ROWS && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory <= 4) && LfcPack.unpackColumnsParallel && view.f.size <= WHOLE_FILE_MAX) {
-      const v = view, names = v.columns.filter((c) => c.type === 'integer' || c.type === 'number' || c.type === 'date').map((c) => c.name);
+      // Text columns are warmed too when memory allows (about 40 bytes a cell): up to 3 million rows anywhere, up to 10 million on a desktop browser that does not report less than 8 GB.
+      const warmText = !m.noWarmText && (total <= 3000000 || (total <= MAX_WARM_ROWS && !/Mobi|Android/.test(navigator.userAgent) && !(navigator.deviceMemory < 8)));
+      const v = view, names = v.columns.filter((c) => c.type === 'integer' || c.type === 'number' || c.type === 'date' || (warmText && c.type === 'string')).map((c) => c.name);
       setTimeout(async () => { for (const n of names) { if (view !== v) return; try { await warmColumn(n); } catch {} } }, 300);
     }
   } catch (err) { view = null; send('error', m.id, { message: String(err && err.message || err) }); }
@@ -519,6 +521,7 @@ async function dropFullMatch(filters, active) {
 }
 // Number ranges per block (LFC-pack 0.7.0 R.zone, metadata only): a block whose range cannot satisfy a number filter is never decoded.
 // A block with no range (text cells, empty cells, or an older file) is always kept. Used only when it keeps at most a fifth of the blocks.
+let zoneMinBlocks = 0;   // test hook (gate=N in the page address): the fewest blocks that make a zone plan worth trying
 async function zonePlan(filters, active) {
   const need = [];
   for (const name of active) {
@@ -527,7 +530,7 @@ async function zonePlan(filters, active) {
     if (col.type === 'integer' && f.kind === 'num' && f.op !== 'ne') need.push([name, f.op, f.value]);
     else if (col.type === 'integer' && f.op === 'eq' && /^-?(0|[1-9]\d{0,14})$/.test(f.value)) need.push([name, 'eq', +f.value]);
   }
-  if (!need.length || view.R.blocks.length < 8) return null;
+  if (!need.length || view.R.blocks.length < (zoneMinBlocks || 8)) return null;
   const blocks = [];
   for (let b = 0; b < view.R.blocks.length; b++) {
     let keep = true;
@@ -566,7 +569,7 @@ async function rowsAt(idx, from, to) {
 async function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   const t0 = performance.now(), active = Object.keys(m.filters || {}).filter((k) => m.filters[k]), plain = !m.sort && !active.length;
-  view.pending = null;
+  view.pending = null; zoneMinBlocks = m.gate || 0;
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
   const colOk = view.flat && view.total <= MAX_COLUMN_ROWS;
   if (colOk && !m.noInside) {

@@ -68,7 +68,7 @@
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
-    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search) });
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search), gate: +((/[?&]gate=(\d+)/.exec(location.search) || [])[1] || 0) });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
@@ -88,7 +88,7 @@
   }
   async function openGrid(name) {
     status('Opening ' + name + '…');
-    const r = await call({ type: 'open', name, noWarm: /[?&]nowarm=1/.test(location.search) });
+    const r = await call({ type: 'open', name, noWarm: /[?&]nowarm=1/.test(location.search), noWarmText: /[?&]nowarmtext=1/.test(location.search) });
     if (r.type === 'error') { status(r.message, true); return; }
     Object.assign(G, { cols: r.columns, filters: {}, sort: null }); $('gridbox').hidden = false; $('gridtitle').textContent = 'Data: ' + r.name; buildHead(); await applyQuery(); status('Opened. Type in a filter box or click a column name.');
     return r;
@@ -268,7 +268,7 @@
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
       G.sort = { col: 'score', dir: 'asc' }; buildHead(); await new Promise((r) => setTimeout(r, 4000)); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s); T.scoreLoadMs = q3.loadMs;
-      G.sort = { col: 'note', dir: 'asc' }; buildHead(); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); T.textLoadMs = q4.loadMs; add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
+      G.sort = { col: 'note', dir: 'asc' }; buildHead(); await new Promise((r) => setTimeout(r, 6000)); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); T.textLoadMs = q4.loadMs; add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
       T.fullMatch = {};   // a filter every row satisfies (id >= 0): first query on a freshly opened dataset (cold) and the same again (warm), with and without the full-match shortcut
       for (const ni of [true, false]) {
         await openGrid(d.name); G.sort = null; G.noInside = ni; G.filters = { id: '>=0' }; buildHead();
@@ -288,7 +288,7 @@
   }
 
   function report() {
-    const L = ['LFCFoundry Workbench results', 'Workbench version: 2026.11.14.0829 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.0848 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
