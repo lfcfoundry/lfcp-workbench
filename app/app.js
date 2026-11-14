@@ -154,6 +154,13 @@
         const okp = one.type === 'done' && many.type === 'done' && many.dataset.segmented === true && !many.dataset.serialTail && many.dataset.redos === 0 && many.dataset.rows === 6000 && (many.dataset.bytes === one.dataset.bytes || (many.dataset.timing.columns && Math.abs(many.dataset.bytes - one.dataset.bytes) < one.dataset.bytes * 0.02)) && JSON.stringify(many.dataset.columns) === JSON.stringify(one.dataset.columns);
         const okpFile = !/^https?:/.test(location.protocol) && one.type === 'done' && many.type === 'done' && many.dataset.rows === 6000 && (many.dataset.bytes === one.dataset.bytes || (many.dataset.timing.columns && Math.abs(many.dataset.bytes - one.dataset.bytes) < one.dataset.bytes * 0.02));   // a page opened from a file may not get helper threads: same result on one thread is enough
         add('pieces that fit are accepted without parsing twice', okp || okpFile, many.type === 'done' ? many.dataset.rows + ' rows, ' + (many.dataset.serialTail ? 'rest parsed in order' : 'pieces fit') + ', ' + many.dataset.bytes + ' vs ' + one.dataset.bytes + ' bytes' : many.message);
+        {   // every cell quoted, a quoted line break and an empty quoted cell in each row (like real exports): pieces start at a real row start (no re-parse) and the cells read back the same
+          const qr = []; for (let i = 0; i < 3000; i++) qr.push('"' + i + '","row ' + i + '","' + (i % 5 ? i + '.50' : '') + '","' + (i % 4 ? '' : 'two\nlines ' + i) + '"\n');
+          const qf = new File(['"id","name","score","note"\n', ...qr], 'quoted.csv', { type: 'text/csv' }), qm = await runImport(qf, false, { segBytes: 2048 });
+          let okq = false, whyq = qm.message || '';
+          if (qm.type === 'done') { const want = []; for (let i = 0; i < 3000; i++) want.push({ id: i, name: 'row ' + i, score: i % 5 ? i * 100 + 50 : null, note: i % 4 ? '' : 'two\nlines ' + i }); const v = await call({ type: 'verify', name: qm.dataset.name, expectJson: JSON.stringify(want) }); okq = v.json === true && qm.dataset.rows === 3000 && qm.dataset.timing.redos === 0; whyq = qm.dataset.rows + ' rows, redos ' + qm.dataset.timing.redos + ', fast rows ' + qm.dataset.timing.fastRows + ', rows ' + (v.json === true ? 'identical' : 'DIFFERENT'); await call({ type: 'delete', name: qm.dataset.name }); }
+          add('quoted cells with line breaks import in pieces without re-parsing', okq, whyq);
+        }
         {   // a text-like cell ("007") in a number column cannot live in a typed column: the import starts again on the text path and stores the same cells
           const mixedRows = ['id,name,score\r\n', ...plain]; mixedRows[4501] = '007,row 4500,0.25\r\n';
           const mx = await runImport(new File(mixedRows, 'mixed.csv', { type: 'text/csv' }), false, { segBytes: 2048 });
@@ -273,7 +280,7 @@
       G.filters = { note: 'note 7000' }; G.sort = null; buildHead(); e0 = performance.now(); const q3 = await applyQuery(); T.liveTextFilterMs = Math.round(performance.now() - e0); T.liveTextCount = q3.count; T.liveTextFirstRow = JSON.stringify(G.rows[0]);
       G.filters = {}; G.sort = null; buildHead(); await applyQuery();
     };
-    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (liveOn) o.live = true; { const mp = /[?&]mp=(\d+)/.exec(location.search); if (mp) o.morePack = +mp[1]; } if (/[?&]livexfer=1/.test(location.search)) o.liveXfer = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; const pw = /[?&]pw=(\d+)/.exec(location.search); if (pw) o.packWorkers = +pw[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
+    if (g.type === 'generated') { s = performance.now(); res = await runImport(g.file, false, (() => { const o = {}; const b = /[?&]bb=(\d+)/.exec(location.search), l = /[?&]lv=(\d+)/.exec(location.search); if (/[?&]untyped=1/.test(location.search)) o.untyped = true; if (liveOn) o.live = true; { const mp = /[?&]mp=(\d+)/.exec(location.search); if (mp) o.morePack = +mp[1]; } if (/[?&]livexfer=1/.test(location.search)) o.liveXfer = true; if (b) o.blockBytes = +b[1]; const sg = /[?&]seg=(\d+)/.exec(location.search); if (sg) o.segBytes = +sg[1]; const cb = /[?&]cb=(\d+)/.exec(location.search); if (cb) o.colBlockBytes = +cb[1]; const pw = /[?&]pw=(\d+)/.exec(location.search); if (pw) o.packWorkers = +pw[1]; if (l) o.level = +l[1]; return Object.keys(o).length ? o : undefined; })()); T.importMs = Math.round(performance.now() - s); }
     add('import finished', res && res.type === 'done', res && res.message);
     if (res && res.type === 'done') {
       const d = res.dataset; add('row count equals generated', d.rows === g.rows, `${d.rows} vs ${g.rows}`); add('footer validated', d.validation.ok, d.validation.level); T.storedBytes = d.bytes; T.phases = d.timing; T.colTypes = d.columns.map((c) => c.name + ':' + c.type + (c.decimals ? '.' + c.decimals : '')).join(',');
@@ -336,7 +343,7 @@
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
-    return L.join('\n');
+    if (window.__imp) L.push('', window.__imp + ' ms=' + window.__importMs); return L.join('\n');
   }
   function reportBack() { if (/[?&]report=1/.test(location.search)) { try { const pm = /[?&]port=(\d+)/.exec(location.search); fetch((pm ? 'http://127.0.0.1:' + pm[1] : '') + '/result', { method: 'POST', body: report(), mode: pm ? 'no-cors' : 'same-origin' }); } catch {} } }
 
@@ -353,4 +360,10 @@
   refresh();
   if (/[?&]selftest=1/.test(location.search)) selfTest();
   const bt = /[?&]bigtest=(\d+)/.exec(location.search); if (bt) bigTest(+bt[1]);
+  const iu = /[?&]importurl=([^&]+)/.exec(location.search);
+  if (iu) (async () => {   // test hook: import a CSV served next to the page and print the import report (used for real-data profiling)
+    const t0 = performance.now(), r = await fetch(decodeURIComponent(iu[1])), b = await r.blob(), f = new File([b], 'real.csv', { type: 'text/csv' });
+    const oj = /[?&]opts=([^&]+)/.exec(location.search), s = performance.now(), res = await runImport(f, false, Object.assign({}, /[?&]live=1/.test(location.search) ? { live: true } : null, oj ? JSON.parse(decodeURIComponent(oj[1])) : null));
+    window.__importMs = Math.round(performance.now() - s); window.__imp = 'importurl ' + (res.type === 'done' ? 'done ' + JSON.stringify(res.dataset.timing) : 'FAILED ' + res.message); status('importurl ' + (res.type === 'done' ? 'done in ' + window.__importMs + ' ms (fetch ' + Math.round(s - t0) + ' ms)' : res.message)); reportBack();
+  })();
 })();

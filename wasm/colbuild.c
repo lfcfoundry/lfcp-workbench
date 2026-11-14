@@ -12,7 +12,7 @@ static u8 isplan[MAXC], flags[MAXC], dslot[MAXC];
 static u32 cnt_n[MAXC], cnt_e[MAXC];
 static u32 ncols, extra; static u8 D;
 static u8 dtab[DSLOTS][DCAP][DSL + 1];   // len byte then bytes; len 0 = empty slot
-static u32 g_out, g_rows, g_bail;
+static u32 g_out, g_rows, g_bail, g_nl;
 // Output columns (staged columns): kind per column 0 text, 1 whole numbers, 2 decimals; colA = Float64 values or u32 start offsets, colB = u32 end offsets, colT = text bytes
 static u8 okind[MAXC]; static void* colA[MAXC]; static void* colB[MAXC]; static u8* colT[MAXC]; static u32 tlen[MAXC];
 EXPORT("set_out") void set_out(u32 c, void* a, void* b, void* t){ colA[c] = a; colB[c] = b; colT[c] = (u8*)t; tlen[c] = 0; }
@@ -28,6 +28,24 @@ EXPORT("set_slot") void set_slot(u32 c, u32 s){ dslot[c] = (u8)s; }
 EXPORT("out_len") u32 out_len(void){ return g_out; }
 EXPORT("rows") u32 rows(void){ return g_rows; }
 EXPORT("bail") u32 bail(void){ return g_bail; }
+// A date the JavaScript check (pattern + Date.parse) always accepts, in every engine: a real calendar day, an hour below 24, minutes and seconds below 60,
+// optional fraction and a closing Z. Anything else (offsets, hour 24, odd days) returns 0 and the line goes to JavaScript, so the answers stay the same.
+static int dig(const u8* v, u32 a, u32 n){ u32 r = 0; for (u32 k = 0; k < n; k++){ u8 c = v[a + k]; if (c < 48 || c > 57) return -1; r = r * 10 + (c - 48); } return (int)r; }
+static int date_ok(const u8* v, u32 l){
+  if (l < 10 || v[4] != 45 || v[7] != 45) return 0;
+  int y = dig(v, 0, 4), mo = dig(v, 5, 2), d = dig(v, 8, 2); if (y < 1000 || mo < 1 || mo > 12 || d < 1) return 0;
+  int dm = mo == 2 ? ((y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 29 : 28) : (mo == 4 || mo == 6 || mo == 9 || mo == 11) ? 30 : 31; if (d > dm) return 0;
+  if (l == 10) return 1;
+  if (l < 16 || (v[10] != 84 && v[10] != 32) || v[13] != 58) return 0;
+  int h = dig(v, 11, 2), mi = dig(v, 14, 2); if (h < 0 || h > 23 || mi < 0 || mi > 59) return 0;
+  if (l == 16) return 1;
+  if (l < 19 || v[16] != 58) return 0;
+  int sc = dig(v, 17, 2); if (sc < 0 || sc > 59) return 0;
+  if (l == 19) return 1;
+  u32 k = 19; if (v[k] == 46) { k++; u32 k0 = k; while (k < l && v[k] >= 48 && v[k] <= 57) k++; if (k == k0) return 0; }
+  return k == l || (k + 1 == l && v[k] == 90);
+}
+EXPORT("nlines") u32 nlines(void){ return g_nl; }
 static u32 hashb(const u8* p, u32 l){ u32 h = 2166136261u; for (u32 i = 0; i < l; i++) { h ^= p[i]; h *= 16777619u; } return h; }
 EXPORT("cache_add") void cache_add(u32 slot, const u8* p, u32 l){
   if (l == 0 || l > DSL) return; u32 h = hashb(p, l) & (DCAP - 1);
@@ -78,11 +96,11 @@ static int is_bool(const u8* b, u32 l){
   return 0;
 }
 EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
-  u32 i = 0, nrows = 0; g_bail = 0;
+  u32 i = 0, nrows = 0; g_bail = 0; g_nl = 0;
   u32 n = ncols; u8 D0 = D;
   for (u32 c = 0; c < n; c++) { cnt_n[c] = 0; cnt_e[c] = 0; }
   while (i < len) {
-    u32 fs[MAXC], fe[MAXC]; u32 col = 0, p = i; fs[0] = i; int ok = 1; u32 e = len + 1;
+    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; int ok = 1, inq = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
     {
       v128_t vd = wasm_i8x16_splat((int8_t)D0), vnl = wasm_i8x16_splat(10), vq = wasm_i8x16_splat(34), vbs = wasm_i8x16_splat(92), v31 = wasm_i8x16_splat(31), v126 = wasm_i8x16_splat(126);
       int done = 0;
@@ -93,9 +111,27 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
         while (m) {
           u32 q = p + (u32)__builtin_ctz(m); m &= m - 1;
           if (q >= len) { done = 1; break; }
+          if (q == skipq) continue;   // the second quote of an empty quoted cell
           u8 c = in[q];
-          if (c == D0) { if (col + 1 >= n) { ok = 0; done = 1; break; } fe[col] = q; col++; fs[col] = q + 1; }
-          else if (c == 10) { e = q; done = 1; break; }
+          if (c > 126 || c == 92) { ok = 0; done = 1; break; }   // non-ASCII and backslash stay with the character parser
+          if (inq) {
+            if (c == 34) {   // inside a quoted field: a quote is either an escaped quote ("" -> the line goes to the character parser) or the closing quote
+              if (q + 1 >= len) { done = 1; break; }   // cannot tell yet: wait for more bytes
+              u8 nb = in[q + 1];
+              if (nb == 34) { ok = 0; done = 1; break; }
+              if (nb != D0 && nb != 10 && !(nb == 13 && q + 2 < len && in[q + 2] == 10)) { if (q + 2 >= len && nb == 13) { done = 1; break; } ok = 0; done = 1; break; }
+              inq = 0; fe[col] = q; qend = 1;
+            } else if (c == 10) nl++;   // a line break inside quotes is part of the cell
+            continue;   // a delimiter, tab or other control character inside quotes is cell text
+          }
+          if (c == 34) {
+            if (q != fs[col] || fq[col]) { ok = 0; done = 1; break; }
+            if (q + 2 < len && in[q + 1] == 34) { u8 a = in[q + 2]; if (a == D0 || a == 10 || (a == 13 && q + 3 < len && in[q + 2 + 1] == 10)) { fq[col] = 1; fs[col] = fe[col] = q + 1; skipq = q + 1; continue; } }   // "" followed by a delimiter or line end: an empty quoted cell
+            inq = 1; fq[col] = 1; fs[col] = q + 1; continue;
+          }   // an opening quote must start the cell
+          if (c == D0) { if (col + 1 >= n) { ok = 0; done = 1; break; } if (!fq[col]) fe[col] = q; col++; fs[col] = q + 1; fq[col] = 0; }
+          else if (c == 10) { e = q; nl++; done = 1; break; }
+          else if (c == 13 && q + 1 < len && in[q + 1] == 10) continue;   // CRLF: the line break comes next
           else { ok = 0; done = 1; break; }
         }
       }
@@ -104,7 +140,8 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
     if (e > len) break;
     u32 end = e; if (end > i && in[end-1] == 13) end--;
     if (col != n - 1 || end == i) { g_bail = 1; break; }
-    fe[n-1] = end;
+    if (!fq[n-1]) fe[n-1] = end;
+    (void)qend;
     if (nrows >= cap) break;
     // check every cell against the type flags before writing anything for the row
     for (u32 c = 0; c < n; c++) {
@@ -114,7 +151,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
       int ii = 0, isn = 0;
       if (f & 3) { ii = is_int(v, l); if (f & 1) { if (ii) nf |= 1; } if (f & 2) { isn = ii ? 1 : is_num(v, l); if (isn) nf |= 2; } }
       if ((f & 4) && is_bool(v, l)) nf |= 4;
-      if ((f & 8) && dslot[c] != 255 && cache_has(dslot[c], v, l)) nf |= 8;
+      if ((f & 8) && (date_ok(v, l) || (dslot[c] != 255 && cache_has(dslot[c], v, l)))) nf |= 8;
       if (nf != f) { g_bail = 1; goto stop; }
     }
     // the number cells must read back as numbers (a text-like cell in a number column cannot live in a Float64 column)
@@ -136,7 +173,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
       }
       ((f64*)colA[c])[nrows] = v;
     }
-    nrows++; i = e + 1;
+    nrows++; g_nl += nl; i = e + 1;
   }
 stop:
   g_rows = nrows; return i;
