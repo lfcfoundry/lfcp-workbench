@@ -1,13 +1,13 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.10.28/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.10.30/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
 let core = null;
 const MODS = () => self.__M || null; // set by the single-file build, which inlines the ES modules
 const send = (type, id, data) => self.postMessage(Object.assign({ type, id }, data));
-const loadCore = async () => (core ||= MODS() || Object.assign({}, await import('../src/ingest/delimited.mjs'), await import('../src/ingest/infer.mjs')));
+const loadCore = async () => (core ||= MODS() || Object.assign({}, await import('../src/ingest/delimited.mjs'), await import('../src/ingest/infer.mjs'), await import('../src/ingest/colbuild.mjs')));
 const safe = (s) => String(s || 'dataset').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'dataset';
 // Storage layer: OPFS when the browser has it, otherwise memory for this tab only (WebKitGTK 2.52.6 has no navigator.storage).
 let OPFS = false, STORAGE = 'memory, this tab only';
@@ -41,6 +41,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'parseJob') parseJob(m);
   else if (m.type === 'seg') segJob(m);
   else if (m.type === 'packBlock') packBlockJob(m);
+  else if (m.type === 'packCols') packColsJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importFile(m);
   else if (m.type === 'list') list(m);
@@ -153,6 +154,90 @@ function makeFastW(headers, plan, trackers, delimiter) {
   return F;
 }
 
+// ---- Staged columns: plain lines go from file bytes straight to typed column chunks (WebAssembly, wasm/colbuild.c), no JSON text ----
+// A chunk is { n, bytes, cols } with one entry per column: a Float64Array (whole numbers, or decimals scaled by 10^d; NaN = empty cell) or { bytes, start, end } (text, as byte offsets).
+// The wasm builder takes the lines that keep every column's type flags (the same rules as the row builder above) and stops at any other line; that line goes through
+// the character parser (slow rows, below) and lands in the same columns, so the result does not depend on which path a line took.
+// A cell that stays text in a number column (for example "007") cannot live in a Float64Array: the import stops with err.mixed and starts again on the JSON-lines path.
+const mixedErr = () => Object.assign(new Error('A number column holds a text-like cell; the file is imported on the text path.'), { mixed: true });
+const COLB = 1048576;   // bytes of CSV per wasm call and per chunk
+let C = null;
+const loadC = () => { if (C === null) { try { const s = atob('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'), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); C = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch { C = false; } } return C; };
+function makeColW(headers, plan, trackers, delimiter, sink) {
+  const n = headers.length, D = delimiter.charCodeAt(0);
+  if (n === 0 || n > 64 || D > 126 || typeof WebAssembly === 'undefined' || !core.placeColumns || !loadC()) return null;
+  const B = core.placeColumns(C, headers, plan, delimiter, { capRows: 32768, chunkBytes: COLB });
+  const flagsP = B.exports.flags_ptr(), cn = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 64), ce = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 64);
+  const slot = new Uint8Array(n).fill(255), synced = new Int32Array(n); let slotNo = 0; const SLOTS = 8;
+  const F = { off: false, rows: 0, miss: 0 };
+  // Same contract as makeFastW's run: takes the plain lines of b[i..) whose line break is before lim, returns where it stopped.
+  F.run = (b, i, lim, parser) => {
+    const m8 = B.mem();
+    for (let c = 0; c < n; c++) {
+      const t = trackers[c]; if (t.date && slot[c] === 255 && slotNo < SLOTS) { slot[c] = slotNo++; C.set_slot(c, slot[c]); } m8[flagsP + c] = (t.int ? 1 : 0) | (t.num ? 2 : 0) | (t.bool ? 4 : 0) | (t.date ? 8 : 0);
+      if (t.date && slot[c] !== 255 && t.okDates.size > synced[c]) { for (const v of t.okDates) { const e = enc.encode(v); m8.set(e, B.IN); C.cache_add(slot[c], B.IN, e.length); } synced[c] = t.okDates.size; }
+    }
+    const end = Math.min(b.length, lim);
+    while (i < end && !F.off) {
+      const r = B.build(b.subarray(i, i + Math.min(end - i, COLB)));
+      if (r.n) { const m = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 64), e = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 64); for (let c = 0; c < n; c++) { trackers[c].n += m[c]; trackers[c].empty += e[c]; } parser.line += r.n; parser.startLine = parser.line; F.rows += r.n; F.miss = 0; sink({ n: r.n, bytes: r.used, cols: r.arr }); }
+      i += r.used;
+      if (r.bail === 'mixed') throw mixedErr();
+      if (r.bail) { if (++F.miss >= 64) F.off = true; break; }
+      if (r.used === 0) break;
+    }
+    return i;
+  };
+  return F;
+}
+// Lines the wasm builder leaves to the character parser, collected until the next wasm chunk (or the end) and turned into a chunk of the same shape.
+function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink) {
+  const n = headers.length, kind = headers.map((_, c) => (plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 ? plan[c] : 0));
+  let vals = headers.map(() => []), rows = 0, bytes = 0;
+  return {
+    get n() { return rows; },
+    add(f) {
+      for (let c = 0; c < n; c++) {
+        const raw = f[c]; trackers[c].add(raw); bytes += raw.length + 1;
+        if (kind[c]) { const v = kind[c] === 1 ? typedCell(raw) : typedDecimal(raw, kind[c]); if (v === null) vals[c].push(NaN); else if (typeof v === 'number') vals[c].push(v); else throw mixedErr(); } else vals[c].push(raw);
+      }
+      rows++;
+    },
+    flush() {
+      if (!rows) return;
+      const cols = headers.map((_, c) => {
+        if (kind[c]) return Float64Array.from(vals[c]);
+        const strs = vals[c]; let cap = 0; for (const s of strs) cap += s.length; const buf = new Uint8Array(cap * 3), start = new Int32Array(rows), end = new Int32Array(rows); let o = 0;
+        for (let r = 0; r < rows; r++) { start[r] = o; o += enc.encodeInto(strs[r], buf.subarray(o)).written; end[r] = o; }
+        return { bytes: buf.slice(0, o), start, end };
+      });
+      sink({ n: rows, bytes, cols }); vals = headers.map(() => []); rows = 0; bytes = 0;
+    },
+  };
+}
+const chunkBuffers = (c) => { const o = []; for (const x of c.cols) { if (x.bytes) o.push(x.bytes.buffer, x.start.buffer, x.end.buffer); else o.push(x.buffer); } return o; };
+// Pack worker side: join the chunks of one block (columns side by side, text offsets moved to the joined bytes) and pack them (LFC-pack packBlock over columns).
+async function packColsJob(m) {
+  try {
+    await LfcPack.init();
+    const ch = m.chunks, n = m.headers.length; let rows = 0; for (const c of ch) rows += c.n;
+    const cols = {};
+    for (let k = 0; k < n; k++) {
+      if (ch[0].cols[k].bytes) {
+        let tb = 0; for (const c of ch) tb += c.cols[k].bytes.length;
+        const bytes = new Uint8Array(tb), start = new Int32Array(rows), end = new Int32Array(rows); let bo = 0, ro = 0;
+        for (const c of ch) { const x = c.cols[k]; bytes.set(x.bytes, bo); for (let r = 0; r < c.n; r++) { start[ro + r] = x.start[r] + bo; end[ro + r] = x.end[r] + bo; } bo += x.bytes.length; ro += c.n; }
+        cols[m.headers[k]] = { bytes, start, end };
+      } else {   // a number column with empty cells goes to LFC-pack as an array with nulls: its Float64Array form with NaN is 4-5 times slower to pack
+        const a = new Float64Array(rows); let ro = 0, nan = false; for (const c of ch) { a.set(c.cols[k], ro); ro += c.n; }
+        for (let r = 0; r < rows; r++) if (a[r] !== a[r]) { nan = true; break; }
+        cols[m.headers[k]] = nan ? Array.from(a, (x) => (x !== x ? null : x)) : a;
+      }
+    }
+    const r = await LfcPack.packBlock(cols, m.o); self.postMessage({ type: 'packed', rid: m.rid, r }, [r.buffer]);
+  } catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
+}
+
 // Reads the file in slices, parses it, tracks column types and hands JSON-lines bytes to onBytes (awaited, so the consumer sets the pace).
 // Used twice: in a helper worker (parse on one thread while the import worker packs and writes on another), or inline when a helper cannot start.
 // One JSON line per row, built as text without making a row object. A string that needs no escaping gets its quotes added directly (a regex test
@@ -246,14 +331,17 @@ async function parseSegment(m) {
   const limit = Math.max(m.e, start), headers = m.headers, plan = m.plan;
   const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
   let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
-  const F = headers && !m.headerOnly ? ((m.wasmRows !== false && makeFastW(headers, plan, trackers, m.delimiter)) || makeFast(headers, plan, trackers, m.delimiter)) : null;
+  const colMode = !!(m.cols && headers && !m.headerOnly), chunks = [];
+  const slow = colMode ? slowRows(headers, plan, trackers, typedCell, core.typedDecimal, (c) => chunks.push(c)) : null;
+  const F = headers && !m.headerOnly ? (colMode ? makeColW(headers, plan, trackers, m.delimiter, (c) => { slow.flush(); chunks.push(c); }) : ((m.wasmRows !== false && makeFastW(headers, plan, trackers, m.delimiter)) || makeFast(headers, plan, trackers, m.delimiter))) : null;
   let buf = new Uint8Array(1 << 20);
-  const drain = () => { if (!accN) return; if (buf.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(buf.length * 2, pos + acc.length * 3)); n.set(buf.subarray(0, pos)); buf = n; } pos += enc.encodeInto(acc, buf.subarray(pos)).written; acc = ''; accN = 0; };
-  const flushOut = async () => { drain(); if (!pos) return; const b = buf.slice(0, pos); pos = 0; if (m.emit) await m.emit(b); else pieces.push(b); };
+  const drain = () => { if (colMode) { slow.flush(); accN = 0; return; } if (!accN) return; if (buf.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(buf.length * 2, pos + acc.length * 3)); n.set(buf.subarray(0, pos)); buf = n; } pos += enc.encodeInto(acc, buf.subarray(pos)).written; acc = ''; accN = 0; };
+  const flushOut = async () => { drain(); if (colMode) { if (m.emit) while (chunks.length) await m.emit(chunks.shift()); return; } if (!pos) return; const b = buf.slice(0, pos); pos = 0; if (m.emit) await m.emit(b); else pieces.push(b); };
   const parser = new DelimitedParser(m.delimiter, (f, line) => {
     if (m.headerOnly) { if (!header) header = cleanHeaders(f); return; }
     if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
-    acc += build(f); rows++; if (sample.length < 20) sample.push(sampleRecord(headers, plan, f, typedCell)); if (++accN >= 64) drain();
+    if (colMode) slow.add(f); else acc += build(f);
+    rows++; if (sample.length < 20) sample.push(sampleRecord(headers, plan, f, typedCell)); if (++accN >= 64) drain();
   });
   if (m.lineBase) parser.line = parser.startLine = m.lineBase;
   const dec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: !m.headerOnly && start > 0 });
@@ -274,12 +362,12 @@ async function parseSegment(m) {
       if (ready()) { end = at + i; finished = true; break; }
     }
     at = to;
-    if (pos >= (1 << 22) || acc.length > (1 << 20)) await flushOut();
+    if (pos >= (1 << 22) || acc.length > (1 << 20) || (colMode && m.emit && chunks.length)) await flushOut();
   }
   if (!finished) { end = size; parser.feed(dec.decode(), true); }
   await flushOut();
   const snap = trackers ? trackers.map((x) => ({ n: x.n, empty: x.empty, int: x.int, num: x.num, bool: x.bool, date: x.date })) : null;
-  return { startPos: start, endPos: end, pieces, rows: rows + (F ? F.rows : 0), fast: F ? F.rows : 0, lines: parser.line - 1, header, sample, trackers: snap, eof: !finished };
+  return { startPos: start, endPos: end, pieces, chunks, rows: rows + (F ? F.rows : 0), fast: F ? F.rows : 0, lines: parser.line - 1, header, sample, trackers: snap, eof: !finished };
 }
 
 // Pack worker side (LFC-pack 0.7.0): pack one chunk of JSON lines into block bytes; the importer appends the results in order with pushPacked.
@@ -292,14 +380,14 @@ async function packBlockJob(m) {
 async function segJob(m) {
   try {
     const r = await parseSegment(m);
-    self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer));
-  } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err) } }); }
+    self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer).concat(...r.chunks.map(chunkBuffers)));
+  } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed) } }); }
 }
 
 
 // Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
-async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan) {
+async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col) {
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
@@ -316,6 +404,9 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
     let hdr; try { hdr = await rpc(helpers[0], { file, delimiter, headerOnly: true, e: 0 }); } catch { closeAll(); return null; }
     if (hdr.error || !hdr.header || hdr.eof) { closeAll(); return null; }
     const headers = hdr.header, hdrEnd = hdr.endPos, total = Math.ceil((file.size - hdrEnd) / SEGB);
+    if (col && headers.length > 64) col = null;   // the column builder takes up to 64 columns
+    if (col) await col.begin(headers);
+    const cols = !!col; t.cols = cols;
     const agg = headers.map(() => new TypeTracker());
     let rows = 0, expect = hdrEnd, lineBase = hdr.lines + 1; const sample = [];
     let nextD = 0, nextP = 0, quit = false; const done = new Map(), waiters = new Set();
@@ -325,7 +416,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       while (!quit && nextD < total) {
         if (nextD >= nextP + SEG_WINDOW) { await wait(); continue; }
         const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
-        done.set(k, await rpc(h, { file, delimiter, headers, plan, first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
+        done.set(k, await rpc(h, { file, delimiter, headers, plan, cols, first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
         signal();
       }
     };
@@ -336,11 +427,13 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       let r = done.get(k); done.delete(k); nextP = k + 1; signal(); stop(job);
       if (r.error || r.startPos !== expect) {   // a guessed start sat inside quotes: parse this piece again from the verified spot
         t.redos = (t.redos || 0) + 1;
-        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
+        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, cols, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
         stop(job);
+        if (r.mixed) throw mixedErr();   // from a verified start: the file really has a text-like cell in a number column
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
       for (const b of r.pieces) await packBytes(b);
+      if (col) for (const c of r.chunks) await col.push(c);
       rows += r.rows; t.fastRows = (t.fastRows || 0) + (r.fast || 0); r.trackers.forEach((x, i) => agg[i].merge(x)); for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
       expect = r.endPos; lineBase += r.lines; progress(r.endPos, rows);
       if (r.eof) break;
@@ -348,7 +441,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
     quit = true; signal();
     if (serial || expect < file.size) {   // pieces did not fit together (or one failed): parse the rest in order, from the last verified spot
       closeAll();
-      const r = await parseSegment({ file, delimiter, headers, plan, startAt: expect, e: file.size, lineBase, trackers: agg, emit: packBytes, stopFn: () => stop(job) });
+      const r = await parseSegment({ file, delimiter, headers, plan, cols, startAt: expect, e: file.size, lineBase, trackers: agg, emit: col ? col.push : packBytes, stopFn: () => stop(job) });
       rows += r.rows; for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
       t.serialTail = true;
     }
@@ -378,7 +471,11 @@ async function samplePlan(file, delimiter) {
   } catch { return null; }
 }
 
-async function importFile(m) {
+// Staged columns can find a text-like cell in a number column late in the file; then the whole import runs again on the JSON-lines path (nothing was kept).
+async function importFile(m) { if (await importOnce(m) === 'mixed') await importOnce(Object.assign({}, m, { noColumns: true })); }
+const columnsOk = (m) => !m.noColumns && typeof WebAssembly !== 'undefined' && (m.columns === true || (!/Android|iPhone|iPad|iPod|Mobile/i.test((self.navigator && self.navigator.userAgent) || '') && !((self.navigator && self.navigator.deviceMemory) < 8)));
+async function importOnce(m) {
+  let restart = false;
   const job = { cancelled: false }; jobs.set(m.id, job);
   let name = null, writable = null, closed = false, helper = null;
   const t0 = performance.now(), t = { readMs: 0, parseMs: 0, packMs: 0, writeMs: 0 };
@@ -395,7 +492,7 @@ async function importFile(m) {
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
-    let finishPacking = async () => {};
+    let finishPacking = async () => {}, col = null, colFlush = async () => {};
     const packWorkers = m.packWorkers != null ? m.packWorkers : 2;   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
     if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(new Worker(self.location.href)); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
@@ -412,11 +509,18 @@ async function importFile(m) {
       };
       for (const w of pws) { w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
       job.abort = () => { failed = Object.assign(new Error('Import cancelled.'), { cancelled: true }); pump(); };
-      const dispatch = async (chunk) => {
+      const send1 = async (msg, tr) => {
         while (!idle.length && !failed) await new Promise((r) => { wake = r; });
         if (failed) throw failed;
-        idle.pop().postMessage({ type: 'packBlock', rid: seq++, c: chunk, o: popts }, [chunk.buffer]);
+        idle.pop().postMessage(Object.assign({ rid: seq++ }, msg), tr);
       };
+      const dispatch = (chunk) => send1({ type: 'packBlock', c: chunk, o: popts }, [chunk.buffer]);
+      if (columnsOk(m)) {   // staged columns: chunks of typed columns are grouped into blocks of about colBlock bytes of CSV and packed by the pack workers
+        const colBlock = m.colBlockBytes || (bb >> 1); let cq = [], cqBytes = 0, cqRows = 0, colHeaders = null;
+        const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; await send1({ type: 'packCols', chunks: list, headers: colHeaders, o: popts }, [].concat(...list.map(chunkBuffers))); };
+        colFlush = async () => { if (cq.length) await sendCols(); };
+        col = { begin: async (h) => { colHeaders = h; }, push: async (c) => { stop(job); cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
+      }
       const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
       packBytes = async (bytes) => {
         stop(job); parts.push(bytes); plen += bytes.length;
@@ -428,7 +532,7 @@ async function importFile(m) {
         }
       };
       finishPacking = async () => {
-        if (plen) await dispatch(take(plen));
+        await colFlush(); if (plen) await dispatch(take(plen));
         while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
         await wchain; if (failed) throw failed;
         ws.forEach((w) => w.terminate());
@@ -437,7 +541,7 @@ async function importFile(m) {
     }
     const plan = m.untyped ? null : await samplePlan(file, delimiter);
     let res = null;
-    if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan);
+    if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col);
     if (!res) try { helper = m.inline ? null : new Worker(self.location.href); } catch { helper = null; }
     if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
@@ -466,12 +570,14 @@ async function importFile(m) {
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
-    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0 }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
+    send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
-    send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
+    if (err && err.mixed && !m.noColumns) restart = true;
+    else send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
   } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => w.terminate()); jobs.delete(m.id); }
+  return restart ? 'mixed' : null;
 }
 
 async function validate(name, rows) {
@@ -529,7 +635,7 @@ async function openView(m) {
     const f = await store.file(m.name);
     const R = await LfcPack.open(f), total = R.info.rows;
     view = { name: m.name, R, f, total, rows: null, columns: entry.columns, indices: null, filtered: false, cols: new Map(), flat: R.blocks.length > 0 && R.blocks.every((b) => b.kind === 'f' && !b.table), cache: new Map() };
-    send('opened', m.id, { name: m.name, total, columns: entry.columns });
+    send('opened', m.id, { name: m.name, total, columns: entry.columns, kinds: (() => { const k = {}; R.blocks.forEach((b, i) => { const s = b.kind + (b.table ? 't' + b.table : ''); (k[s] ||= []).length < 3 && k[s].push(i + ':' + b.rows); }); return JSON.stringify(k); })() });
     // Warm the sort columns: whole-number, decimal and date columns are decoded on helper threads while the person looks at the first page,
     // so the first sort of one of them only has the selection scan left (the decode was most of a first sort).
     if (!m.noWarm && view.flat && total <= MAX_WARM_ROWS && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory <= 4) && LfcPack.unpackColumnsParallel && view.f.size <= WHOLE_FILE_MAX) {
