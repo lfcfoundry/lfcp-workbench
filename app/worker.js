@@ -495,7 +495,7 @@ async function importOnce(m) {
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
     let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
-    const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? 1 : 2);   // live columns: one pack worker while parsing (the cores go to the parse helpers), three more when parsing is done   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
+    const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? (isFirefox ? 1 : 2) : 2);   // live columns: Firefox packs with one worker while parsing (the cores go to the parse helpers) and gets three more when parsing is done; Chromium keeps two and gets two more (measured: each is the best of the variants in its browser)   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
     if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(new Worker(self.location.href)); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
     if (pws) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
@@ -570,7 +570,7 @@ async function importOnce(m) {
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
-    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (morePack && m.morePack !== 0) morePack(m.morePack || 3); }
+    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (morePack && m.morePack !== 0) morePack(m.morePack || (isFirefox ? 3 : 2)); }
     await finishPacking();
     await write(packer.finish());
     await writable.close(); closed = true; writable = null;
@@ -663,6 +663,7 @@ async function openView(m) {
 // browsers); a bigger one is read a block at a time with R.columns (LFC-pack 0.7.0), so memory stays at the kept columns plus one block.
 const WHOLE_FILE_MAX = 384 * 1048576;
 // ---- Live columns: the grid reads the kept column chunks while the file is still being saved ----
+const isFirefox = !!(self.navigator && /Firefox\//.test(navigator.userAgent));
 const LIVE_MAX = 600 * 1048576;   // about 1.04x the CSV in memory while the import runs; bigger files wait for the save
 async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
