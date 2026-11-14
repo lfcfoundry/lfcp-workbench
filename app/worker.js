@@ -489,7 +489,9 @@ async function verify(m) { // read a stored dataset back and compare every row w
     await LfcPack.init({ readOnly: true });
     const f = await store.file(m.name);
     const back = LfcPack.unpackRows(new Uint8Array(await f.arrayBuffer()));
-    send('verified', m.id, { rows: back.length, json: m.expectJson ? JSON.stringify(back) === m.expectJson : null, firstRows: back.slice(0, 3) });
+    const same = m.expectJson ? JSON.stringify(back) === m.expectJson : null; let diff = null;
+    if (same === false) { const want = JSON.parse(m.expectJson); for (let i = 0; i < Math.max(want.length, back.length); i++) if (JSON.stringify(back[i]) !== JSON.stringify(want[i])) { diff = { row: i, got: back[i], want: want[i] }; break; } }
+    send('verified', m.id, { rows: back.length, json: same, diff, firstRows: back.slice(0, 3) });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
 
