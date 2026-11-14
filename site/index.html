@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-jVgLxl2sMUB+STYu9P+v+Cpf/sIMeVofYSsyCy/ZjoE=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-YRl5Zc52Z3s8daM1wDnLugBRm+WqkUoOxWgo7Sk6B/w=' 'wasm-unsafe-eval'; style-src 'sha256-r1Aaqip8/INZ9vAWBWcG4ZdOfvgUp0l2NLSy/ZQ1P/I='; worker-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="light dark">
 <title>LFCFoundry Workbench (import)</title>
 <style>:root{--bg:#fff;--fg:#1b1b1b;--mut:#5a5a5a;--line:#d9d9d9;--acc:#006ba2;--bad:#c84d4f}
@@ -26,7 +26,7 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 
 </head>
 <body>
-<header><h1>LFCFoundry Workbench <small id="ver">2026.11.14.0636</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<header><h1>LFCFoundry Workbench <small id="ver">2026.11.14.0811</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
 <main>
   <section>
     <h2>Import</h2>
@@ -300,7 +300,7 @@ function runQuery(rows, columns, { filters = {}, sort = null } = {}) {
 // (LfcPack.unpackColumns), which skips making a row object per row and decoding the other columns.
 
 
-function runColumnQuery(cols, n, columns, { filters = {}, sort = null } = {}) {
+function runColumnQuery(cols, n, columns, { filters = {}, sort = null, top = 0 } = {}) {
   const errors = {}, active = [];
   for (const c of columns) {
     const text = filters[c.name]; if (!text) continue;
@@ -318,6 +318,7 @@ function runColumnQuery(cols, n, columns, { filters = {}, sort = null } = {}) {
   if (sort && sort.col && cols[sort.col]) {
     const col = columns.find((c) => c.name === sort.col), src = cols[sort.col], key = sortKeyFor(col ? col.type : 'string'), sign = sort.dir === 'desc' ? -1 : 1;
     const text = !col || !(col.type === 'integer' || col.type === 'number' || col.type === 'date');
+    if (top) { const first = topSortIndices(idx, src, key, sign, text, top); if (first) { const fidx = idx; return { first, count: fidx.length, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices }; } }
     // rank 0 normal, 1 not a number, 2 empty: empties sort last, then unparsable values, ties keep file order
     if (!text) { idx = radixSortNumbers(idx, src, key, sign); return { indices: idx, errors }; }
     const rank = new Uint8Array(n), num = text ? null : new Float64Array(n), str = text ? new Array(n) : null;
@@ -383,6 +384,48 @@ function radixSortNumbers(idx, src, key, sign) {
     let t = hi; hi = hi2; hi2 = t; t = lo; lo = lo2; lo2 = t; t = id; id = id2; id2 = t;
   }
   return done();
+}
+
+// First page first: the best `k` rows of a sort in one scan, same order and tie rule as the full sort above (empties last, then values that are not
+// numbers, then the sort order, ties in file order). A max-heap of the k best so far; a row that cannot beat the worst kept row costs one comparison.
+// Returns the k row numbers in display order. The full order (runColumnQuery) is still needed to scroll past row k.
+function topSortIndices(idx, src, key, sign, text, k) {
+  const len = idx.length; if (k >= len) return null;
+  if (!text) {   // a column already in order (an id column) or strictly reversed: the full sort turns it around at once, and a heap would churn on every row
+    let prev = 0, up = true, down = true, first = true;
+    for (let t = 0; t < len; t++) { const v = src[idx[t]]; if (v == null || v === '') continue; const x = key(v); if (x !== x) continue; if (!first) { if (x < prev) up = false; if (x >= prev) down = false; if (!up && !down) break; } first = false; prev = x; }
+    if (up || down) return null;
+  }
+  const hrank = new Uint8Array(k), hnum = new Float64Array(k), hstr = text ? new Array(k) : null, hidx = new Uint32Array(k);
+  let size = 0;
+  // c < 0: row a goes before row b (rank, value, then file order)
+  const cmp = (ra, xa, sa, ia, rb, xb, sb, ib) => {
+    if (ra !== rb) return ra - rb;
+    if (ra === 0) { if (text) { if (sa < sb) return -sign; if (sa > sb) return sign; } else { if (xa < xb) return -sign; if (xa > xb) return sign; } }
+    return ia - ib;
+  };
+  const worse = (p, q) => cmp(hrank[p], hnum[p], hstr && hstr[p], hidx[p], hrank[q], hnum[q], hstr && hstr[q], hidx[q]) > 0;   // p sorts after q
+  const swap = (p, q) => { let t = hrank[p]; hrank[p] = hrank[q]; hrank[q] = t; t = hnum[p]; hnum[p] = hnum[q]; hnum[q] = t; t = hidx[p]; hidx[p] = hidx[q]; hidx[q] = t; if (hstr) { const s = hstr[p]; hstr[p] = hstr[q]; hstr[q] = s; } };
+  const up = (p) => { while (p > 0) { const q = (p - 1) >> 1; if (!worse(p, q)) break; swap(p, q); p = q; } };
+  const down = (p) => { for (;;) { let m = p; const l = 2 * p + 1, r = l + 1; if (l < size && worse(l, m)) m = l; if (r < size && worse(r, m)) m = r; if (m === p) break; swap(p, m); p = m; } };
+  // Fast rejection: once k rows are kept, a normal value that cannot beat the worst kept normal value is skipped with one comparison (no heap work).
+  // Later rows lose ties, so equal is a rejection too. thr is the worst kept value in sort direction (numbers: sign * value; text: the string).
+  let thrOn = false, thrNum = 0, thrStr = '';
+  const setThr = () => { if (hrank[0] === 0) { thrOn = true; thrNum = sign * hnum[0]; thrStr = hstr ? hstr[0] : ''; } else thrOn = false; };
+  for (let t = 0; t < len; t++) {
+    const i = idx[t], v = src[i];
+    if (thrOn && v != null && v !== '') {
+      if (text) { const s0 = String(v); if (sign > 0 ? s0 >= thrStr : s0 <= thrStr) continue; }
+      else { const x0 = key(v); if (x0 === x0 && sign * x0 >= thrNum) continue; }
+    }
+    let r = 0, x = 0, s = null;
+    if (v == null || v === '') r = 2; else if (text) s = String(v); else { x = key(v); if (x !== x) r = 1; }
+    if (size < k) { hrank[size] = r; hnum[size] = x; if (hstr) hstr[size] = s; hidx[size] = i; up(size++); if (size === k) setThr(); continue; }
+    if (cmp(r, x, s, i, hrank[0], hnum[0], hstr && hstr[0], hidx[0]) < 0) { hrank[0] = r; hnum[0] = x; if (hstr) hstr[0] = s; hidx[0] = i; down(0); setThr(); }
+  }
+  const order = Array.from({ length: size }, (_, p) => p).sort((p, q) => cmp(hrank[p], hnum[p], hstr && hstr[p], hidx[p], hrank[q], hnum[q], hstr && hstr[q], hidx[q]));
+  const out = new Uint32Array(size); for (let a = 0; a < size; a++) out[a] = hidx[order[a]];
+  return out;
 }
 
 // CSV writer for the Workbench export. Plain RFC 4180: fields holding the delimiter, a quote, CR or LF are
@@ -4331,6 +4374,8 @@ async function remove(m) {
 // Grid view. LfcPack.open(file) reads only the trailer and footer; browsing (no filter, no sort) then reads and decodes only the blocks a page needs, so memory is the footer plus one block at any file size.
 // A filter or sort decodes every row once (cached), so it is limited by row count.
 const MAX_DECODE_ROWS = 1000000;          // fallback path (decodes every row): used only when the file cannot be read by column
+const FIRST_PAGE_ROWS = 1000;   // a sort answers with this many rows first
+const ensureFull = () => { if (view.pending) { const f = view.pending.full(); view.indices = f; view.pending = null; } };
 const MAX_COLUMN_ROWS = 20000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
 let view = null, queryMod = null, colMod = null;
 async function openView(m) {
@@ -4426,6 +4471,7 @@ async function rowsAt(idx, from, to) {
 async function queryView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   const t0 = performance.now(), active = Object.keys(m.filters || {}).filter((k) => m.filters[k]), plain = !m.sort && !active.length;
+  view.pending = null;
   if (plain) { view.filtered = false; return send('queried', m.id, { count: view.total, total: view.total, errors: {}, ms: 0, decodedAll: !!view.rows }); }
   const colOk = view.flat && view.total <= MAX_COLUMN_ROWS;
   if (colOk && !m.noInside) {
@@ -4447,9 +4493,13 @@ async function queryView(m) {
       view.indices = out; view.filtered = true;
       return send('queried', m.id, { count: out.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, zoneBlocks: zp.blocks.length, blocks: view.R.blocks.length });
     }
-    const cols = await loadColumns(names, m.stream), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort });
+    const cols = await loadColumns(names, m.stream), tLoad = Math.round(performance.now() - t0), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
+    if (r.first) {   // first page first: the best rows now, the full order only when a page beyond them (or an export) needs it
+      view.indices = new Uint32Array(r.count); view.indices.set(r.first); view.pending = { topN: r.first.length, full: r.full }; view.filtered = true;
+      return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad });
+    }
     view.indices = r.indices; view.filtered = true;
-    return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names });
+    return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, loadMs: tLoad });
   }
   if (!view.rows) {
     if (view.total > MAX_DECODE_ROWS) return send('queried', m.id, { count: view.total, total: view.total, errors: { '': 'Filtering and sorting work up to ' + (view.flat ? MAX_COLUMN_ROWS : MAX_DECODE_ROWS).toLocaleString() + ' rows for now; this dataset has ' + view.total.toLocaleString() + '. You can still scroll it.' }, ms: 0, decodedAll: false, refused: true });
@@ -4468,6 +4518,7 @@ async function pageView(m) {
     const objs = n ? await view.R.rows({ from: m.start, count: n }) : [];
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name]))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
+    if (view.pending && m.start + m.count > view.pending.topN) ensureFull();
     const end = Math.min(view.indices.length, m.start + m.count), objs = await rowsAt(view.indices, m.start, end);
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name]))); numbers = Array.from(view.indices.subarray(m.start, end), (i) => i + 1);
   }
@@ -4479,6 +4530,7 @@ async function exportView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
     const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
+    ensureFull();
     const count = view.filtered ? view.indices.length : view.total, parts = [...(m.bom ? ['\uFEFF'] : []), csvHeader(view.columns, d)];
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
@@ -4751,7 +4803,7 @@ function runQuery(rows, columns, { filters = {}, sort = null } = {}) {
 // (LfcPack.unpackColumns), which skips making a row object per row and decoding the other columns.
 
 
-function runColumnQuery(cols, n, columns, { filters = {}, sort = null } = {}) {
+function runColumnQuery(cols, n, columns, { filters = {}, sort = null, top = 0 } = {}) {
   const errors = {}, active = [];
   for (const c of columns) {
     const text = filters[c.name]; if (!text) continue;
@@ -4769,6 +4821,7 @@ function runColumnQuery(cols, n, columns, { filters = {}, sort = null } = {}) {
   if (sort && sort.col && cols[sort.col]) {
     const col = columns.find((c) => c.name === sort.col), src = cols[sort.col], key = sortKeyFor(col ? col.type : 'string'), sign = sort.dir === 'desc' ? -1 : 1;
     const text = !col || !(col.type === 'integer' || col.type === 'number' || col.type === 'date');
+    if (top) { const first = topSortIndices(idx, src, key, sign, text, top); if (first) { const fidx = idx; return { first, count: fidx.length, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices }; } }
     // rank 0 normal, 1 not a number, 2 empty: empties sort last, then unparsable values, ties keep file order
     if (!text) { idx = radixSortNumbers(idx, src, key, sign); return { indices: idx, errors }; }
     const rank = new Uint8Array(n), num = text ? null : new Float64Array(n), str = text ? new Array(n) : null;
@@ -4834,6 +4887,48 @@ function radixSortNumbers(idx, src, key, sign) {
     let t = hi; hi = hi2; hi2 = t; t = lo; lo = lo2; lo2 = t; t = id; id = id2; id2 = t;
   }
   return done();
+}
+
+// First page first: the best `k` rows of a sort in one scan, same order and tie rule as the full sort above (empties last, then values that are not
+// numbers, then the sort order, ties in file order). A max-heap of the k best so far; a row that cannot beat the worst kept row costs one comparison.
+// Returns the k row numbers in display order. The full order (runColumnQuery) is still needed to scroll past row k.
+function topSortIndices(idx, src, key, sign, text, k) {
+  const len = idx.length; if (k >= len) return null;
+  if (!text) {   // a column already in order (an id column) or strictly reversed: the full sort turns it around at once, and a heap would churn on every row
+    let prev = 0, up = true, down = true, first = true;
+    for (let t = 0; t < len; t++) { const v = src[idx[t]]; if (v == null || v === '') continue; const x = key(v); if (x !== x) continue; if (!first) { if (x < prev) up = false; if (x >= prev) down = false; if (!up && !down) break; } first = false; prev = x; }
+    if (up || down) return null;
+  }
+  const hrank = new Uint8Array(k), hnum = new Float64Array(k), hstr = text ? new Array(k) : null, hidx = new Uint32Array(k);
+  let size = 0;
+  // c < 0: row a goes before row b (rank, value, then file order)
+  const cmp = (ra, xa, sa, ia, rb, xb, sb, ib) => {
+    if (ra !== rb) return ra - rb;
+    if (ra === 0) { if (text) { if (sa < sb) return -sign; if (sa > sb) return sign; } else { if (xa < xb) return -sign; if (xa > xb) return sign; } }
+    return ia - ib;
+  };
+  const worse = (p, q) => cmp(hrank[p], hnum[p], hstr && hstr[p], hidx[p], hrank[q], hnum[q], hstr && hstr[q], hidx[q]) > 0;   // p sorts after q
+  const swap = (p, q) => { let t = hrank[p]; hrank[p] = hrank[q]; hrank[q] = t; t = hnum[p]; hnum[p] = hnum[q]; hnum[q] = t; t = hidx[p]; hidx[p] = hidx[q]; hidx[q] = t; if (hstr) { const s = hstr[p]; hstr[p] = hstr[q]; hstr[q] = s; } };
+  const up = (p) => { while (p > 0) { const q = (p - 1) >> 1; if (!worse(p, q)) break; swap(p, q); p = q; } };
+  const down = (p) => { for (;;) { let m = p; const l = 2 * p + 1, r = l + 1; if (l < size && worse(l, m)) m = l; if (r < size && worse(r, m)) m = r; if (m === p) break; swap(p, m); p = m; } };
+  // Fast rejection: once k rows are kept, a normal value that cannot beat the worst kept normal value is skipped with one comparison (no heap work).
+  // Later rows lose ties, so equal is a rejection too. thr is the worst kept value in sort direction (numbers: sign * value; text: the string).
+  let thrOn = false, thrNum = 0, thrStr = '';
+  const setThr = () => { if (hrank[0] === 0) { thrOn = true; thrNum = sign * hnum[0]; thrStr = hstr ? hstr[0] : ''; } else thrOn = false; };
+  for (let t = 0; t < len; t++) {
+    const i = idx[t], v = src[i];
+    if (thrOn && v != null && v !== '') {
+      if (text) { const s0 = String(v); if (sign > 0 ? s0 >= thrStr : s0 <= thrStr) continue; }
+      else { const x0 = key(v); if (x0 === x0 && sign * x0 >= thrNum) continue; }
+    }
+    let r = 0, x = 0, s = null;
+    if (v == null || v === '') r = 2; else if (text) s = String(v); else { x = key(v); if (x !== x) r = 1; }
+    if (size < k) { hrank[size] = r; hnum[size] = x; if (hstr) hstr[size] = s; hidx[size] = i; up(size++); if (size === k) setThr(); continue; }
+    if (cmp(r, x, s, i, hrank[0], hnum[0], hstr && hstr[0], hidx[0]) < 0) { hrank[0] = r; hnum[0] = x; if (hstr) hstr[0] = s; hidx[0] = i; down(0); setThr(); }
+  }
+  const order = Array.from({ length: size }, (_, p) => p).sort((p, q) => cmp(hrank[p], hnum[p], hstr && hstr[p], hidx[p], hrank[q], hnum[q], hstr && hstr[q], hidx[q]));
+  const out = new Uint32Array(size); for (let a = 0; a < size; a++) out[a] = hidx[order[a]];
+  return out;
 }
 
 // CSV writer for the Workbench export. Plain RFC 4180: fields holding the delimiter, a quote, CR or LF are
@@ -4932,7 +5027,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
-    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside });
+    const r = await call({ type: 'query', filters: G.filters, sort: G.sort, stream: !!G.forceStream, noZones: !!G.noZones, noInside: !!G.noInside, noFirst: /[?&]nofirst=1/.test(location.search) });
     G.count = r.count; G.total = r.total; G.start = -1; G.rows = []; G.lastQuery = r;
     $('gridspace').style.height = spaceHeight() + 'px'; $('gridscroll').scrollTop = 0;
     G.cols.forEach((c, i) => { const el = document.querySelector('[data-err="' + i + '"]'); if (el) el.textContent = r.errors[c.name] || ''; });
@@ -5131,8 +5226,8 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
       add('the filtered rows are the last 10', G.rows.length === 10 && same(G.rows[0], g.rows - 10) && same(G.rows[9], g.rows - 1), G.rows[0] && G.rows[0][0]);
       G.filters = {}; G.sort = { col: 'id', dir: 'desc' }; buildHead(); s = performance.now(); const q2 = await applyQuery(); T.sortMs = Math.round(performance.now() - s);
       add('sorting the whole file high to low puts the last row first', q2.count === g.rows && same(G.rows[0], g.rows - 1) && same(G.rows[5], g.rows - 6), G.rows[0] && G.rows[0][0]);
-      G.sort = { col: 'score', dir: 'asc' }; buildHead(); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s);
-      G.sort = { col: 'note', dir: 'asc' }; buildHead(); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
+      G.sort = { col: 'score', dir: 'asc' }; buildHead(); s = performance.now(); const q3 = await applyQuery(); T.sortScoreMs = Math.round(performance.now() - s); T.scoreLoadMs = q3.loadMs;
+      G.sort = { col: 'note', dir: 'asc' }; buildHead(); s = performance.now(); const q4 = await applyQuery(); T.sortTextMs = Math.round(performance.now() - s); T.textLoadMs = q4.loadMs; add('sorting by a text column (note) works', q4.count === g.rows && !!G.rows[0], G.rows[0] && G.rows[0][4]);
       T.fullMatch = {};   // a filter every row satisfies (id >= 0): first query on a freshly opened dataset (cold) and the same again (warm), with and without the full-match shortcut
       for (const ni of [true, false]) {
         await openGrid(d.name); G.sort = null; G.noInside = ni; G.filters = { id: '>=0' }; buildHead();
@@ -5152,7 +5247,7 @@ window.__WORKER_URL = URL.createObjectURL(new Blob([document.getElementById("wsr
   }
 
   function report() {
-    const L = ['LFCFoundry Workbench results', 'Workbench version: 2026.11.14.0636 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCFoundry Workbench results', 'Workbench version: 2026.11.14.0811 (LFC-pack 0.10.18)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
