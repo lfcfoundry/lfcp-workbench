@@ -628,7 +628,7 @@ async function importOnce(m) {
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
-    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (morePack && m.morePack !== 0) morePack(m.morePack || (isFirefox ? 3 : 2)); }
+    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) view.cols.set(c.name, view.live.column(c.name));   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ if (morePack && m.morePack !== 0) morePack(m.morePack || (isFirefox ? 3 : 2)); }
     await finishPacking();
     if (dkBlocks && dkBlocks.size) { try { keptDict.set(name, mergeDicts(dkBlocks, rows)); } catch { keptDict.delete(name); } }
     await write(packer.finish());
@@ -637,7 +637,7 @@ async function importOnce(m) {
     const v = await validate(name, rows);
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
-    if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { R: R2, f: f2, flat: R2.blocks.length > 0 && R2.blocks.every((b) => b.kind === 'f' && !b.table), live: null }); liveChunks = null; } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
+    if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: R2.blocks.length > 0 && R2.blocks.every((b) => b.kind === 'f' && !b.table), live: null }); liveChunks = null; } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
     if (view && view.live && view.name === name) { view = null; send('liveclosed', m.id, {}); }
@@ -696,6 +696,10 @@ const MAX_COLUMN_ROWS = 20000000;   // column path: only the filtered and sorted
 let view = null, queryMod = null, colMod = null;
 async function openView(m) {
   if (view && view.live && view.name === m.name) return send('opened', m.id, { name: m.name, total: view.total, columns: view.columns });   // still being saved: the kept columns answer
+  if (view && !view.live && view.name === m.name && view.R && view.cols && !m.fresh) {   // the same dataset is already open (just imported): keep its decoded columns, start with no filter
+    view.indices = null; view.filtered = false; view.pending = null; view.rows = null; view.cache = new Map();
+    return send('opened', m.id, { dictKept: Object.keys(view.dictCols || {}), name: m.name, total: view.total, columns: view.columns, reused: true });
+  }
   try {
     await LfcPack.init({ readOnly: true });
     queryMod ||= MODS() || await import('../src/query/query.mjs');
@@ -757,7 +761,11 @@ async function warmColumn(n) {
 }
 async function loadColumns(names, stream, plain) {
   if (view.live) { for (const n of names) if (!view.cols.has(n)) view.cols.set(n, view.live.column(n)); const out = {}; for (const n of names) out[n] = view.cols.get(n); return out; }
-  const want = names.filter((n) => !view.cols.has(n));
+  let want = names.filter((n) => !view.cols.has(n));
+  if (view.dictCols && want.length && !plain) {   // a text column kept as dictionary ids from the import: its strings come from the distinct values (one lookup per row), no decode of the saved file
+    for (const n of want) { const d = view.dictCols[n], c = view.columns.find((x) => x.name === n); if (d && c && c.type !== 'integer' && c.type !== 'number' && d.ids.length === view.total) { const a = new Array(view.total), dict = d.dict, ids = d.ids; for (let i = 0; i < a.length; i++) a[i] = dict[ids[i]]; view.cols.set(n, a); } }
+    want = want.filter((n) => !view.cols.has(n));
+  }
   if (want.length) {
     const isNum = want.map((n) => { const c = view.columns.find((x) => x.name === n); return !plain && !!c && (c.type === 'integer' || c.type === 'number'); }), bad = [];
     const out = want.map((_, k) => (isNum[k] ? new Float64Array(view.total) : new Array(view.total))); let at = 0;
