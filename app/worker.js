@@ -61,7 +61,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'packPlain') packPlainJob(m);
   else if (m.type === 'packCols') packColsJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
-  else if (m.type === 'import') importFile(m);
+  else if (m.type === 'import') importWithEncoding(m);
   else if (m.type === 'list') list(m);
   else if (m.type === 'delete') remove(m);
   else if (m.type === 'verify') verify(m);
@@ -572,6 +572,28 @@ async function samplePlan(file, delimiter) {
 // Staged columns can find a text-like cell in a number column late in the file; then the whole import runs again on the JSON-lines path (nothing was kept).
 // A number column that meets a text-like cell late in the file (a sample of the first rows said integer) no longer sends the whole import to the text path: that one column is
 // read as text and the import starts again with the other number columns kept (up to 3 times), so the staged columns, live view and pack workers stay on.
+// A file that is not valid UTF-8 (usually a Windows-1252 export) is re-encoded to UTF-8 first; valid UTF-8 files never reach this path's re-encode.
+async function notUtf8(file) {
+  const SL = 1048576, spots = [[0, 4194304]]; if (file.size > 12 * SL) spots.push([Math.floor(file.size / 2), SL], [file.size - SL, SL]);
+  for (const [at, len] of spots) {
+    const u = new Uint8Array(await file.slice(at, Math.min(file.size, at + len)).arrayBuffer()); let i = 0;
+    if (at > 0) while (i < 3 && i < u.length && (u[i] & 0xC0) === 0x80) i++;   // a slice may start inside a character
+    try { new TextDecoder('utf-8', { fatal: true }).decode(i ? u.subarray(i) : u, { stream: true }); } catch { return true; }
+  }
+  return false;
+}
+async function toUtf8File(file) {
+  const dec = new TextDecoder('windows-1252'), enc = new TextEncoder(), parts = [], rd = file.stream().getReader();
+  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(enc.encode(dec.decode(value, { stream: true }))); }
+  parts.push(enc.encode(dec.decode()));
+  return new File(parts, file.name);
+}
+async function importWithEncoding(m) {
+  const early = { cancelled: false, pre: true }; jobs.set(m.id, early);   // a cancel that arrives while the file is checked still counts
+  try { if (m.file && m.file.size && await notUtf8(m.file)) { m = Object.assign({}, m, { file: await toUtf8File(m.file) }); send('notice', m.id, { text: 'This file is not UTF-8, so it was read as Windows-1252.' }); } }
+  catch { /* the normal import reports any real problem */ }
+  return importFile(m);
+}
 async function importFile(m) {
   const demote = new Set(); let mm = m;
   for (let tries = 0; tries < 4; tries++) {
@@ -584,7 +606,7 @@ async function importFile(m) {
 const columnsOk = (m) => !m.noColumns && typeof WebAssembly !== 'undefined' && (m.columns === true || (!((self.navigator && self.navigator.deviceMemory) < 8) && (!/Android|iPhone|iPad|iPod|Mobile/i.test((self.navigator && self.navigator.userAgent) || '') || (self.navigator && self.navigator.deviceMemory) >= 8)))   // phones too when the browser reports 8 GB or more (Chrome caps the report at 8): measured on an 8 GB Android phone, first rows 1.0 s instead of 1.8-2.0 s, save 16-24% later;
 async function importOnce(m) {
   let restart = false;
-  const job = { cancelled: false }; jobs.set(m.id, job);
+  const prev = jobs.get(m.id), job = { cancelled: !!(prev && prev.pre && prev.cancelled) }; jobs.set(m.id, job);
   let name = null, writable = null, closed = false, helper = null;
   const t0 = performance.now(), t = { readMs: 0, parseMs: 0, packMs: 0, writeMs: 0 };
   try {
