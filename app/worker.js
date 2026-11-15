@@ -32,12 +32,29 @@ const memStore = {
 let store = memStore;
 // Some contexts (WebKitGTK, pages opened from a file) have no usable OPFS: look once, fall back to memory.
 const storageReady = (async () => { try { await navigator.storage.getDirectory(); OPFS = true; STORAGE = 'browser storage (OPFS)'; store = opfsStore; } catch {} })();
+// Helper workers start from this script's own address. A page opened from a file has an opaque origin, where Chromium refuses a nested worker from a blob address (SecurityError); the page then makes ready-made helper workers itself and hands this worker one message port for each (the page's CSP only allows blob: workers, so a data: address is not an option). The port answers like a Worker.
+const POOL = [];
+function portWorker(p) {
+  const port = p.port, w = { onmessage: null, onerror: null, postMessage: (m, t) => port.postMessage(m, t || []), terminate: () => { port.close(); self.postMessage({ type: 'helperKill', id: p.id }); self.postMessage({ type: 'helperPool', n: 1 }); } };
+  port.onmessage = (e) => { if (w.onmessage) w.onmessage(e); };
+  return w;
+}
+function mkWorker() {
+  try { return new Worker(self.location.href); } catch (e) { if (!POOL.length) throw e; return portWorker(POOL.shift()); }
+}
+if (self.origin === 'null' && /^blob:/.test(self.location.href)) { let blocked = false; try { new Worker(self.location.href).terminate(); } catch { blocked = true; } if (blocked) self.postMessage({ type: 'helperPool', n: 8 }); }   // opaque origin (a page opened from a file): ask the page for helpers
+self.addEventListener('message', (e) => {   // a helper made by the page: talk to the importing worker over the port
+  const m = e.data; if (!m || m.type !== 'attachPort') return;
+  const port = m.port; self.postMessage = (x, t) => port.postMessage(x, t || []); port.onmessage = (ev) => self.onmessage(ev);
+});
 const stop = (job) => { if (job.cancelled) { const e = new Error('Import cancelled.'); e.cancelled = true; throw e; } };
 
 self.onmessage = async (e) => {
   const m = e.data || {};
   await storageReady;
   if (m.type === 'cancel') { const j = jobs.get(m.id); if (j) { j.cancelled = true; if (j.abort) j.abort(); } }
+  else if (m.type === 'ports') m.ids.forEach((id, i) => POOL.push({ id, port: m.ports[i] }));
+  else if (m.type === 'attachPort') { /* handled above */ }
   else if (m.type === 'parseJob') parseJob(m);
   else if (m.type === 'seg') segJob(m);
   else if (m.type === 'packBlock') packBlockJob(m);
@@ -447,7 +464,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
-  try { for (let i = 0; i < 2; i++) helpers.push(new Worker(self.location.href)); } catch { closeAll(); return null; }
+  try { for (let i = 0; i < 2; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; }
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   for (const h of helpers) {
     h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); p.res(d.r); } } };
@@ -555,7 +572,7 @@ async function importOnce(m) {
     let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
     const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? (isFirefox ? 1 : 2) : 2);   // live columns: Firefox packs with one worker while parsing (the cores go to the parse helpers) and gets three more when parsing is done; Chromium keeps two and gets two more (measured: each is the best of the variants in its browser)   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
-    if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(new Worker(self.location.href)); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
+    if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(mkWorker()); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
     if (pws) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
       const bb = m.blockBytes || 2097152, popts = Object.assign({ level: m.level || 3 }, { blockBytes: bb, share: false });
       packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
@@ -568,7 +585,7 @@ async function importOnce(m) {
         pump();
       };
       for (const w of pws) { w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
-      morePack = (k) => { try { for (let i = 0; i < k; i++) { const w = new Worker(self.location.href); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); } pump(); } catch { /* the workers we have keep going */ } };   // parsing is done: its cores join the packing
+      morePack = (k) => { try { for (let i = 0; i < k; i++) { const w = mkWorker(); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); } pump(); } catch { /* the workers we have keep going */ } };   // parsing is done: its cores join the packing
       job.abort = () => { failed = Object.assign(new Error('Import cancelled.'), { cancelled: true }); pump(); };
       const send1 = async (msg, tr) => {
         while (!idle.length && !failed) await new Promise((r) => { wake = r; });
@@ -607,7 +624,7 @@ async function importOnce(m) {
     const plan = m.untyped ? null : await samplePlan(file, delimiter); const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null;
     let res = null;
     if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
-    if (!res) try { helper = m.inline ? null : new Worker(self.location.href); } catch { helper = null; }
+    if (!res) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
     if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
         let chain = Promise.resolve();
