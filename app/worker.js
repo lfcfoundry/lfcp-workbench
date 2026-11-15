@@ -62,6 +62,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'packCols') packColsJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importWithEncoding(m);
+  else if (m.type === 'zipList') zipList(m);
   else if (m.type === 'list') list(m);
   else if (m.type === 'delete') remove(m);
   else if (m.type === 'verify') verify(m);
@@ -452,8 +453,17 @@ async function parseSegment(m) {
 }
 
 // Pack worker side (LFC-pack 0.7.0): pack one chunk of JSON lines into block bytes; the importer appends the results in order with pushPacked.
+let flatOne = null;
 async function packBlockJob(m) {
-  try { await LfcPack.init(); const r = LfcPack.packBlock(new Uint8Array(m.c), m.o); self.postMessage({ type: 'packed', rid: m.rid, r }, [r.buffer]); }
+  try { await LfcPack.init(); let bytes = new Uint8Array(m.c); if (m.flat) { flatOne ||= flatTransform(); flatOne.reset(); bytes = flatOne(bytes); } const r = LfcPack.packBlock(bytes, m.flat ? Object.assign({}, m.o, { blockBytes: bytes.length + 1024 }) : m.o);
+    // Exact column types: the first 2000 lines can say "whole numbers" or "dates" for a column that later has decimals or other text. Each block is searched for a violation, and the importer combines the answers.
+    let chk = null; if (m.chk && (m.chk.ints.length || m.chk.dates.length)) {
+      const txt = new TextDecoder('latin1').decode(bytes); chk = { dec: [], bad: [] };
+      const esc = (x) => x.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
+      if (m.chk.ints.length) { const re = new RegExp('"(' + m.chk.ints.map(esc).join('|') + ')":-?\\d+(?:\\.\\d|[eE])', 'g'); const seen = new Set(); let mm; while (seen.size < m.chk.ints.length && (mm = re.exec(txt))) { seen.add(mm[1]); re.lastIndex = mm.index + mm[0].length; } chk.dec = [...seen]; }
+      for (const nm of m.chk.dates) { if (new RegExp('"' + esc(nm) + '":"(?!\\d{4}-\\d\\d-\\d\\d(?:[ T]\\d\\d:\\d\\d(?::\\d\\d(?:\\.\\d+)?)?)?Z?")').test(txt)) chk.bad.push(nm); }
+    }
+    self.postMessage({ type: 'packed', rid: m.rid, r, chk }, [r.buffer]); }
   catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
 }
 
@@ -588,13 +598,133 @@ async function toUtf8File(file) {
   parts.push(enc.encode(dec.decode()));
   return new File(parts, file.name);
 }
+// UTF-16 (with a byte order mark, or without one when the text is mostly ASCII and every other byte is zero) is converted to UTF-8 in 4 MB pieces that the parser can slice like any file.
+async function sniffUtf16(file) {
+  const u = new Uint8Array(await file.slice(0, 65536).arrayBuffer()); if (u.length < 2) return null;
+  if (u[0] === 0xFF && u[1] === 0xFE) return 'utf-16le'; if (u[0] === 0xFE && u[1] === 0xFF) return 'utf-16be';
+  const n = Math.min(u.length, 4096) & ~1; if (n < 8) return null; let ev = 0, od = 0; for (let i = 0; i < n; i += 2) { if (u[i] === 0) ev++; if (u[i + 1] === 0) od++; }
+  const half = n / 2; if (od > half * 0.4 && ev < half * 0.02) return 'utf-16le'; if (ev > half * 0.4 && od < half * 0.02) return 'utf-16be'; return null;
+}
+async function utf16ToUtf8File(file, label) {
+  const dec = new TextDecoder(label), enc = new TextEncoder(), parts = [], rd = file.stream().getReader(); let acc = [], accN = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; const e = enc.encode(dec.decode(value, { stream: true })); acc.push(e); accN += e.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } }
+  const tail = dec.decode(); if (tail) acc.push(enc.encode(tail)); if (acc.length) parts.push(new Blob(acc));
+  return new File(parts, file.name);
+}
+const isGz = (f) => /\.gz$/i.test(f.name || '');
+async function gunzipFile(file) {   // serial variant: decode the whole file into a Blob (spilled to disk by the browser), then import as usual
+  const parts = []; const rd = file.stream().pipeThrough(new DecompressionStream('gzip')).getReader(); let acc = [], accN = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; acc.push(value); accN += value.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } }
+  if (acc.length) parts.push(new Blob(acc));
+  return new File(parts, String(file.name).replace(/\.gz$/i, ''), { type: 'text/csv' });
+}
+const isZip = (f) => /\.zip$/i.test(f.name || '');
+// Zip: read the central directory, pick the entry (m.zipEntry, else the largest .csv/.tsv/.txt), inflate it with DecompressionStream('deflate-raw') into a Blob (stored entries are sliced, not copied).
+async function unzipFile(file, want, listOnly) {
+  const sz = file.size, tailN = Math.min(sz, 65557), tail = new DataView(await file.slice(sz - tailN, sz).arrayBuffer());
+  let e = -1; for (let i = tailN - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('This is not a zip file (no end record).');
+  let n = tail.getUint16(e + 10, true), cdSize = tail.getUint32(e + 12, true), cdOff = tail.getUint32(e + 16, true);
+  if (n === 0xFFFF || cdOff === 0xFFFFFFFF || cdSize === 0xFFFFFFFF) {   // zip64 end record
+    const loc = tail.getUint32(e - 20, true) === 0x07064b50 ? e - 20 : -1; if (loc < 0) throw new Error('Unsupported zip64 layout.');
+    const off64 = Number(tail.getBigUint64(loc + 8, true)), r = new DataView(await file.slice(off64, off64 + 56).arrayBuffer());
+    n = Number(r.getBigUint64(32, true)); cdSize = Number(r.getBigUint64(40, true)); cdOff = Number(r.getBigUint64(48, true));
+  }
+  const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer()), dec = new TextDecoder(), ents = []; let p = 0;
+  for (let i = 0; i < n && p + 46 <= cdSize; i++) {
+    if (cd.getUint32(p, true) !== 0x02014b50) break;
+    const flags = cd.getUint16(p + 8, true), method = cd.getUint16(p + 10, true); let csz = cd.getUint32(p + 20, true), usz = cd.getUint32(p + 24, true);
+    const nl = cd.getUint16(p + 28, true), el = cd.getUint16(p + 30, true), cl = cd.getUint16(p + 32, true); let lho = cd.getUint32(p + 42, true);
+    const name = dec.decode(new Uint8Array(cd.buffer, p + 46, nl));
+    if (csz === 0xFFFFFFFF || usz === 0xFFFFFFFF || lho === 0xFFFFFFFF) { let q = p + 46 + nl; const end = q + el; while (q + 4 <= end) { const id = cd.getUint16(q, true), len = cd.getUint16(q + 2, true); if (id === 1) { let o = q + 4; if (usz === 0xFFFFFFFF) { usz = Number(cd.getBigUint64(o, true)); o += 8; } if (csz === 0xFFFFFFFF) { csz = Number(cd.getBigUint64(o, true)); o += 8; } if (lho === 0xFFFFFFFF) { lho = Number(cd.getBigUint64(o, true)); } } q += 4 + len; } }
+    ents.push({ name, method, csz, usz, lho, enc: !!(flags & 1) }); p += 46 + nl + el + cl;
+  }
+  const files = ents.filter((x) => !x.name.endsWith('/'));
+  let pick = want ? files.find((x) => x.name === want) : null;
+  if (!pick) pick = files.filter((x) => /\.(csv|tsv|txt)$/i.test(x.name)).sort((a, b) => b.usz - a.usz)[0] || files.sort((a, b) => b.usz - a.usz)[0];
+  if (!pick) throw new Error('The zip file has no files.');
+  if (listOnly) return { entries: files.map((x) => ({ name: x.name, size: x.usz, method: x.method })), picked: pick.name }; if (pick.enc) throw new Error('This zip entry is encrypted.');
+  if (pick.method !== 0 && pick.method !== 8) throw new Error('This zip entry uses an unsupported compression method (' + pick.method + ').');
+  const lh = new DataView(await file.slice(pick.lho, pick.lho + 30).arrayBuffer()), start = pick.lho + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+  const base = pick.name.split('/').pop(); const raw = file.slice(start, start + pick.csz);
+  if (pick.method === 0) return { file: new File([raw], base, { type: 'text/csv' }), entries: files.map((x) => x.name), picked: pick.name };
+  const parts = []; const rd = raw.stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader(); let acc = [], accN = 0, total = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; acc.push(value); accN += value.length; total += value.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } }
+  if (acc.length) parts.push(new Blob(acc));
+  if (total !== pick.usz) throw new Error('The zip entry did not unpack to its recorded size.');
+  return { file: new File(parts, base, { type: 'text/csv' }), entries: files.map((x) => x.name), picked: pick.name };
+}
+// The page lists the files in a zip so the person can pick one (m.zipEntry); the default is the largest .csv, .tsv or .txt.
+async function zipList(m) { try { const r = await unzipFile(m.file, null, true); send('zipList', m.id, r); } catch (err) { send('zipList', m.id, { error: String(err && err.message || err) }); } }
 async function importWithEncoding(m) {
   const early = { cancelled: false, pre: true }; jobs.set(m.id, early);   // a cancel that arrives while the file is checked still counts
-  try { if (m.file && m.file.size && await notUtf8(m.file)) { m = Object.assign({}, m, { file: await toUtf8File(m.file) }); send('notice', m.id, { text: 'This file is not UTF-8, so it was read as Windows-1252.' }); } }
+  try {
+    for (let hop = 0; hop < 2 && m.file; hop++) {   // a .zip or .gz is unpacked first (a .gz inside a .zip too); an unpack error is reported, not imported as text
+      if (isZip(m.file)) { const z = await unzipFile(m.file, m.zipEntry); m = Object.assign({}, m, { file: z.file }); send('notice', m.id, { text: 'Opened ' + z.picked + ' from the zip file' + (z.entries.length > 1 ? ' (' + z.entries.length + ' files inside).' : '.') }); }
+      else if (isGz(m.file)) { m = Object.assign({}, m, { file: await gunzipFile(m.file) }); send('notice', m.id, { text: 'This file was gzip-compressed, so it was unpacked first.' }); }
+      else break;
+    }
+  } catch (err) { jobs.delete(m.id); return send('error', m.id, { message: String(err && err.message || err) }); }
+  try { const u16 = m.file && m.file.size > 1 ? await sniffUtf16(m.file) : null; if (u16) { m = Object.assign({}, m, { file: await utf16ToUtf8File(m.file, u16) }); send('notice', m.id, { text: 'This file was UTF-16, so it was converted to UTF-8.' }); } else if (m.file && m.file.size && await notUtf8(m.file)) { m = Object.assign({}, m, { file: await toUtf8File(m.file) }); send('notice', m.id, { text: 'This file is not UTF-8, so it was read as Windows-1252.' }); } }
   catch { /* the normal import reports any real problem */ }
   return importFile(m);
 }
+const isNdjson = (f) => /\.(ndjson|jsonl|json)$/i.test(f.name || '');
+// NDJSON: one JSON object per line is already the JSON-lines form LFC-pack packs, so the bytes go to the pack workers cut at line ends; the first 2000 lines give the column names and types.
+// JSON objects to flat JSON lines (wasm, flat.c). Cuts each top-level object out of an array or a line stream, drops white space outside strings, and writes the members of a one-level nested object as dotted names ("trip":{"distance":1} becomes "trip.distance":1). Deeper nesting, a key over 1000 bytes or an object over 4 MB sets an error bit.
+function flatTransform() {
+  const bin = Uint8Array.from(atob('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IQdBASEGIBIhAwwOC0EBIQZBACEMQQBBAToAtKjAhwAgA0GAiMCCAGpBIjoAACADQQFqIQNBACEHDA0LQQEhB0EAIQZBAEEBNgK4qMCHACADQYCIwIIAakH7ADoAACADQQFqIQMMDAsCQAJAIA1BAXFFDQBBAEEAOgCcqMCHAAwBCyADQYCIwIIAakEsOgAAIANBAWohAwtBASEMQQAhDUEAQQE6AKyowIcAQQBBADYCqKjAhwBBACEIDAYLAkAgBUEBRg0AAkACQCAFQQJ0QdCowIcAaigCACISDQBBAEEBOgCcqMCHACAFQX9qIQUMAQsCQCANQX9zIANFckEBcQ0AIANBf2ogAyADQf+HwIIAai0AAEEsRhshAwsgBUF/aiIFQQJ0QdCowIcAaiIGIAYoAgAgEmo2AgBBAEEAOgCcqMCHAAsgEkUhDUEAIQxBACAFNgK8qMCHAEEAIAVBAnRBkKnAhwBqKAIAIgo2AqCowIcAQQBBADoArKjAhwAMBgsCQAJAIA1BAXENACADIRIMAQtBACESQQBBADoAnKjAhwAgA0UNACADQX9qIAMgA0H/h8CCAGotAABBLEYbIRILIBJBgYjAggBqQQo6AAAgEkGAiMCCAGpB/QA6AABBACENQQAgD0EBaiIPNgKAqMCHAEEAQQA2AryowIcAQQAhB0EAIQZBACEFIBJBAmoiAiEDDAoLIANBgIjAggBqQTo6AAAMAwsgEkHbAEYNBAsgA0GAiMCCAGogEjoAAAwBC0EBIQxBACENQQBBATYCvKjAhwBBAEEBOgCsqMCHACADQYCIwIIAakH7ADoAAEEAQQA2AqiowIcAQQBBADYCuKjAhwBBAEEAOgCcqMCHAEEAQQA2AqCowIcAQQBBADYC1KjAhwAgA0EBaiEDQQAhCkEAIQhBACEHQQEhBQwGCyADQQFqIQMLQQAhB0EAIQYMBAtBASEHQQAhBkEAQQE2AriowIcAIANBgIjAggBqQdsAOgAAIANBAWohAwwDCyADIAdqIQNBACEGDAILQQAhEEEAIQYgEyEDDAELQQEhBiATIQMLIAAgAUEBaiIBRw0ACwtBACACNgKUqMCHACADIAJrIQELQQAgATYCkKjAhwAgAgsAYARuYW1lAAsKZmxhdDIud2FzbQE4BwAGaW5fcHRyAQdvdXRfcHRyAgRyb3dzAwZlcnJvcnMECGZpbmlzaGVkBQVyZXNldAYFc3BsaXQHEgEAD19fc3RhY2tfcG9pbnRlcgA4CXByb2R1Y2VycwEMcHJvY2Vzc2VkLWJ5AQxVYnVudHUgY2xhbmcRMTguMS4zICgxdWJ1bnR1MSkAOQ90YXJnZXRfZmVhdHVyZXMDKwtidWxrLW1lbW9yeSsPbXV0YWJsZS1nbG9iYWxzKwhzaWduLWV4dA=='), (c) => c.charCodeAt(0)), X = new WebAssembly.Instance(new WebAssembly.Module(bin), {}).exports; X.reset(1);
+  const ip = X.in_ptr(), op = X.out_ptr(), mem = new Uint8Array(X.memory.buffer);
+  const f = (chunk) => {
+    if (chunk.length > (5 << 20)) throw new Error('chunk too large'); mem.set(chunk, ip); const n = X.split(chunk.length), e = X.errors();
+    if (e & 1) throw new Error('JSON nested more than one level deep is not supported yet.'); if (e & 2) throw new Error('A JSON key is longer than 1000 bytes.'); if (e & 4) throw new Error('A single JSON object is larger than 4 MB.');
+    return mem.slice(op, op + n);
+  }; f.rows = () => X.rows(); f.reset = () => X.reset(1); f.finished = () => X.finished(); return f;
+}
+async function parseNdjson(file, stopFn, onBytes, onProgress, t) {
+  const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer()); let hp = 0; while (hp < head.length && (head[hp] === 32 || head[hp] === 10 || head[hp] === 13 || head[hp] === 9 || head[hp] === 0xEF || head[hp] === 0xBB || head[hp] === 0xBF)) hp++;
+  let splitter = head[hp] === 91 ? flatTransform() : null, arrStart = 0;
+  if (head[hp] === 123) {   // a single JSON object that wraps the rows ({"data":[{..},{..}]}) instead of one object per line: the first array of objects is the table
+    const h1 = new Uint8Array(await file.slice(0, 1 << 20).arrayBuffer()), lat = new TextDecoder('latin1').decode(h1), nl = lat.indexOf('\n'); let first = false;
+    if (nl >= 0) { try { JSON.parse(lat.slice(0, nl)); first = true; } catch { first = false; } }
+    if (!first) { const mm = /"(?:[^"\\]|\\.)*"\s*:\s*(\[)\s*\{/.exec(lat); if (!mm) throw new Error('This JSON file is not a list of objects, one object per line, or an object that holds such a list.'); arrStart = mm.index + mm[0].indexOf('['); splitter = flatTransform(); }
+  } const splitterWasOn = !!splitter; const hasNested = (bytes) => { const text = dec.decode(bytes.subarray(0, Math.min(bytes.length, 262144))); const ls = text.split('\n'); for (let i = 0; i < Math.min(ls.length - 1, 50); i++) { let o; try { o = JSON.parse(ls[i]); } catch { return false; } for (const k in o) { const v = o[k]; if (v !== null && typeof v === 'object' && !Array.isArray(v)) return true; } } return false; };
+  let dateCand = []; const SL = 4 << 20, dec = new TextDecoder('utf-8'); let carry = new Uint8Array(0), rows = 0, headers = null, kinds = null, sample = [];
+  const sniff = (bytes) => {
+    const text = dec.decode(bytes.subarray(0, Math.min(bytes.length, 4 << 20))); const lines = text.split('\n'); lines.pop();
+    const idx = new Map(); headers = []; kinds = [];
+    for (let i = 0; i < Math.min(lines.length, 2000); i++) {
+      const ln = lines[i].trim(); if (!ln) continue; let o; try { o = JSON.parse(ln); } catch { throw new Error('Line ' + (i + 1) + ' is not valid JSON.'); }
+      if (o === null || typeof o !== 'object' || Array.isArray(o)) throw new Error('Line ' + (i + 1) + ' is not a JSON object.');
+      if (sample.length < 20) sample.push(o);
+      for (const k of Object.keys(o)) {
+        const v = o[k]; let c = idx.get(k); if (c === undefined) { c = headers.length; idx.set(k, c); headers.push(k); kinds.push(null); }
+        if (v === null) continue; if (typeof v === 'object') throw new Error('Column "' + k + '" holds a nested value; nested JSON is not supported yet.');
+        const kd = typeof v === 'boolean' ? 'boolean' : typeof v === 'number' ? (Number.isInteger(v) ? 'integer' : 'number') : 'string';
+        const cur = kinds[c]; kinds[c] = cur === null || cur === kd ? kd : (cur === 'integer' && kd === 'number') || (cur === 'number' && kd === 'integer') ? 'number' : 'string';
+      }
+    }
+    const dateRe = /^\d{4}-\d\d-\d\d(?:[ T]\d\d:\d\d(?::\d\d(?:\.\d+)?)?)?Z?$/, okName = (x) => /^[\x20-\x7e]+$/.test(x) && !/["\\]/.test(x);
+    dateCand = headers.map((h, c) => kinds[c] === 'string' && okName(h) && sample.length > 0 && sample.every((o) => o[h] === null || o[h] === undefined || (typeof o[h] === 'string' && dateRe.test(o[h]))) && sample.some((o) => typeof o[h] === 'string'));
+    t.chk = { ints: headers.filter((h, c) => kinds[c] === 'integer' && okName(h)), dates: headers.filter((h, c) => dateCand[c]) };
+  };
+  for (let off = 0; off < file.size; off += SL) {
+    if (splitter && splitter.finished && splitter.finished()) break;
+    stopFn(); let s = performance.now(); const chunk = new Uint8Array(await file.slice(off, Math.min(file.size, off + SL)).arrayBuffer()); t.readMs += performance.now() - s;
+    s = performance.now(); if (splitter) { const body = splitter(off === 0 && arrStart ? chunk.subarray(arrStart) : chunk); if (body.length) { if (!headers) sniff(body); rows = splitter.rows(); t.parseMs += performance.now() - s; await onBytes(body); onProgress(Math.min(file.size, off + SL), rows); } else t.parseMs += performance.now() - s; continue; }
+    const k = chunk.lastIndexOf(10); let body;
+    if (k < 0) { const n = new Uint8Array(carry.length + chunk.length); n.set(carry); n.set(chunk, carry.length); carry = n; t.parseMs += performance.now() - s; continue; }
+    body = new Uint8Array(carry.length + k + 1); body.set(carry); body.set(chunk.subarray(0, k + 1), carry.length); carry = chunk.slice(k + 1);
+    if (!headers && hasNested(body)) { t.flatPack = true; const tmp = flatTransform(); sniff(tmp(body.slice(0, Math.min(body.length, body.lastIndexOf(10, 1 << 20) + 1 || body.length)))); }
+    if (splitter) { const sw = !splitterWasOn; body = splitter(body); if (sw && carry.length) { const x = splitter(carry); carry = new Uint8Array(0); const nb = new Uint8Array(body.length + x.length); nb.set(body); nb.set(x, body.length); body = nb; } rows = splitter.rows(); if (!headers) sniff(body); } else { if (!headers) sniff(body); for (let i = body.indexOf(10); i >= 0; i = body.indexOf(10, i + 1)) rows++; }
+    t.parseMs += performance.now() - s; await onBytes(body); onProgress(Math.min(file.size, off + SL), rows);
+  }
+  if (!splitter && carry.length && dec.decode(carry).trim()) { const body = new Uint8Array(carry.length + 1); body.set(carry); body[carry.length] = 10; if (!headers) sniff(body); rows++; await onBytes(body); }
+  if (!headers || !headers.length) throw new Error('The file has no JSON lines.');
+  return { headers, types: kinds.map((x, c) => ({ type: dateCand[c] ? 'date' : (x || 'string'), nullable: true })), rows, sample, refine: (types) => { for (let c = 0; c < headers.length; c++) { if (types[c].type === 'integer' && t.chkDec && t.chkDec.has(headers[c])) types[c].type = 'number'; if (types[c].type === 'date' && t.chkBad && t.chkBad.has(headers[c])) types[c].type = 'string'; } } };
+}
 async function importFile(m) {
+  if (m.file && isNdjson(m.file)) m = Object.assign({}, m, { ndjson: true, untyped: true, noColumns: true });
   const demote = new Set(); let mm = m;
   for (let tries = 0; tries < 4; tries++) {
     const r = await importOnce(mm); if (!r) return;
@@ -633,7 +763,7 @@ async function importOnce(m) {
       const ws = [], idle = [], done = new Map(); dkBlocks = new Map(); let seq = 0, emit = 0, parts = [], plen = 0, wake = null, wchain = Promise.resolve(), failed = null;
       const pump = () => { if (wake) { const r = wake; wake = null; r(); } };
       const onPacked = (w) => (e) => {
-        const d = e.data; if (d.error) failed = new Error('Pack worker failed: ' + d.error); else { done.set(d.rid, d.r); if (d.dk) dkBlocks.set(d.rid, d.dk); }
+        const d = e.data; if (d.error) failed = new Error('Pack worker failed: ' + d.error); else { done.set(d.rid, d.r); if (d.dk) dkBlocks.set(d.rid, d.dk); if (d.chk) { for (const x of d.chk.dec) (t.chkDec ||= new Set()).add(x); for (const x of d.chk.bad) (t.chkBad ||= new Set()).add(x); } }
         idle.push(w);
         wchain = wchain.then(async () => { while (done.has(emit)) { const r = done.get(emit); done.delete(emit); emit++; await write(packer.pushPacked(r)); } pump(); });
         pump();
@@ -646,7 +776,7 @@ async function importOnce(m) {
         if (failed) throw failed;
         idle.pop().postMessage(Object.assign({ rid: seq++ }, msg), tr);
       };
-      const dispatch = (chunk) => send1({ type: 'packBlock', c: chunk, o: popts }, [chunk.buffer]);
+      const dispatch = (chunk) => send1({ type: 'packBlock', c: chunk, o: popts, flat: !!t.flatPack, chk: t.chk }, [chunk.buffer]);
       if (columnsOk(m)) {   // staged columns: chunks of typed columns are grouped into blocks of about colBlock bytes of CSV and packed by the pack workers
         const colBlock = m.colBlockBytes || 8388608; let cq = [], cqBytes = 0, cqRows = 0, colHeaders = null;
         // Live columns (desktop, file up to LIVE_MAX): the chunks are kept so the grid can read them as soon as parsing ends, while the pack workers still work through their queue.
@@ -691,9 +821,9 @@ async function importOnce(m) {
     }
     let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null;
     let res = null;
-    if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
-    if (!res) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
-    if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
+    if (!m.ndjson && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
+    if (!res && !m.ndjson) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
+    if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
         let chain = Promise.resolve();
         job.abort = () => reject(Object.assign(new Error('Import cancelled.'), { cancelled: true }));
@@ -715,7 +845,7 @@ async function importOnce(m) {
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
     if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) view.cols.set(c.name, view.live.column(c.name));   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ if (morePack && m.morePack !== 0) morePack(m.morePack || (isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 1 : 2)); }
     if (view && view.preview && view.name === name && !(view.live)) { view = null; send('liveclosed', m.id, {}); }
-    await finishPacking();
+    await finishPacking(); if (res.refine) { res.refine(types); for (let i = 0; i < headers.length; i++) { cols[i].type = types[i].type; if (meta.tables[0].columns[i]) meta.tables[0].columns[i].type = types[i].type; } }
     if (dkBlocks && dkBlocks.size) { try { keptDict.set(name, mergeDicts(dkBlocks, rows)); } catch { keptDict.delete(name); } }
     await write(packer.finish());
     await writable.close(); closed = true; writable = null;
