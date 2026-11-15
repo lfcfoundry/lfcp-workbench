@@ -143,19 +143,19 @@
   const FUNCS = ['hour', 'year', 'month', 'day', 'minute', 'length', 'upper', 'lower', 'trim', 'first'];
   const fillTools = () => {
     const opts = (f) => G.cols.filter(f || (() => true)).map((c) => '<option>' + esc(c.name) + '</option>').join('');
-    $('dsrc').innerHTML = opts(); $('dfn').innerHTML = FUNCS.map((f) => '<option>' + f + '</option>').join(''); $('gkey').innerHTML = opts(); $('gcol').innerHTML = opts();
+    $('dsrc').innerHTML = opts(); $('dfn').innerHTML = FUNCS.map((f) => '<option>' + f + '</option>').join(''); $('gkey').innerHTML = opts(); $('gkey2').innerHTML = '<option value="">nothing</option>' + opts(); $('gcol').innerHTML = opts();
   };
   async function addColumn(src, fn, name) {
     const r = await call({ type: 'derive', source: src, fn, name });
     if (r.type === 'error') { status(r.message, true); return r; }
     G.cols = r.columns; fillTools(); buildHead(); await applyQuery(); status('Added column ' + name + ' (' + r.ms + ' ms).'); return r;
   }
-  async function summarize(key, fn, col, eq) {
+  async function summarize(key, fn, col, eq, key2) {
     const aggs = [{ fn: 'count' }]; if (fn) aggs.push(fn === 'rate' ? { fn, col, equals: eq } : { fn, col });
-    const r = await call({ type: 'groupby', key, aggs, filters: G.filters });
+    const r = await call({ type: 'groupby', key, key2: key2 || undefined, aggs, filters: G.filters });
     if (r.type === 'error') { status(r.message, true); return r; }
     $('gres').innerHTML = '<table><tr>' + r.headers.map((h) => '<th>' + esc(h) + '</th>').join('') + '</tr>' + r.rows.slice(0, 200).map((x) => '<tr>' + x.map((v) => '<td>' + esc(v) + '</td>').join('') + '</tr>').join('') + '</table>';
-    $('gmsg').textContent = r.groups.toLocaleString() + ' groups from ' + r.rowsUsed.toLocaleString() + ' rows in ' + r.ms + ' ms'; G.lastGroup = r; return r;
+    $('gmsg').textContent = r.groups.toLocaleString() + ' groups from ' + r.rowsUsed.toLocaleString() + ' rows in ' + r.ms + ' ms'; G.lastGroup = r; $('gsave').disabled = false; return r;
   }
   async function saveLfcp(download) {
     status('Saving LFCP…'); const r = await call({ type: 'exportLfcp' });
@@ -164,9 +164,16 @@
     status('Saved ' + r.name + ': ' + r.rows.toLocaleString() + ' rows, ' + (r.bytes / 1048576).toFixed(2) + ' MB (also kept in this browser).'); return r;
   }
   $('dgo').addEventListener('click', () => addColumn($('dsrc').value, $('dfn').value, $('dname').value || $('dfn').value));
-  $('ggo').addEventListener('click', () => summarize($('gkey').value, $('gfn').value, $('gcol').value, $('geq').value));
+  $('ggo').addEventListener('click', () => summarize($('gkey').value, $('gfn').value, $('gcol').value, $('geq').value, $('gkey2').value));
+  async function saveSummary(download) {
+    status('Saving summary as LFCP…'); const r = await call({ type: 'exportSummary' });
+    if (r.type === 'error') { status(r.message, true); return r; }
+    if (download) { const a = document.createElement('a'); a.href = URL.createObjectURL(r.blob); a.download = r.name.replace(/-[0-9a-f-]{36}(\.json\.lfc)$/, '$1'); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
+    status('Saved ' + r.name + ': ' + r.rows.toLocaleString() + ' groups, ' + (r.bytes / 1024).toFixed(1) + ' KB (also kept in this browser).'); return r;
+  }
+  $('gsave').addEventListener('click', () => saveSummary(true));
   $('exportlfcp').addEventListener('click', () => saveLfcp(true));
-  window.__wb = { addColumn, summarize, saveLfcp, call, applyQuery, openGrid, G };
+  window.__wb = { saveSummary, addColumn, summarize, saveLfcp, call, applyQuery, openGrid, G };
   $('closegrid').addEventListener('click', () => { $('gridbox').hidden = true; });
 
   // Self-test: messy generated CSV, imported in the worker, read back, compared row by row.
@@ -395,7 +402,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.1135 (LFC-pack 0.10.42)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.1150 (LFC-pack 0.10.42)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }

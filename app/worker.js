@@ -74,6 +74,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'export') exportView(m);
   else if (m.type === 'derive') deriveColumn(m);
   else if (m.type === 'groupby') groupView(m);
+  else if (m.type === 'exportSummary') exportSummary(m);
   else if (m.type === 'exportLfcp') exportLfcp(m);
 };
 
@@ -1112,25 +1113,41 @@ async function deriveColumn(m) {
     send('derived', m.id, { columns: view.columns, ms: Math.round(performance.now() - t0) });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
+// The groups to show: most rows first, ties by key text. Only the first `top` are needed, so groups below the count that the top-th group has are skipped before the sort (299k groups: a full sort with array keys took 2 s).
+function topGroups(g, two, top) {
+  const G = g.keys.length, c = g.counts; let cand;
+  if (G > top * 4) {
+    let mx = 0; for (let i = 0; i < G; i++) if (c[i] > mx) mx = c[i];
+    if (mx <= 1048576) {
+      const h = new Uint32Array(mx + 2); for (let i = 0; i < G; i++) h[c[i]]++;
+      let thr = mx, acc = 0; for (; thr > 0; thr--) { acc += h[thr]; if (acc >= top) break; }
+      cand = []; for (let i = 0; i < G; i++) if (c[i] >= thr) cand.push(i);
+    }
+  }
+  if (!cand) { cand = []; for (let i = 0; i < G; i++) cand.push(i); }
+  const K = g.keys;
+  return cand.sort(two ? (a, b) => c[b] - c[a] || (K[a][0] < K[b][0] ? -1 : K[a][0] > K[b][0] ? 1 : K[a][1] < K[b][1] ? -1 : K[a][1] > K[b][1] ? 1 : 0) : (a, b) => c[b] - c[a] || (K[a] < K[b] ? -1 : K[a] > K[b] ? 1 : 0));
+}
 async function groupView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
-    groupMod ||= MODS() && MODS().groupBy ? { groupBy: MODS().groupBy, groupByCodes: MODS().groupByCodes } : await import('../src/query/groupby.mjs');
+    groupMod ||= MODS() && MODS().groupBy ? { groupBy: MODS().groupBy, groupByCodes: MODS().groupByCodes, groupBy2: MODS().groupBy2 } : await import('../src/query/groupby.mjs');
     queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
     if (view.total > MAX_COLUMN_ROWS || !view.flat) throw new Error('Group by works up to ' + MAX_COLUMN_ROWS.toLocaleString() + ' rows for now.');
-    const t0 = performance.now(), aggs = m.aggs || [{ fn: 'count' }], names = [...new Set([m.key].concat(aggs.filter((a) => a.col).map((a) => a.col)))];
+    const t0 = performance.now(), aggs = m.aggs || [{ fn: 'count' }], names = [...new Set([m.key].concat(m.key2 ? [m.key2] : [], aggs.filter((a) => a.col).map((a) => a.col)))];
     const active = Object.keys(m.filters || {}).filter((k) => m.filters[k]);
     for (const n of names) if (!view.columns.some((c) => c.name === n)) throw new Error('No column named ' + n + '.');
-    const dc = (!m.noDict && view.dictCols) || {}, useIds = !!dc[m.key];
+    const dc = (!m.noDict && view.dictCols) || {}, useIds = !m.key2 && !!dc[m.key], two = !!m.key2;
     // a column kept as dictionary ids from the import is counted by id: no text is decoded for it (the key, or an equal-to column in a 'share equal to' aggregate)
-    const need = Array.from(new Set(names.concat(active))).filter((n) => !(useIds && dc[n] && !active.includes(n)));
+    const need = Array.from(new Set(names.concat(active))).filter((n) => !((useIds || two) && dc[n] && !active.includes(n)));
     if (!/AppleWebKit(?!.*Chrome)/.test(self.navigator.userAgent || '') && !m.noParallel) await warmSome(need);   // missing columns decoded on helper threads at once (not in WebKitGTK: slower there)
     const cols = await loadColumns(need, false), tLoad = performance.now() - t0, tg = performance.now();
     let rows = null; if (active.length) rows = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters }).indices;
     const codeCols = {}; for (const a of aggs) if (a.col && dc[a.col] && a.fn === 'rate' && !m.noDict) codeCols[a.col] = dc[a.col];
-    const g = useIds ? groupMod.groupByCodes(dc[m.key].ids, dc[m.key].dict, cols, view.total, rows, { aggs, codeCols }) : groupMod.groupBy(cols, view.total, rows, { key: m.key, aggs }), order = Array.from(g.keys, (_, i) => i).sort((a, b) => g.counts[b] - g.counts[a] || (g.keys[a] < g.keys[b] ? -1 : 1));
-    const head = [m.key].concat(aggs.map((a) => (a.fn === 'count' ? 'count' : a.fn + '_' + a.col)));
-    const table = order.slice(0, 1000).map((gi) => { let v = 0; return [g.keys[gi]].concat(aggs.map((a) => { const x = a.fn === 'count' ? g.counts[gi] : g.values[v++][gi]; return x !== x ? '' : a.fn === 'avg' || a.fn === 'rate' ? String(Math.round(x * 10000) / 10000) : String(x); })); });
+    const g = two ? groupMod.groupBy2(cols, view.total, rows, { key: m.key, key2: m.key2, aggs, forceMap: !!m.forceMap, codeCols, ids1: dc[m.key] && dc[m.key].ids, dict1: dc[m.key] && dc[m.key].dict, ids2: dc[m.key2] && dc[m.key2].ids, dict2: dc[m.key2] && dc[m.key2].dict }) : useIds ? groupMod.groupByCodes(dc[m.key].ids, dc[m.key].dict, cols, view.total, rows, { aggs, codeCols }) : groupMod.groupBy(cols, view.total, rows, { key: m.key, aggs }), order = topGroups(g, two, 1000);
+    const head = (two ? [m.key, m.key2] : [m.key]).concat(aggs.map((a) => (a.fn === 'count' ? 'count' : a.fn + '_' + a.col)));
+    const table = order.slice(0, 1000).map((gi) => { let v = 0; return (two ? g.keys[gi] : [g.keys[gi]]).concat(aggs.map((a) => { const x = a.fn === 'count' ? g.counts[gi] : g.values[v++][gi]; return x !== x ? '' : a.fn === 'avg' || a.fn === 'rate' ? String(Math.round(x * 10000) / 10000) : String(x); })); });
+    view.lastGroup = { g, two, aggs, head, key: m.key, key2: m.key2, source: view.name };
     send('grouped', m.id, { byIds: useIds, headers: head, rows: table, groups: g.keys.length, rowsUsed: rows ? rows.length : view.total, ms: Math.round(performance.now() - t0), loadMs: Math.round(tLoad), groupMs: Math.round(performance.now() - tg) });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
@@ -1171,6 +1188,31 @@ async function warmCols(names, background) {
 const warmAll = () => (view && view.total <= 3000000 ? warmCols(view.columns.map((c) => c.name)) : Promise.resolve());
 const warmSome = (names) => warmCols(names);
 // Saves the rows now shown (filter and sort applied, derived columns included) as a new LFCP dataset in this browser and hands the file back for download.
+// Saves the last Summarize result (every group, most rows first) as a new LFCP dataset: one text column per key, a count column, one number column per aggregate.
+async function exportSummary(m) {
+  let writable = null, name = null, closed = false;
+  try {
+    const lg = view && view.lastGroup; if (!lg) throw new Error('Run Summarize first.');
+    await LfcPack.init(); const t0 = performance.now(), { g, two, aggs, head } = lg, order = topGroups(g, two, Infinity), n = order.length;
+    const cols = {}, types = [], numCols = [];
+    const nk = two ? 2 : 1; for (let k = 0; k < nk; k++) { const a = new Array(n); for (let i = 0; i < n; i++) a[i] = two ? g.keys[order[i]][k] : g.keys[order[i]]; cols[head[k]] = a; types.push('string'); }
+    let v = 0; aggs.forEach((a, j) => { const arr = new Array(n), src = a.fn === 'count' ? g.counts : g.values[v++]; for (let i = 0; i < n; i++) { const x = src[order[i]]; arr[i] = x !== x ? null : x; } cols[head[nk + j]] = arr; types.push(a.fn === 'count' || a.fn === 'min' || a.fn === 'max' || a.fn === 'sum' ? 'number' : 'number'); });
+    const names = Object.keys(cols), colMeta = names.map((nm, i) => ({ id: 'field-' + (i + 1), name: nm.slice(0, 100), type: types[i] === 'string' ? 'string' : (names[i] === 'count' ? 'integer' : 'number'), nullable: true }));
+    name = safe(view.name.replace(/-[0-9a-f-]{36}\.json\.lfc$/, '')) + '-summary-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
+    writable = await store.create(name);
+    const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'summary of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: n, columns: colMeta }] };
+    const popts = { level: 3, blockBytes: 2097152, share: false }, packer = LfcPack.packStream(Object.assign({}, popts, { meta })); let outBytes = 0;
+    const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
+    const BATCH = 65536; for (let s = 0; s < n; s += BATCH) { const out = {}; for (const nm of names) out[nm] = cols[nm].slice(s, s + BATCH); const r = await LfcPack.packBlock(out, popts); await write(packer.pushPacked(r)); }
+    await write(packer.finish()); await writable.close(); closed = true; writable = null;
+    const vd = await validate(name, n); if (!vd.ok) throw new Error('The written file failed footer validation: ' + vd.reason);
+    const cat = await store.catalog(); cat.push({ name, source: 'summary of ' + view.name, rows: n, bytes: outBytes, columns: colMeta.map((c) => ({ name: c.name, type: c.type, nullable: true })), created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
+    send('exportedLfcp', m.id, { name, rows: n, bytes: outBytes, blob: await store.file(name), ms: Math.round(performance.now() - t0) });
+  } catch (err) {
+    if (writable && !closed) { try { await writable.abort(); } catch {} } if (name) await store.remove(name);
+    send('error', m.id, { message: String(err && err.message || err) });
+  }
+}
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let writable = null, name = null, closed = false;
