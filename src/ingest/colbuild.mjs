@@ -6,6 +6,7 @@ export async function make(wasmBytes, headers, plan, delimiter, opts = {}) {
   return placeColumns(instance.exports, headers, plan, delimiter, opts);
 }
 // The same on an instance that already exists (the import workers make theirs synchronously). grab(rows) copies the chunk's columns out, by column index.
+const DCAPB = 262144;   // bytes of distinct values per dictionary column per chunk
 export function placeColumns(X, headers, plan, delimiter, opts = {}) {
   const n = headers.length;
   const capRows = opts.capRows || 65536, CH = opts.chunkBytes || 2097152;
@@ -17,6 +18,10 @@ export function placeColumns(X, headers, plan, delimiter, opts = {}) {
     const k = enc.encode(JSON.stringify(headers[c]) + ':'); new Uint8Array(X.memory.buffer, kp + koff, k.length).set(k);
     const pl = { kind: kinds[c], a: 0, b: 0, t: 0 };
     if (kinds[c] === 0) { pl.a = need(capRows * 4); pl.b = need(capRows * 4); pl.t = need(CH + 64); } else pl.a = need(capRows * 8);
+    if (X.set_dict) X.set_dict(c, 0);
+    if (kinds[c] === 0 && opts.dict && opts.dict[c] && X.set_dict) {   // dictionary column: one u16 code per row (in the start area) plus the distinct values of the chunk; stops with bail 'dict' past 4096 labels
+      pl.dict = { bytes: need(DCAPB), start: need(4096 * 4), end: need(4096 * 4) }; X.set_dict_out(c, pl.dict.bytes, DCAPB, pl.dict.start, pl.dict.end); X.set_dict(c, 1); pl.on = true;
+    }
     pls.push(pl); X.set_col(c, koff, k.length, kinds[c], 255); X.set_out(c, pl.a, pl.b, pl.t); koff += k.length;
   }
   X.setup(n, delimiter.charCodeAt(0), 0);
@@ -29,16 +34,19 @@ export function placeColumns(X, headers, plan, delimiter, opts = {}) {
       for (let c = 0; c < n; c++) {
         const pl = pls[c];
         if (pl.kind) out.push(new Float64Array(mem(), pl.a, rows).slice());
+        else if (pl.on) { const nl = X.dict_n(c); out.push({ codes: new Uint16Array(mem(), pl.a, rows).slice(), lb: { bytes: new Uint8Array(mem(), pl.dict.bytes, X.dict_blen(c)).slice(), start: new Uint32Array(mem(), pl.dict.start, nl).slice(), end: new Uint32Array(mem(), pl.dict.end, nl).slice() } }); }
         else { const tl = X.tlen(c); out.push({ bytes: new Uint8Array(mem(), pl.t, tl).slice(), start: new Int32Array(mem(), pl.a, rows).slice(), end: new Int32Array(mem(), pl.b, rows).slice() }); }
       }
       return out;
     },
     build(bytes) {
       if (bytes.length > CH) throw new Error('colbuild: chunk larger than ' + CH);
-      new Uint8Array(mem(), IN, bytes.length).set(bytes); X.reset_text();
+      new Uint8Array(mem(), IN, bytes.length).set(bytes); X.reset_text(); for (let c = 0; c < n; c++) if (pls[c].on) X.dict_reset(c);
       const used = X.build(IN, bytes.length, capRows), rows = X.rows(), b = X.bail(), cols = {}, g = this.grab(rows);
       for (let c = 0; c < n; c++) cols[headers[c]] = g[c];
-      return { n: rows, used, bail: b === 2 ? 'mixed' : b === 1 ? 'line' : null, cols, arr: g };
+      return { n: rows, used, bail: b === 2 ? 'mixed' : b === 1 ? 'line' : b === 4 ? 'dict' : null, bailcol: b === 4 ? X.bailcol() : -1, cols, arr: g };
     },
+    undict(c) { const pl = pls[c]; if (pl.on) { pl.on = false; X.set_dict(c, 0); X.set_out(c, pl.a, pl.b, pl.t); } },   // this column is text from now on (more than 4096 distinct values in a chunk)
+    isDict(c) { return !!pls[c].on; },
   };
 }

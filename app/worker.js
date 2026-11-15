@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.10.30/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.10.38/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -162,11 +162,11 @@ function makeFastW(headers, plan, trackers, delimiter) {
 const mixedErr = () => Object.assign(new Error('A number column holds a text-like cell; the file is imported on the text path.'), { mixed: true });
 const COLB = 1048576;   // bytes of CSV per wasm call and per chunk
 let C = null;
-const loadC = () => { if (C === null) { try { const s = atob('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'), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); C = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch { C = false; } } return C; };
-function makeColW(headers, plan, trackers, delimiter, sink) {
+const loadC = () => { if (C === null) { try { const s = atob('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'), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); C = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch { C = false; } } return C; };
+function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn) {
   const n = headers.length, D = delimiter.charCodeAt(0);
   if (n === 0 || n > 64 || D > 126 || typeof WebAssembly === 'undefined' || !core.placeColumns || !loadC()) return null;
-  const B = core.placeColumns(C, headers, plan, delimiter, { capRows: 32768, chunkBytes: COLB });
+  const B = core.placeColumns(C, headers, plan, delimiter, { capRows: 32768, chunkBytes: COLB, dict }); if (dictOn) for (let c = 0; c < n; c++) dictOn[c] = B.isDict(c);
   const flagsP = B.exports.flags_ptr(), cn = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 64), ce = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 64);
   const slot = new Uint8Array(n).fill(255), synced = new Int32Array(n); let slotNo = 0; const SLOTS = 8;
   const F = { off: false, rows: 0, miss: 0 };
@@ -183,6 +183,7 @@ function makeColW(headers, plan, trackers, delimiter, sink) {
       if (r.n) { const m = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 64), e = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 64); for (let c = 0; c < n; c++) { trackers[c].n += m[c]; trackers[c].empty += e[c]; } parser.line += C.nlines(); parser.startLine = parser.line; F.rows += r.n; F.miss = 0; sink({ n: r.n, bytes: r.used, cols: r.arr }); }
       i += r.used;
       if (r.bail === 'mixed') throw mixedErr();
+      if (r.bail === 'dict') { B.undict(r.bailcol); if (dictOn) dictOn[r.bailcol] = false; continue; }   // more than 4096 distinct values in a chunk: this column is text from here on
       if (r.bail) { if (++F.miss >= 64) F.off = true; break; }
       if (r.used === 0) break;
     }
@@ -191,7 +192,7 @@ function makeColW(headers, plan, trackers, delimiter, sink) {
   return F;
 }
 // Lines the wasm builder leaves to the character parser, collected until the next wasm chunk (or the end) and turned into a chunk of the same shape.
-function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink) {
+function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink, dictOn) {
   const n = headers.length, kind = headers.map((_, c) => (plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 ? plan[c] : 0));
   let vals = headers.map(() => []), rows = 0, bytes = 0;
   return {
@@ -207,7 +208,13 @@ function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink) {
       if (!rows) return;
       const cols = headers.map((_, c) => {
         if (kind[c]) return Float64Array.from(vals[c]);
-        const strs = vals[c]; let cap = 0; for (const s of strs) cap += s.length; const buf = new Uint8Array(cap * 3), start = new Int32Array(rows), end = new Int32Array(rows); let o = 0;
+        const strs = vals[c];
+        if (dictOn && dictOn[c]) {   // a dictionary column keeps the dictionary shape: a code per row plus the distinct values (text shape when a chunk holds more than 4096)
+          const ids = new Map(), codes = new Uint16Array(rows); let ok = true;
+          for (let r = 0; r < rows; r++) { let id = ids.get(strs[r]); if (id === undefined) { if (ids.size >= 4096) { ok = false; break; } id = ids.size; ids.set(strs[r], id); } codes[r] = id; }
+          if (ok) { const labs = [...ids.keys()]; let cp = 0; for (const x of labs) cp += x.length; const lbb = new Uint8Array(cp * 3), ls = new Uint32Array(labs.length), le = new Uint32Array(labs.length); let lo = 0; for (let q = 0; q < labs.length; q++) { ls[q] = lo; lo += enc.encodeInto(labs[q], lbb.subarray(lo)).written; le[q] = lo; } return { codes, lb: { bytes: lbb.slice(0, lo), start: ls, end: le } }; }
+        }
+        let cap = 0; for (const s of strs) cap += s.length; const buf = new Uint8Array(cap * 3), start = new Int32Array(rows), end = new Int32Array(rows); let o = 0;
         for (let r = 0; r < rows; r++) { start[r] = o; o += enc.encodeInto(strs[r], buf.subarray(o)).written; end[r] = o; }
         return { bytes: buf.slice(0, o), start, end };
       });
@@ -215,8 +222,15 @@ function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink) {
     },
   };
 }
-const dupChunk = (c) => ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.bytes ? { bytes: x.bytes.slice(), start: x.start.slice(), end: x.end.slice() } : x.slice())) });
-const chunkBuffers = (c) => { const o = []; for (const x of c.cols) { if (x.bytes) o.push(x.bytes.buffer, x.start.buffer, x.end.buffer); else o.push(x.buffer); } return o; };
+const dupChunk = (c) => ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.codes ? { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } } : x.bytes ? { bytes: x.bytes.slice(), start: x.start.slice(), end: x.end.slice() } : x.slice())) });
+const chunkBuffers = (c) => { const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) o.push(x.bytes.buffer, x.start.buffer, x.end.buffer); else o.push(x.buffer); } return o; };
+// Dictionary chunk column to the text shape (a code per row to start and end offsets into joined bytes).
+function expandDict(x, n) {
+  const lb = x.lb; let tb = 0; for (let r = 0; r < n; r++) { const q = x.codes[r]; tb += lb.end[q] - lb.start[q]; }
+  const bytes = new Uint8Array(tb), start = new Int32Array(n), end = new Int32Array(n); let o = 0;
+  for (let r = 0; r < n; r++) { const q = x.codes[r]; start[r] = o; bytes.set(lb.bytes.subarray(lb.start[q], lb.end[q]), o); o += lb.end[q] - lb.start[q]; end[r] = o; }
+  return { bytes, start, end };
+}
 // Pack worker side: join the chunks of one block (columns side by side, text offsets moved to the joined bytes) and pack them (LFC-pack packBlock over columns).
 async function packColsJob(m) {
   try {
@@ -224,6 +238,26 @@ async function packColsJob(m) {
     const ch = m.chunks, n = m.headers.length; let rows = 0; for (const c of ch) rows += c.n;
     const cols = {};
     for (let k = 0; k < n; k++) {
+      if (ch.every((c) => c.cols[k].codes)) {   // dictionary column in every chunk: merge the distinct values (codes renumbered) and hand LFC-pack { kind: 'dict', labels, ids }
+        const map = new Map(), lat = new TextDecoder('latin1'), ids = new Uint16Array(rows); let tb = 0; const parts = [], st = [], en = [];
+        let big = false, ro = 0;
+        for (const c of ch) {
+          const x = c.cols[k], lb = x.lb, nl = lb.start.length, remap = new Uint32Array(nl);
+          for (let q = 0; q < nl; q++) {
+            const sub = lb.bytes.subarray(lb.start[q], lb.end[q]), key = lat.decode(sub); let id = map.get(key);
+            if (id === undefined) { id = map.size; map.set(key, id); parts.push(sub); st.push(tb); tb += sub.length; en.push(tb); }
+            remap[q] = id;
+          }
+          if (map.size > 65535) big = true;
+          for (let r = 0; r < c.n; r++) ids[ro + r] = remap[x.codes[r]];
+          ro += c.n;
+        }
+        if (big) { cols[m.headers[k]] = null; throw new Error('dictionary column with more than 65,535 distinct values in a block'); }
+        const bytes = new Uint8Array(tb); let bo = 0; for (const sub of parts) { bytes.set(sub, bo); bo += sub.length; }
+        cols[m.headers[k]] = { kind: 'dict', labels: { bytes, start: Uint32Array.from(st), end: Uint32Array.from(en) }, ids };
+        continue;
+      }
+      for (const c of ch) { const x = c.cols[k]; if (x.codes) c.cols[k] = expandDict(x, c.n); }   // a mix of dictionary and text chunks: all become text
       if (ch[0].cols[k].bytes) {
         let tb = 0; for (const c of ch) tb += c.cols[k].bytes.length;
         const bytes = new Uint8Array(tb), start = new Int32Array(rows), end = new Int32Array(rows); let bo = 0, ro = 0;
@@ -347,8 +381,9 @@ async function parseSegment(m) {
   const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
   let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
   const colMode = !!(m.cols && headers && !m.headerOnly), chunks = [];
-  const slow = colMode ? slowRows(headers, plan, trackers, typedCell, core.typedDecimal, (c) => chunks.push(c)) : null;
-  const F = headers && !m.headerOnly ? (colMode ? makeColW(headers, plan, trackers, m.delimiter, (c) => { slow.flush(); chunks.push(c); }) : ((m.wasmRows !== false && makeFastW(headers, plan, trackers, m.delimiter)) || makeFast(headers, plan, trackers, m.delimiter))) : null;
+  const dictOn = headers ? headers.map(() => false) : null;   // which columns are in dictionary shape right now
+  const slow = colMode ? slowRows(headers, plan, trackers, typedCell, core.typedDecimal, (c) => chunks.push(c), dictOn) : null;
+  const F = headers && !m.headerOnly ? (colMode ? makeColW(headers, plan, trackers, m.delimiter, (c) => { slow.flush(); chunks.push(c); }, m.dict, dictOn) : ((m.wasmRows !== false && makeFastW(headers, plan, trackers, m.delimiter)) || makeFast(headers, plan, trackers, m.delimiter))) : null;
   let buf = new Uint8Array(1 << 20);
   const drain = () => { if (colMode) { slow.flush(); accN = 0; return; } if (!accN) return; if (buf.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(buf.length * 2, pos + acc.length * 3)); n.set(buf.subarray(0, pos)); buf = n; } pos += enc.encodeInto(acc, buf.subarray(pos)).written; acc = ''; accN = 0; };
   const flushOut = async () => { drain(); if (colMode) { if (m.emit) while (chunks.length) await m.emit(chunks.shift()); return; } if (!pos) return; const b = buf.slice(0, pos); pos = 0; if (m.emit) await m.emit(b); else pieces.push(b); };
@@ -403,7 +438,7 @@ async function segJob(m) {
 
 // Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
-async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col) {
+async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict) {
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
@@ -432,7 +467,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       while (!quit && nextD < total) {
         if (nextD >= nextP + SEG_WINDOW) { await wait(); continue; }
         const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
-        done.set(k, await rpc(h, { file, delimiter, headers, plan, cols, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
+        done.set(k, await rpc(h, { file, delimiter, headers, plan, dict, cols, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
         signal();
       }
     };
@@ -443,7 +478,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       let r = done.get(k); done.delete(k); nextP = k + 1; signal(); stop(job);
       if (r.error || r.startPos !== expect) {   // a guessed start sat inside quotes: parse this piece again from the verified spot
         t.redos = (t.redos || 0) + 1;
-        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, cols, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
+        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, dict, cols, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
         stop(job);
         if (r.mixed) throw mixedErr();   // from a verified start: the file really has a text-like cell in a number column
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
@@ -457,7 +492,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
     quit = true; signal();
     if (serial || expect < file.size) {   // pieces did not fit together (or one failed): parse the rest in order, from the last verified spot
       closeAll();
-      const r = await parseSegment({ file, delimiter, headers, plan, cols, startAt: expect, e: file.size, lineBase, trackers: agg, emit: col ? col.push : packBytes, stopFn: () => stop(job) });
+      const r = await parseSegment({ file, delimiter, headers, plan, dict, cols, startAt: expect, e: file.size, lineBase, trackers: agg, emit: col ? col.push : packBytes, stopFn: () => stop(job) });
       rows += r.rows; for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
       t.serialTail = true;
     }
@@ -469,6 +504,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
 // Which columns are stored as numbers: those whose first 2,000 rows (from the first MB) are all plain whole numbers or empty, with at least one number.
 // Decided once from the sample so every piece and helper agrees; a later value that is not a plain whole number stays text in its cell.
 async function samplePlan(file, delimiter) {
+  samplePlan.dict = null;
   try {
     await loadCore(); const { DelimitedParser, TypeTracker } = core;
     const text = new TextDecoder().decode(new Uint8Array(await file.slice(0, 1048576).arrayBuffer()));
@@ -483,6 +519,8 @@ async function samplePlan(file, delimiter) {
       const d = core.sampleDecimals(rows.slice(1).map((r) => r[c]));   // decimals: stored as numbers, with the count kept in the catalog
       return d > 0 && x.n > x.empty ? d : false;
     });
+    // low-variety text columns (at most 5% of the sample's rows distinct, and 200+ sample rows) are built as dictionary columns: a code per row and the distinct values
+    const nr = rows.length - 1; samplePlan.dict = nr >= 200 ? tr.map((x, c) => { if (plan[c] || x.type === 'empty') return false; const seen = new Set(); for (let r = 1; r < rows.length; r++) { seen.add(rows[r][c]); if (seen.size > nr * 0.05) return false; } return true; }) : null;
     return plan.some(Boolean) ? plan : null;
   } catch { return null; }
 }
@@ -560,9 +598,9 @@ async function importOnce(m) {
       };
       var packWorkersToStop = ws;
     }
-    const plan = m.untyped ? null : await samplePlan(file, delimiter);
+    const plan = m.untyped ? null : await samplePlan(file, delimiter); const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null;
     let res = null;
-    if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col);
+    if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
     if (!res) try { helper = m.inline ? null : new Worker(self.location.href); } catch { helper = null; }
     if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
@@ -686,11 +724,13 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   for (let k = 0; k < n; k++) if (kindOf[k]) { const a = new Float64Array(rows); for (let i = 0; i < chunks.length; i++) a.set(chunks[i].cols[k], starts[i]); nums.set(headers[k], a); }
   const find = (r) => { let lo = 0, hi = chunks.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= r) lo = mid; else hi = mid - 1; } return lo; };
   const L = {
-    row(r) { const o = {}, c = find(r), i = r - starts[c]; for (let k = 0; k < n; k++) { if (kindOf[k]) { const x = nums.get(headers[k])[r]; o[headers[k]] = x !== x ? null : x; } else { const x = chunks[c].cols[k]; o[headers[k]] = dec.decode(x.bytes.subarray(x.start[i], x.end[i])); } } return o; },
+    row(r) { const o = {}, c = find(r), i = r - starts[c]; for (let k = 0; k < n; k++) { if (kindOf[k]) { const x = nums.get(headers[k])[r]; o[headers[k]] = x !== x ? null : x; } else { const x = chunks[c].cols[k]; if (x.codes) { const q = x.codes[i], lb = x.lb; o[headers[k]] = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); } else o[headers[k]] = dec.decode(x.bytes.subarray(x.start[i], x.end[i])); } } return o; },
     column(nm) {   // a text column (or a number column that stayed text) as an array of strings, made the first time a filter or sort needs it
       const k = headers.indexOf(nm), out = new Array(rows); let at = 0;
       for (const ch of chunks) {
-        const x = ch.cols[k], b = x.bytes; let ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; }
+        const x = ch.cols[k];
+        if (x.codes) { const lb = x.lb, labs = new Array(lb.start.length); for (let q = 0; q < labs.length; q++) labs[q] = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); for (let r = 0; r < ch.n; r++) out[at++] = labs[x.codes[r]]; continue; }   // dictionary chunk: the distinct values decoded once, one lookup per row
+        const b = x.bytes; let ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; }
         if (ascii) { const s = latin.decode(b); for (let r = 0; r < ch.n; r++) out[at++] = s.substring(x.start[r], x.end[r]); }   // plain ASCII chunk: one decode, then slices
         else for (let r = 0; r < ch.n; r++) out[at++] = dec.decode(b.subarray(x.start[r], x.end[r]));
       }

@@ -13,6 +13,32 @@ static u32 cnt_n[MAXC], cnt_e[MAXC];
 static u32 ncols, extra; static u8 D;
 static u8 dtab[DSLOTS][DCAP][DSL + 1];   // len byte then bytes; len 0 = empty slot
 static u32 g_out, g_rows, g_bail, g_nl;
+// ---- Dictionary mode (parse-research prototype): a text column in dict mode writes a u16 code per row (colA[c] is a u16 array) instead of text; the labels (distinct values, first-seen order in this chunk)
+// go to dbytes[c] with dstart[c] / dend[c] offsets. More than DMAX labels or no room in dbytes: g_bail = 4 and g_bailcol = the column (JS switches that column to text and calls again from the returned position).
+#define DMAX 4096
+#define DHS 8192
+static u8 dmode[MAXC]; static unsigned short dhash[MAXC][DHS]; static u8* dbytes[MAXC]; static u32 dcap[MAXC], dlen_[MAXC], dn[MAXC]; static u32* dstart[MAXC]; static u32* dend[MAXC]; static u32 g_bailcol;
+EXPORT("set_dict") void set_dict(u32 c, u32 on){ dmode[c] = (u8)on; }
+EXPORT("set_dict_out") void set_dict_out(u32 c, void* bytes, u32 cap, void* st, void* en){ dbytes[c] = (u8*)bytes; dcap[c] = cap; dstart[c] = (u32*)st; dend[c] = (u32*)en; }
+EXPORT("dict_reset") void dict_reset(u32 c){ for (u32 k = 0; k < DHS; k++) dhash[c][k] = 0; dn[c] = 0; dlen_[c] = 0; }
+EXPORT("dict_n") u32 dict_n(u32 c){ return dn[c]; }
+EXPORT("dict_blen") u32 dict_blen(u32 c){ return dlen_[c]; }
+EXPORT("bailcol") u32 bailcol(void){ return g_bailcol; }
+static u32 hashb2(const u8* p, u32 l);
+static int dict_code(u32 c, const u8* p, u32 l, u32* out){
+  u32 h = hashb2(p, l) ^ l;
+  for (u32 k = 0; k < DHS; k++) {
+    u32 s = (h + k) & (DHS - 1); u32 e = dhash[c][s];
+    if (e == 0) {
+      if (dn[c] >= DMAX || dlen_[c] + l > dcap[c]) return 0;
+      u32 id = dn[c]++; dstart[c][id] = dlen_[c]; for (u32 q = 0; q < l; q++) dbytes[c][dlen_[c] + q] = p[q]; dlen_[c] += l; dend[c][id] = dlen_[c]; dhash[c][s] = (unsigned short)(id + 1); *out = id; return 1;
+    }
+    u32 id = e - 1, ls = dstart[c][id], ll = dend[c][id] - ls;
+    if (ll == l) { u32 q = 0; while (q < l && dbytes[c][ls + q] == p[q]) q++; if (q == l) { *out = id; return 1; } }
+  }
+  return 0;
+}
+
 // Output columns (staged columns): kind per column 0 text, 1 whole numbers, 2 decimals; colA = Float64 values or u32 start offsets, colB = u32 end offsets, colT = text bytes
 static u8 okind[MAXC]; static void* colA[MAXC]; static void* colB[MAXC]; static u8* colT[MAXC]; static u32 tlen[MAXC];
 EXPORT("set_out") void set_out(u32 c, void* a, void* b, void* t){ colA[c] = a; colB[c] = b; colT[c] = (u8*)t; tlen[c] = 0; }
@@ -45,12 +71,36 @@ static int date_ok(const u8* v, u32 l){
   u32 k = 19; if (v[k] == 46) { k++; u32 k0 = k; while (k < l && v[k] >= 48 && v[k] <= 57) k++; if (k == k0) return 0; }
   return k == l || (k + 1 == l && v[k] == 90);
 }
+
+// ---- Date-number mode (parse-research prototype): a column in date mode whose cells are exactly YYYY-MM-DDTHH:MM:SS.mmm (23 bytes, the format the Chicago file uses) writes milliseconds since 1970-01-01 UTC as a Float64 in colA[c]
+// (an 8-byte-per-row array, like a number column). Any other cell (empty, other format): build() stops BEFORE the row with bail = 5 and bailcol = the column; JS turns the column back to text.
+// Reading back: new Date(ms).toISOString().slice(0, 23) gives the original text for every accepted cell (digits-only fields, valid calendar date, year 1000-9999).
+static u8 dtmode[MAXC];
+EXPORT("set_datenum") void set_datenum(u32 c, u32 on){ dtmode[c] = (u8)on; }
+static int iso_ms(const u8* v, u32 l, double* out){
+  if (l != 23 || v[4] != 45 || v[7] != 45 || v[10] != 84 || v[13] != 58 || v[16] != 58 || v[19] != 46) return 0;
+  int y = 0, mo = 0, d = 0, h = 0, mi = 0, sc = 0, ms = 0; u32 k;
+  for (k = 0; k < 4; k++) { u8 c = v[k]; if (c < 48 || c > 57) return 0; y = y * 10 + (c - 48); }
+  for (k = 5; k < 7; k++) { u8 c = v[k]; if (c < 48 || c > 57) return 0; mo = mo * 10 + (c - 48); }
+  for (k = 8; k < 10; k++) { u8 c = v[k]; if (c < 48 || c > 57) return 0; d = d * 10 + (c - 48); }
+  for (k = 11; k < 13; k++) { u8 c = v[k]; if (c < 48 || c > 57) return 0; h = h * 10 + (c - 48); }
+  for (k = 14; k < 16; k++) { u8 c = v[k]; if (c < 48 || c > 57) return 0; mi = mi * 10 + (c - 48); }
+  for (k = 17; k < 19; k++) { u8 c = v[k]; if (c < 48 || c > 57) return 0; sc = sc * 10 + (c - 48); }
+  for (k = 20; k < 23; k++) { u8 c = v[k]; if (c < 48 || c > 57) return 0; ms = ms * 10 + (c - 48); }
+  if (y < 1000 || mo < 1 || mo > 12 || d < 1 || h > 23 || mi > 59 || sc > 59) return 0;
+  int dm = mo == 2 ? ((y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 29 : 28) : (mo == 4 || mo == 6 || mo == 9 || mo == 11) ? 30 : 31; if (d > dm) return 0;
+  // days from civil (H. Hinnant)
+  int yy = mo <= 2 ? y - 1 : y; int era = yy / 400; int yoe = yy - era * 400; int doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1; int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  long long days = (long long)era * 146097 + doe - 719468;
+  *out = (double)(((days * 24 + h) * 60 + mi) * 60 + sc) * 1000.0 + ms; return 1;
+}
 EXPORT("nlines") u32 nlines(void){ return g_nl; }
 static u32 hashb(const u8* p, u32 l){ u32 h = 2166136261u; for (u32 i = 0; i < l; i++) { h ^= p[i]; h *= 16777619u; } return h; }
 EXPORT("cache_add") void cache_add(u32 slot, const u8* p, u32 l){
   if (l == 0 || l > DSL) return; u32 h = hashb(p, l) & (DCAP - 1);
   for (u32 k = 0; k < DCAP; k++) { u8* e = dtab[slot][(h + k) & (DCAP - 1)]; if (e[0] == 0) { e[0] = (u8)l; for (u32 q = 0; q < l; q++) e[1 + q] = p[q]; return; } if (e[0] == l) { u32 q = 0; while (q < l && e[1+q] == p[q]) q++; if (q == l) return; } }
 }
+static u32 hashb2(const u8* p, u32 l){ u32 h = 2166136261u; for (u32 i = 0; i < l; i++) { h ^= p[i]; h *= 16777619u; } return h ^ (h >> 15); }
 static int cache_has(u32 slot, const u8* p, u32 l){
   if (l > DSL) return 0; u32 h = hashb(p, l) & (DCAP - 1);
   for (u32 k = 0; k < DCAP; k++) { const u8* e = dtab[slot][(h + k) & (DCAP - 1)]; if (e[0] == 0) return 0; if (e[0] == l) { u32 q = 0; while (q < l && e[1+q] == p[q]) q++; if (q == l) return 1; } }
@@ -160,9 +210,15 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
       u32 s0 = fs[c], l = fe[c] - s0; if (l == 0) continue;
       if (pl == 1 ? !plain_int(in + s0, l) : !plain_dec(in + s0, l, pl - 16)) { g_bail = 2; goto stop; }
     }
+    double dnum[MAXC];
+    for (u32 c = 0; c < n; c++) if (dtmode[c] && !isplan[c]) { if (!iso_ms(in + fs[c], fe[c] - fs[c], &dnum[c])) { g_bail = 5; g_bailcol = c; goto stop; } }
+    u32 dcode[MAXC];
+    for (u32 c = 0; c < n; c++) if (dmode[c] && !isplan[c]) { if (!dict_code(c, in + fs[c], fe[c] - fs[c], &dcode[c])) { g_bail = 4; g_bailcol = c; goto stop; } }
     for (u32 c = 0; c < n; c++) {
       u32 s0 = fs[c], f0 = fe[c], l = f0 - s0; cnt_n[c]++; if (l == 0) cnt_e[c]++;
       u8 pl = isplan[c];
+      if (!pl && dtmode[c]) { ((double*)colA[c])[nrows] = dnum[c]; continue; }
+      if (!pl && dmode[c]) { ((unsigned short*)colA[c])[nrows] = (unsigned short)dcode[c]; continue; }
       if (!pl) { u32 t = tlen[c]; u8* tb = colT[c]; for (u32 q = 0; q < l; q++) tb[t + q] = in[s0 + q]; ((u32*)colA[c])[nrows] = t; t += l; ((u32*)colB[c])[nrows] = t; tlen[c] = t; continue; }
       f64 v;
       if (l == 0) v = __builtin_nan("");
