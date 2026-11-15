@@ -750,6 +750,34 @@ const WHOLE_FILE_MAX = 384 * 1048576;
 // ---- Live columns: the grid reads the kept column chunks while the file is still being saved ----
 const isFirefox = !!(self.navigator && /Firefox\//.test(navigator.userAgent));
 const LIVE_MAX = 600 * 1048576;   // about 1.04x the CSV in memory while the import runs; bigger files wait for the save
+// Equal cells of a text column share one string (a column of repeated values, such as a street name, then costs one string per distinct value, not one per row). Cells are compared as bytes, so a repeated cell makes no string at all.
+// Gives up (returns false from add) when the first 20,000 cells are mostly distinct or the table gets too big; the caller then builds plain strings.
+function makeInterner() {
+  let cap = 4096, mask = cap - 1, tab = new Int32Array(cap), cells = 0, live = true;
+  const hs = [], bs = [], ss = [], es = [], strs = [];
+  const grow = () => { cap *= 2; mask = cap - 1; tab = new Int32Array(cap); for (let id = 0; id < hs.length; id++) { let p = hs[id] & mask; while (tab[p] !== 0) p = (p + 1) & mask; tab[p] = id + 1; } };
+  return {
+    get on() { return live; },
+    chunk(out, at, b, st, en, rows, make) {   // fills out[at..at+rows); make(bytes, start, end) builds a string for a cell not seen before
+      for (let r = 0; r < rows; r++) {
+        const a = st[r], e = en[r], len = e - a; let h = Math.imul(len + 2166136261, 16777619); const m = len < 12 ? e : a + 6; for (let i = a; i < m; i++) h = Math.imul(h ^ b[i], 16777619); if (len >= 12) for (let i = e - 6; i < e; i++) h = Math.imul(h ^ b[i], 16777619); h >>>= 0;   // hash of the length and the first and last 6 bytes (a full-bytes compare decides equality)
+        let p = h & mask, id = -1;
+        for (;;) {
+          const t = tab[p]; if (t === 0) break;
+          const j = t - 1;
+          if (hs[j] === h && es[j] - ss[j] === e - a) { const ob = bs[j], o = ss[j]; let q = 0; const len = e - a; while (q < len && ob[o + q] === b[a + q]) q++; if (q === len) { id = j; break; } }
+          p = (p + 1) & mask;
+        }
+        if (id < 0) { id = hs.length; hs.push(h); bs.push(b); ss.push(a); es.push(e); strs.push(make(b, a, e)); tab[p] = id + 1; if (hs.length * 2 > cap) grow(); }
+        out[at + r] = strs[id];
+      }
+      const before = cells; cells += rows;
+      if (before < 20000 && cells >= 20000 && hs.length > cells * 0.4) live = false;
+      else if (hs.length > 1000000) live = false;
+      return live;
+    },
+  };
+}
 async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
   const n = headers.length, starts = new Uint32Array(chunks.length + 1); for (let i = 0; i < chunks.length; i++) starts[i + 1] = starts[i] + chunks[i].n;
@@ -759,11 +787,13 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   const L = {
     row(r) { const o = {}, c = find(r), i = r - starts[c]; for (let k = 0; k < n; k++) { if (kindOf[k]) { const x = nums.get(headers[k])[r]; o[headers[k]] = x !== x ? null : x; } else { const x = chunks[c].cols[k]; if (x.codes) { const q = x.codes[i], lb = x.lb; o[headers[k]] = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); } else o[headers[k]] = dec.decode(x.bytes.subarray(x.start[i], x.end[i])); } } return o; },
     *columnGen(nm) {   // a text column (or a number column that stayed text) as an array of strings, made the first time a filter or sort needs it
-      const k = headers.indexOf(nm), out = new Array(rows); let at = 0;
+      const k = headers.indexOf(nm), out = new Array(rows); let at = 0, I = makeInterner();
+      const mk = (b, a, e) => dec.decode(b.subarray(a, e));
       for (const ch of chunks) {
         yield;   // between chunks: the caller may let queued messages run
         const x = ch.cols[k];
         if (x.codes) { const lb = x.lb, labs = new Array(lb.start.length); for (let q = 0; q < labs.length; q++) labs[q] = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); for (let r = 0; r < ch.n; r++) out[at++] = labs[x.codes[r]]; continue; }   // dictionary chunk: the distinct values decoded once, one lookup per row
+        if (I && I.on) { I.chunk(out, at, x.bytes, x.start, x.end, ch.n, mk); at += ch.n; if (!I.on) I = null; continue; }   // equal cells share one string
         const b = x.bytes; let ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; }
         if (ascii) { const s = latin.decode(b); for (let r = 0; r < ch.n; r++) out[at++] = s.substring(x.start[r], x.end[r]); }   // plain ASCII chunk: one decode, then slices
         else for (let r = 0; r < ch.n; r++) out[at++] = dec.decode(b.subarray(x.start[r], x.end[r]));
