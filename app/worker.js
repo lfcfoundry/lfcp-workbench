@@ -545,10 +545,22 @@ async function samplePlan(file, delimiter) {
     if (rows.length < 2) return null;
     const cols = rows[0].length, tr = Array.from({ length: cols }, () => new TypeTracker());
     for (let r = 1; r < rows.length; r++) { if (rows[r].length !== cols) return null; for (let c = 0; c < cols; c++) tr[c].add(rows[r][c]); }
+    // Five 256 KB slices from later in the file feed the type tally and the decimal-digit check, so a column whose digits or number-ness change after the first MB is planned as text up front (saves the restart).
+    const extra = [];
+    if (file.size > 8 * 1048576) for (const frac of [0.2, 0.4, 0.6, 0.8, 0.97]) {
+      const off = Math.floor(file.size * frac);
+      const t2 = new TextDecoder().decode(new Uint8Array(await file.slice(off, Math.min(file.size, off + 262144)).arrayBuffer()));
+      const k = t2.indexOf('\n'); if (k < 0) continue;
+      const got = []; const p2 = new DelimitedParser(delimiter, (f) => { if (f.length === cols) got.push(f); });
+      try { p2.feed(t2.slice(k + 1), false); } catch { /* skip */ }
+      for (const f of got.slice(0, -1)) extra.push(f);
+    }
+    for (const f of extra) for (let c = 0; c < cols; c++) tr[c].add(f[c]);
+    const allRows = extra.length ? rows.concat(extra) : rows;
     const plan = tr.map((x, c) => {
       if (x.type === 'integer' && x.n > x.empty) return true;
       if (x.type !== 'number') return false;
-      const d = core.sampleDecimals(rows.slice(1).map((r) => r[c]));   // decimals: stored as numbers, with the count kept in the catalog
+      const d = core.sampleDecimals(allRows.slice(1).map((r) => r[c]));   // decimals: stored as numbers, with the count kept in the catalog
       return d > 0 && x.n > x.empty ? d : false;
     });
     // low-variety text columns (at most 5% of the sample's rows distinct, and 200+ sample rows) are built as dictionary columns: a code per row and the distinct values
