@@ -66,6 +66,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'verify') verify(m);
   else if (m.type === 'gen') genBig(m);
   else if (m.type === 'genclean') store.remove('scratch-big.csv').then(() => send('cleaned', m.id, {}));
+  else if (view && view.preview && (m.type === 'query' || m.type === 'derive' || m.type === 'groupby' || m.type === 'export' || m.type === 'exportLfcp')) send('error', m.id, { message: 'The file is still being read; sorting and filtering start when the rows are all in.' });
   else if (m.type === 'open') openView(m);
   else if (m.type === 'query') queryView(m);
   else if (m.type === 'page') pageView(m);
@@ -602,7 +603,21 @@ async function importOnce(m) {
         const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b = blockQ.shift(); await send1({ type: 'packCols', chunks: b, headers: colHeaders, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
         const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; if (liveChunks) { blockQ.push(list); pump(); } else await send1({ type: 'packCols', chunks: list, headers: colHeaders, o: popts }, [].concat(...list.map(chunkBuffers))); };
         colFlush = async () => { if (cq.length) await sendCols(); while (pumping) await pumping; if (pumpErr) throw pumpErr; };
-        col = { begin: async (h) => { colHeaders = h; }, dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { liveChunks.push(c); cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
+        // Early view: the grid opens on the first parsed chunks and the row count grows while the file is still being read (a preview: no sort or filter until the end).
+        const pvStarts = [0], pvDec = new TextDecoder(); let pvSent = 0, pvKind = null, pvOn = liveChunks !== null && m.preview !== false;
+        const pvTick = () => {
+          const total = pvStarts[pvStarts.length - 1], now = performance.now();
+          if (!pvKind) {
+            pvKind = colHeaders.map((_, k) => !!(plan && (plan[k] === true || (typeof plan[k] === 'number' && plan[k] > 0))));
+            const columns = colHeaders.map((h, k) => Object.assign({ name: h, type: !pvKind[k] ? 'string' : plan[k] === true ? 'integer' : 'number', nullable: true }, pvKind[k] && typeof plan[k] === 'number' ? { decimals: plan[k] } : {}));
+            const chunks = liveChunks, hs = colHeaders, kind = pvKind, find = (r) => { let lo = 0, hi = pvStarts.length - 2; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (pvStarts[mid] <= r) lo = mid; else hi = mid - 1; } return lo; };
+            const pv = { row(r) { const o = {}, c = find(r), i = r - pvStarts[c], ch = chunks[c]; for (let k = 0; k < hs.length; k++) { const x = ch.cols[k]; if (kind[k]) { const v = x[i]; o[hs[k]] = v !== v ? null : v; } else if (x.codes) { const q = x.codes[i], lb = x.lb; o[hs[k]] = pvDec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); } else o[hs[k]] = pvDec.decode(x.bytes.subarray(x.start[i], x.end[i])); } return o; } };
+            view = { name, preview: true, pv, total, columns, R: null, f: null, rows: null, indices: null, filtered: false, cols: new Map(), flat: true, cache: new Map() };
+            send('preview', m.id, { name, total, columns }); pvSent = now; return;
+          }
+          if (view && view.preview && now - pvSent >= 80) { view.total = total; send('previewGrow', m.id, { total }); pvSent = now; }
+        };
+        col = { begin: async (h) => { colHeaders = h; }, dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
       }
       const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
       packBytes = async (bytes) => {
@@ -647,6 +662,7 @@ async function importOnce(m) {
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
     if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) view.cols.set(c.name, view.live.column(c.name));   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ if (morePack && m.morePack !== 0) morePack(m.morePack || (isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 1 : 2)); }
+    if (view && view.preview && view.name === name && !(view.live)) { view = null; send('liveclosed', m.id, {}); }
     await finishPacking();
     if (dkBlocks && dkBlocks.size) { try { keptDict.set(name, mergeDicts(dkBlocks, rows)); } catch { keptDict.delete(name); } }
     await write(packer.finish());
@@ -658,7 +674,7 @@ async function importOnce(m) {
     if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: R2.blocks.length > 0 && R2.blocks.every((b) => b.kind === 'f' && !b.table), live: null }); liveChunks = null; textFromChunks(view); } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
-    if (view && view.live && view.name === name) { view = null; send('liveclosed', m.id, {}); }
+    if (view && (view.live || view.preview) && view.name === name) { view = null; send('liveclosed', m.id, {}); }
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
     if (err && err.mixed && !m.noColumns) restart = true;
@@ -723,7 +739,7 @@ function scheduleWarm(m, total, delay) {
   }
 }
 async function openView(m) {
-  if (view && view.live && view.name === m.name) return send('opened', m.id, { name: m.name, total: view.total, columns: view.columns });   // still being saved: the kept columns answer
+  if (view && (view.live || view.preview) && view.name === m.name) return send('opened', m.id, { name: m.name, total: view.total, columns: view.columns });   // still being saved: the kept columns answer
   if (view && !view.live && view.name === m.name && view.R && view.cols && !m.fresh) {   // the same dataset is already open (just imported): keep its decoded columns, start with no filter
     view.indices = null; view.filtered = false; view.pending = null; view.rows = null; view.cache = new Map();
     send('opened', m.id, { dictKept: Object.keys(view.dictCols || {}), name: m.name, total: view.total, columns: view.columns, reused: true });
@@ -976,7 +992,7 @@ async function pageView(m) {
   let out, numbers;
   if (!view.filtered) {
     const n = Math.max(0, Math.min(m.count, view.total - m.start));
-    const objs = n ? (view.live ? Array.from({ length: n }, (_, i) => view.live.row(m.start + i)) : await view.R.rows({ from: m.start, count: n })) : [];
+    const objs = n ? (view.live || view.pv ? Array.from({ length: n }, (_, i) => (view.live || view.pv).row(m.start + i)) : await view.R.rows({ from: m.start, count: n })) : [];
     if (view.derived && view.derived.size) overlayDerived(objs, (i) => m.start + i);
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name], c))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
