@@ -53,6 +53,9 @@ self.onmessage = async (e) => {
   else if (m.type === 'query') queryView(m);
   else if (m.type === 'page') pageView(m);
   else if (m.type === 'export') exportView(m);
+  else if (m.type === 'derive') deriveColumn(m);
+  else if (m.type === 'groupby') groupView(m);
+  else if (m.type === 'exportLfcp') exportLfcp(m);
 };
 
 
@@ -236,7 +239,7 @@ async function packColsJob(m) {
   try {
     await LfcPack.init();
     const ch = m.chunks, n = m.headers.length; let rows = 0; for (const c of ch) rows += c.n;
-    const cols = {};
+    const cols = {}, dk = {};   // dk: the dictionary columns of this block (ids and distinct values), sent back so the page can group by id later
     for (let k = 0; k < n; k++) {
       if (ch.every((c) => c.cols[k].codes)) {   // dictionary column in every chunk: merge the distinct values (codes renumbered) and hand LFC-pack { kind: 'dict', labels, ids }
         const map = new Map(), lat = new TextDecoder('latin1'), ids = new Uint16Array(rows); let tb = 0; const parts = [], st = [], en = [];
@@ -255,6 +258,7 @@ async function packColsJob(m) {
         if (big) { cols[m.headers[k]] = null; throw new Error('dictionary column with more than 65,535 distinct values in a block'); }
         const bytes = new Uint8Array(tb); let bo = 0; for (const sub of parts) { bytes.set(sub, bo); bo += sub.length; }
         cols[m.headers[k]] = { kind: 'dict', labels: { bytes, start: Uint32Array.from(st), end: Uint32Array.from(en) }, ids };
+        dk[m.headers[k]] = { ids: ids.slice(), bytes: bytes.slice(), start: Uint32Array.from(st), end: Uint32Array.from(en) };
         continue;
       }
       for (const c of ch) { const x = c.cols[k]; if (x.codes) c.cols[k] = expandDict(x, c.n); }   // a mix of dictionary and text chunks: all become text
@@ -269,7 +273,8 @@ async function packColsJob(m) {
         cols[m.headers[k]] = nan ? Array.from(a, (x) => (x !== x ? null : x)) : a;
       }
     }
-    const r = await LfcPack.packBlock(cols, m.o); self.postMessage({ type: 'packed', rid: m.rid, r }, [r.buffer]);
+    const r = await LfcPack.packBlock(cols, m.o), tr = [r.buffer]; for (const x of Object.values(dk)) tr.push(x.ids.buffer, x.bytes.buffer, x.start.buffer, x.end.buffer);
+    self.postMessage({ type: 'packed', rid: m.rid, r, dk }, tr);
   } catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
 }
 
@@ -546,6 +551,7 @@ async function importOnce(m) {
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     let packBytes = async (bytes) => { stop(job); const s = performance.now(); const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
+    let dkBlocks = null;
     let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
     const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? (isFirefox ? 1 : 2) : 2);   // live columns: Firefox packs with one worker while parsing (the cores go to the parse helpers) and gets three more when parsing is done; Chromium keeps two and gets two more (measured: each is the best of the variants in its browser)   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
@@ -553,10 +559,10 @@ async function importOnce(m) {
     if (pws) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
       const bb = m.blockBytes || 2097152, popts = Object.assign({ level: m.level || 3 }, { blockBytes: bb, share: false });
       packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
-      const ws = [], idle = [], done = new Map(); let seq = 0, emit = 0, parts = [], plen = 0, wake = null, wchain = Promise.resolve(), failed = null;
+      const ws = [], idle = [], done = new Map(); dkBlocks = new Map(); let seq = 0, emit = 0, parts = [], plen = 0, wake = null, wchain = Promise.resolve(), failed = null;
       const pump = () => { if (wake) { const r = wake; wake = null; r(); } };
       const onPacked = (w) => (e) => {
-        const d = e.data; if (d.error) failed = new Error('Pack worker failed: ' + d.error); else done.set(d.rid, d.r);
+        const d = e.data; if (d.error) failed = new Error('Pack worker failed: ' + d.error); else { done.set(d.rid, d.r); if (d.dk) dkBlocks.set(d.rid, d.dk); }
         idle.push(w);
         wchain = wchain.then(async () => { while (done.has(emit)) { const r = done.get(emit); done.delete(emit); emit++; await write(packer.pushPacked(r)); } pump(); });
         pump();
@@ -624,6 +630,7 @@ async function importOnce(m) {
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
     if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (morePack && m.morePack !== 0) morePack(m.morePack || (isFirefox ? 3 : 2)); }
     await finishPacking();
+    if (dkBlocks && dkBlocks.size) { try { keptDict.set(name, mergeDicts(dkBlocks, rows)); } catch { keptDict.delete(name); } }
     await write(packer.finish());
     await writable.close(); closed = true; writable = null;
     // Complete only after the footer is validated, then recorded in the catalog.
@@ -673,7 +680,7 @@ async function list(m) {
 async function remove(m) {
   try {
     if (!/^[\w.-]+\.json\.lfc$/.test(m.name)) throw new Error('Invalid dataset name.');
-    await store.remove(m.name);
+    await store.remove(m.name); keptDict.delete(m.name);
     await store.setCatalog((await store.catalog()).filter((c) => c.name !== m.name));
     send('deleted', m.id, { name: m.name });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
@@ -697,8 +704,8 @@ async function openView(m) {
     if (!entry) throw new Error('Dataset not found.');
     const f = await store.file(m.name);
     const R = await LfcPack.open(f), total = R.info.rows;
-    view = { name: m.name, R, f, total, rows: null, columns: entry.columns, indices: null, filtered: false, cols: new Map(), flat: R.blocks.length > 0 && R.blocks.every((b) => b.kind === 'f' && !b.table), cache: new Map() };
-    send('opened', m.id, { name: m.name, total, columns: entry.columns, kinds: (() => { const k = {}; R.blocks.forEach((b, i) => { const s = b.kind + (b.table ? 't' + b.table : ''); (k[s] ||= []).length < 3 && k[s].push(i + ':' + b.rows); }); return JSON.stringify(k); })() });
+    view = { dictCols: keptDict.get(m.name) || null, name: m.name, R, f, total, rows: null, columns: entry.columns, indices: null, filtered: false, cols: new Map(), flat: R.blocks.length > 0 && R.blocks.every((b) => b.kind === 'f' && !b.table), cache: new Map() };
+    send('opened', m.id, { dictKept: Object.keys(view.dictCols || {}), name: m.name, total, columns: entry.columns, kinds: (() => { const k = {}; R.blocks.forEach((b, i) => { const s = b.kind + (b.table ? 't' + b.table : ''); (k[s] ||= []).length < 3 && k[s].push(i + ':' + b.rows); }); return JSON.stringify(k); })() });
     // Warm the sort columns: whole-number, decimal and date columns are decoded on helper threads while the person looks at the first page,
     // so the first sort of one of them only has the selection scan left (the decode was most of a first sort).
     if (!m.noWarm && view.flat && total <= MAX_WARM_ROWS && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory <= 4) && LfcPack.unpackColumnsParallel && view.f.size <= WHOLE_FILE_MAX) {
@@ -770,7 +777,7 @@ async function dropFullMatch(filters, active) {
   if (view.live) return null;
   const keep = {}; let dropped = 0;
   for (const name of active) {
-    const col = view.columns.find((c) => c.name === name), parsed = col && col.type === 'integer' ? queryMod.parseFilter(filters[name], col.type) : null, f = parsed && parsed.filter;
+    const col = view.columns.find((c) => c.name === name), parsed = col && !col.derived && col.type === 'integer' ? queryMod.parseFilter(filters[name], col.type) : null, f = parsed && parsed.filter;
     let all = !!f && f.kind === 'num' && f.op !== 'ne' && view.R.blocks.length > 0;
     for (let b = 0; all && b < view.R.blocks.length; b++) {
       const z = await view.R.zone(b, name);
@@ -785,12 +792,12 @@ async function dropFullMatch(filters, active) {
 let zoneMinBlocks = 0;   // test hook (gate=N in the page address): the fewest blocks that make a zone plan worth trying
 let posMod = null;
 // A number range or equality by row numbers is only exact when every cell of the column is a stored number: a block without a number range may hold text cells.
-async function allBlocksHaveZone(col) { if (col.type !== 'integer') return true; for (let b = 0; b < view.R.blocks.length; b++) if (!(await view.R.zone(b, col.name))) return false; return true; }
+async function allBlocksHaveZone(col) { if (col.derived) return false; if (col.type !== 'integer') return true; for (let b = 0; b < view.R.blocks.length; b++) if (!(await view.R.zone(b, col.name))) return false; return true; }
 async function zonePlan(filters, active) {
   if (view.live) return null;
   const need = [];
   for (const name of active) {
-    const col = view.columns.find((c) => c.name === name); if (!col) continue;
+    const col = view.columns.find((c) => c.name === name); if (!col || col.derived) continue;
     const { filter: f } = queryMod.parseFilter(filters[name], col.type); if (!f) continue;
     if (col.type === 'integer' && f.kind === 'num' && f.op !== 'ne') need.push([name, f.op, f.value]);
     else if (col.type === 'integer' && f.op === 'eq' && /^-?(0|[1-9]\d{0,14})$/.test(f.value)) need.push([name, 'eq', +f.value]);
@@ -818,7 +825,11 @@ async function loadBlocks(zp, names) {
   return out;
 }
 // Row objects for some row numbers, grouped by block so each block is decoded once. Keeps a few decoded blocks for scrolling back and forth.
-async function rowsAt(idx, from, to) {
+async function rowsAt(idx, from, to) { const o = await rowsAtBase(idx, from, to); if (view.derived && view.derived.size) overlayDerived(o, (i) => idx[from + i]); return o; }
+function overlayDerived(objs, rowOf) {   // derived columns live beside the file: put their values into the row objects
+  for (const [name, d] of view.derived) for (let i = 0; i < objs.length; i++) { const x = d[rowOf(i)]; objs[i][name] = x !== x ? null : x; }
+}
+async function rowsAtBase(idx, from, to) {
   if (view.live) { const o = []; for (let i = from; i < to; i++) o.push(view.live.row(idx[i])); return o; }
   if (view.rows) { const o = []; for (let i = from; i < to; i++) o.push(view.rows[idx[i]]); return o; }
   if (view.columns.length && view.columns.every((c) => view.cols.has(c.name))) {   // every column is already warmed: read the visible rows from them, not 28 whole blocks (223 to 57 ms for a score sort of 7M rows)
@@ -900,6 +911,7 @@ async function pageView(m) {
   if (!view.filtered) {
     const n = Math.max(0, Math.min(m.count, view.total - m.start));
     const objs = n ? (view.live ? Array.from({ length: n }, (_, i) => view.live.row(m.start + i)) : await view.R.rows({ from: m.start, count: n })) : [];
+    if (view.derived && view.derived.size) overlayDerived(objs, (i) => m.start + i);
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name], c))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
     if (view.pending && m.start + m.count > view.pending.topN) ensureFull();
@@ -915,7 +927,29 @@ async function exportView(m) {
   try {
     const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
     ensureFull();
+    if (!m.noFast) await warmAll();   // columns decoded together on helper threads (when not already), then the CSV is written straight from them
     const count = view.filtered ? view.indices.length : view.total, parts = [...(m.bom ? ['\uFEFF'] : []), csvHeader(view.columns, d)];
+    if (!m.noFast && view.columns.length && view.columns.every((c) => view.cols.has(c.name))) {   // fast path: no row objects, no per-cell function calls
+      const srcs = view.columns.map((c) => ({ a: view.cols.get(c.name), dec: c.decimals || 0 })), idx = view.filtered ? view.indices : null, quote = new RegExp('["\\r\\n' + (d === '\t' ? '\\t' : d.replace(/[\\\]^-]/g, '\\$&')) + ']'), nc = srcs.length, arr = srcs.map((x) => x.a), dec = srcs.map((x) => x.dec), isT = arr.map((a) => ArrayBuffer.isView(a)), STEP = 20000;
+      const tb0 = performance.now();
+      for (let start = 0; start < count; start += STEP) {
+        const end = Math.min(count, start + STEP); let text = '';
+        for (let i = start; i < end; i++) {
+          const r = idx ? idx[i] : i; let line = '';
+          for (let k = 0; k < nc; k++) {
+            const x = arr[k][r]; let t;
+            if (isT[k]) { line += (x !== x ? '' : dec[k] ? formatScaled(x, dec[k]) : '' + x); if (k < nc - 1) line += d; continue; }   // a typed number column: no quoting needed
+            if (typeof x === 'string') t = x; else if (x !== x || x == null) t = ''; else t = dec[k] && typeof x === 'number' ? formatScaled(x, dec[k]) : '' + x;
+            if (t.length !== 0 && quote.test(t)) t = '"' + t.replace(/"/g, '""') + '"';
+            line += t; if (k < nc - 1) line += d;
+          }
+          text += line + '\r\n';
+        }
+        parts.push(text);
+      }
+      const tb1 = performance.now(), blob = new Blob(parts, { type: 'text/csv;charset=utf-8' });
+      return send('exported', m.id, { blob, rows: count, bytes: blob.size, fast: true, textMs: Math.round(tb1 - tb0), blobMs: Math.round(performance.now() - tb1) });
+    }
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
       if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => cellText(r[c.name], c)));
@@ -939,4 +973,133 @@ async function genBig(m) {
     let file; if (w) { await w.close(); file = await (await (await store.dir()).getFileHandle('scratch-big.csv')).getFile(); } else file = new File(parts, 'big.csv', { type: 'text/csv' });
     send('generated', m.id, { file, rows, bytes, onDisk: !!w });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
+}
+
+// ---- Derived columns, group-by and LFCP export (src/query/derive.mjs, groupby.mjs) ----
+// A derived column is computed from one column by a named function, kept beside the file (not in it) and shown, filtered, sorted and exported like any other column.
+let deriveMod = null, groupMod = null;
+// Dictionary columns kept from the import: a code per row (2 bytes) and the distinct texts, so a group-by on a low-variety text column needs no text decode (the file stores the text itself).
+const keptDict = new Map();
+function mergeDicts(blocks, rows) {
+  const order = [...blocks.keys()].sort((a, b) => a - b), names = Object.keys(blocks.get(order[0]) || {}), out = {}, dec = new TextDecoder(), lat = new TextDecoder('latin1');
+  for (const nm of names) {
+    if (!order.every((r) => blocks.get(r)[nm])) continue;
+    const map = new Map(), dict = []; let total = 0; for (const r of order) total += blocks.get(r)[nm].ids.length;
+    if (total !== rows) continue;
+    const parts = []; let at = 0, big = false;
+    for (const r of order) {
+      const x = blocks.get(r)[nm], nl = x.start.length, remap = new Uint32Array(nl);
+      for (let q = 0; q < nl; q++) { const sub = x.bytes.subarray(x.start[q], x.end[q]), key = lat.decode(sub); let id = map.get(key); if (id === undefined) { id = dict.length; map.set(key, id); dict.push(dec.decode(sub)); } remap[q] = id; }
+      parts.push([x.ids, remap]);
+    }
+    big = dict.length > 65535; const ids = big ? new Uint32Array(rows) : new Uint16Array(rows);
+    for (const [bi, remap] of parts) { for (let i = 0; i < bi.length; i++) ids[at + i] = remap[bi[i]]; at += bi.length; }
+    out[nm] = { ids, dict };
+  }
+  return out;
+}
+async function deriveColumn(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  try {
+    deriveMod ||= MODS() && MODS().derive ? { derive: MODS().derive, isNumberDerive: MODS().isNumberDerive } : await import('../src/query/derive.mjs');
+    const t0 = performance.now(), src = view.columns.find((c) => c.name === m.source), name = String(m.name || '').trim();
+    if (!src) throw new Error('Pick a column to work from.');
+    if (!name || view.columns.some((c) => c.name === name)) throw new Error('Give the new column a name no other column has.');
+    const cols = await loadColumns([m.source], false, true), data = deriveMod.derive(cols[m.source], view.total, m.fn), isNum = ArrayBuffer.isView(data);
+    let whole = isNum; if (isNum) for (let i = 0; i < data.length; i++) { const x = data[i]; if (x === x && x !== Math.floor(x)) { whole = false; break; } }
+    const meta = { name, type: isNum ? (whole ? 'integer' : 'number') : 'string', nullable: true, derived: true, from: m.source, fn: m.fn };
+    (view.derived ||= new Map()).set(name, data); view.cols.set(name, data); view.columns = view.columns.concat([meta]); view.cache && view.cache.clear();
+    if (isNum && colMod && colMod.primeTopN) colMod.primeTopN(data);
+    send('derived', m.id, { columns: view.columns, ms: Math.round(performance.now() - t0) });
+  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
+}
+async function groupView(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  try {
+    groupMod ||= MODS() && MODS().groupBy ? { groupBy: MODS().groupBy, groupByCodes: MODS().groupByCodes } : await import('../src/query/groupby.mjs');
+    queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
+    if (view.total > MAX_COLUMN_ROWS || !view.flat) throw new Error('Group by works up to ' + MAX_COLUMN_ROWS.toLocaleString() + ' rows for now.');
+    const t0 = performance.now(), aggs = m.aggs || [{ fn: 'count' }], names = [...new Set([m.key].concat(aggs.filter((a) => a.col).map((a) => a.col)))];
+    const active = Object.keys(m.filters || {}).filter((k) => m.filters[k]);
+    for (const n of names) if (!view.columns.some((c) => c.name === n)) throw new Error('No column named ' + n + '.');
+    const dc = (!m.noDict && view.dictCols) || {}, useIds = !!dc[m.key];
+    // a column kept as dictionary ids from the import is counted by id: no text is decoded for it (the key, or an equal-to column in a 'share equal to' aggregate)
+    const need = Array.from(new Set(names.concat(active))).filter((n) => !(useIds && dc[n] && !active.includes(n)));
+    if (!/AppleWebKit(?!.*Chrome)/.test(self.navigator.userAgent || '') && !m.noParallel) await warmSome(need);   // missing columns decoded on helper threads at once (not in WebKitGTK: slower there)
+    const cols = await loadColumns(need, false), tLoad = performance.now() - t0, tg = performance.now();
+    let rows = null; if (active.length) rows = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters }).indices;
+    const codeCols = {}; for (const a of aggs) if (a.col && dc[a.col] && a.fn === 'rate' && !m.noDict) codeCols[a.col] = dc[a.col];
+    const g = useIds ? groupMod.groupByCodes(dc[m.key].ids, dc[m.key].dict, cols, view.total, rows, { aggs, codeCols }) : groupMod.groupBy(cols, view.total, rows, { key: m.key, aggs }), order = Array.from(g.keys, (_, i) => i).sort((a, b) => g.counts[b] - g.counts[a] || (g.keys[a] < g.keys[b] ? -1 : 1));
+    const head = [m.key].concat(aggs.map((a) => (a.fn === 'count' ? 'count' : a.fn + '_' + a.col)));
+    const table = order.slice(0, 1000).map((gi) => { let v = 0; return [g.keys[gi]].concat(aggs.map((a) => { const x = a.fn === 'count' ? g.counts[gi] : g.values[v++][gi]; return x !== x ? '' : a.fn === 'avg' || a.fn === 'rate' ? String(Math.round(x * 10000) / 10000) : String(x); })); });
+    send('grouped', m.id, { byIds: useIds, headers: head, rows: table, groups: g.keys.length, rowsUsed: rows ? rows.length : view.total, ms: Math.round(performance.now() - t0), loadMs: Math.round(tLoad), groupMs: Math.round(performance.now() - tg) });
+  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
+}
+// Decode every file column that is not decoded yet in two parallel calls (numbers as typed arrays, text as strings), so a filtered export reads its rows from memory instead of from 450 scattered blocks.
+async function warmAll() {
+  const v = view; if (!v.flat || v.live || !LfcPack.unpackColumnsParallel || v.f.size > WHOLE_FILE_MAX || v.total > 3000000) return;
+  const want = v.columns.filter((c) => !c.derived && !v.cols.has(c.name)); if (!want.length) return;
+  const isNum = (c) => c.type === 'integer' || c.type === 'number', bytes = new Uint8Array(await v.f.arrayBuffer());
+  for (const group of [want.filter(isNum), want.filter((c) => !isNum(c))]) {
+    if (!group.length) continue;
+    const got = await LfcPack.unpackColumnsParallel(bytes, isNum(group[0]) ? { keys: group.map((c) => c.name), nulls: 'NaN' } : { keys: group.map((c) => c.name) });
+    if (view !== v) return;
+    for (const c of group) if (got[c.name] && !v.cols.has(c.name)) { v.cols.set(c.name, got[c.name]); if (ArrayBuffer.isView(got[c.name]) && colMod && colMod.primeTopN) colMod.primeTopN(got[c.name]); }
+  }
+}
+async function warmSome(names) {
+  const v = view; if (!v.flat || v.live || !LfcPack.unpackColumnsParallel || v.f.size > WHOLE_FILE_MAX) return;
+  const want = v.columns.filter((c) => names.includes(c.name) && !c.derived && !v.cols.has(c.name)); if (!want.length) return;
+  const isNum = (c) => c.type === 'integer' || c.type === 'number', bytes = new Uint8Array(await v.f.arrayBuffer());
+  for (const group of [want.filter(isNum), want.filter((c) => !isNum(c))]) {
+    if (!group.length) continue;
+    const got = await LfcPack.unpackColumnsParallel(bytes, isNum(group[0]) ? { keys: group.map((c) => c.name), nulls: 'NaN' } : { keys: group.map((c) => c.name) });
+    if (view !== v) return;
+    for (const c of group) if (got[c.name] && !v.cols.has(c.name)) { v.cols.set(c.name, got[c.name]); if (ArrayBuffer.isView(got[c.name]) && colMod && colMod.primeTopN) colMod.primeTopN(got[c.name]); }
+  }
+}
+// Saves the rows now shown (filter and sort applied, derived columns included) as a new LFCP dataset in this browser and hands the file back for download.
+async function exportLfcp(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  let writable = null, name = null, closed = false;
+  try {
+    await LfcPack.init(); ensureFull();
+    const t0 = performance.now();
+    await warmAll(); const tWarm = performance.now() - t0;
+    const cols = view.columns, count = view.filtered ? view.indices.length : view.total, keyQ = cols.map((c, i) => (i ? ',' : '{') + JSON.stringify(c.name) + ':');
+    name = safe(view.name.replace(/-[0-9a-f-]{36}\.json\.lfc$/, '')) + '-view-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
+    writable = await store.create(name);
+    const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
+    let outBytes = 0;
+    const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
+    const BATCH = 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: 2097152, share: false };
+    const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
+    for (let start = 0; start < count; start += BATCH) {
+      const end = Math.min(count, start + BATCH); let ts = performance.now();
+      if (allWarm && LfcPack.packBlock) {   // every column is in memory: gather the batch column by column and pack it as columns (no row objects, no JSON text)
+        const out = {}, n = end - start;
+        for (const c of cols) {
+          const src = view.cols.get(c.name), a = new Array(n);
+          if (ArrayBuffer.isView(src)) { for (let i = 0; i < n; i++) { const x = src[view.filtered ? view.indices[start + i] : start + i]; a[i] = x !== x ? null : x; } }
+          else for (let i = 0; i < n; i++) a[i] = src[view.filtered ? view.indices[start + i] : start + i];
+          out[c.name] = a;
+        }
+        tm.rows += performance.now() - ts; ts = performance.now();
+        const r = await LfcPack.packBlock(out, popts); await write(packer2.pushPacked(r)); tm.pack += performance.now() - ts; continue;
+      }
+      const objs = view.filtered ? await rowsAt(view.indices, start, end) : view.live ? Array.from({ length: end - start }, (_, i) => view.live.row(start + i)) : await view.R.rows({ from: start, count: end - start });
+      if (!view.filtered && view.derived && view.derived.size) overlayDerived(objs, (i) => start + i);
+      tm.rows += performance.now() - ts; ts = performance.now(); let text = '';
+      for (const r of objs) { let line = ''; for (let k = 0; k < cols.length; k++) { const v = r[cols[k].name]; line += keyQ[k] + (v == null ? 'null' : JSON.stringify(v)); } text += line + '}\n'; }
+      tm.text += performance.now() - ts; ts = performance.now(); await write(packer2.push(enc.encode(text))); tm.pack += performance.now() - ts;
+    }
+    await write(packer2.finish()); await writable.close(); closed = true; writable = null;
+    const v = await validate(name, count); if (!v.ok) throw new Error('The written file failed footer validation: ' + v.reason);
+    const cat = await store.catalog(), outCols = cols.map((c) => { const o = Object.assign({}, c); delete o.derived; delete o.from; delete o.fn; return o; });
+    cat.push({ name, source: 'view of ' + view.name, rows: count, bytes: outBytes, columns: outCols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
+    send('exportedLfcp', m.id, { name, rows: count, bytes: outBytes, blob: await store.file(name), ms: Math.round(performance.now() - t0), warmMs: Math.round(tWarm), rowsMs: Math.round(tm.rows), textMs: Math.round(tm.text), packMs: Math.round(tm.pack) });
+  } catch (err) {
+    if (writable && !closed) { try { await writable.abort(); } catch {} } if (name) await store.remove(name);
+    send('error', m.id, { message: String(err && err.message || err) });
+  }
 }
