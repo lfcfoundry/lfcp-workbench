@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { buildColumns } from '../src/ingest/columns.mjs';
 import { typedCell, typedDecimal } from '../src/ingest/infer.mjs';
-const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.10.42/lfc-pack.js')); await lib.init();
+const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.12.3/lfc-pack.js')); await lib.init();
 const enc = new TextEncoder();
 let seed = 4242; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296, ri = (n) => Math.floor(rnd() * n);
 const headers = ['id', 'name', 'score', 'when', 'note'], plan = [true, false, 2, false, false];
