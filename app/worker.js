@@ -840,6 +840,7 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   // The text columns the import does not keep as dictionary ids are made from the kept chunks as soon as the import has finished (see textFromChunks): a Save as LFCP or a text sort
   // right after the import finds them in memory instead of decoding them from the file (6 columns: 0.7-0.9 s). Done after, not during, the import so the import time does not change.
   view.liveRest = { names: headers.filter((h, k) => !kindOf[k] && !chunks.every((c) => c.cols[k].codes)), L };
+  if (EARLY_TEXT) textFromChunks(view);   // variant: start now, while the pack threads finish the file
 }
 async function warmColumn(n) {
   if (view.cols.has(n)) return;
@@ -1137,6 +1138,7 @@ async function groupView(m) {
 // Decodes the wanted columns that are not in memory yet, all in one pass (two parallel calls: number columns as typed arrays, text columns as strings; a dictionary column kept from the import costs
 // one lookup per row and no decode). A column another call is already decoding is waited for, never decoded twice (a Save right after the background warm used to start the same decode again).
 const yieldNow = (() => { const mc = new MessageChannel(); let res = null; mc.port1.onmessage = () => { const r = res; res = null; if (r) r(); }; return () => new Promise((r) => { res = r; mc.port2.postMessage(0); }); })();   // a turn for queued messages without the timer delay
+const EARLY_TEXT = true;
 function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
   const fly = (v.inflight ||= new Map()); let done; const p = new Promise((r) => { done = r; }); for (const n of lr.names) fly.set(n, p);
