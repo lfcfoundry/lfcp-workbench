@@ -756,7 +756,7 @@ async function importOnce(m) {
     let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
     const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? 1 : 2);   // live columns: Firefox packs with one worker while parsing (the cores go to the parse helpers) and gets three more when parsing is done; Chromium also packs with one while parsing and gets one more (measured: each is the best of the variants in its browser)   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
-    if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(mkWorker()); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
+    dropKeep(); if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(mkWorker()); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
     if (pws) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
       const bb = m.blockBytes || 2097152, popts = Object.assign({ level: m.level || 3 }, { blockBytes: bb, share: false });
       packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
@@ -815,7 +815,7 @@ async function importOnce(m) {
         await colFlush(); if (plen) await dispatch(take(plen));
         while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
         await wchain; if (failed) throw failed;
-        ws.forEach((w) => w.terminate());
+        keepWorkers(ws);
       };
       var packWorkersToStop = ws;
     }
@@ -861,7 +861,7 @@ async function importOnce(m) {
     if (name) await store.remove(name);
     if (err && err.mixed && !m.noColumns) restart = err.col != null && err.col >= 0 ? { col: err.col } : true;
     else send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
-  } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => w.terminate()); jobs.delete(m.id); }
+  } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => { if (!(self.__keep && self.__keep.includes(w))) w.terminate(); }); jobs.delete(m.id); }
   return restart ? (restart === true ? 'mixed' : restart) : null;
 }
 
@@ -1380,6 +1380,9 @@ async function exportSummary(m) {
     send('error', m.id, { message: String(err && err.message || err) });
   }
 }
+// The import's pack threads are kept for a minute after the import (their wasm is started and their memory paid) so a Save as LFCP of a big view can pack on them; dropKeep frees them.
+function dropKeep() { clearTimeout(self.__keepT); if (self.__keep) { for (const w of self.__keep) w.terminate(); self.__keep = null; } }
+function keepWorkers(ws) { dropKeep(); if (!ws.length || !isFirefox) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let writable = null, name = null, closed = false;
@@ -1396,8 +1399,9 @@ async function exportLfcp(m) {
     const BATCH = m.batch || 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: 2097152, share: false };
     const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
     // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
-    let pool = null; const npool = m.noPool || !isFirefox || !allWarm || !LfcPack.packBlock ? 0 : Math.min(3, Math.ceil(count / BATCH));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
-    if (npool > 1) { try { pool = []; for (let i = 0; i < npool; i++) pool.push(new Worker(self.location.href)); } catch { if (pool) pool.forEach((w) => w.terminate()); pool = null; } }
+    const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / BATCH) >= 13 ? self.__keep : null;
+    let pool = null; const npool = m.noPool || !(isFirefox || kept) || !allWarm || !LfcPack.packBlock ? 0 : Math.min(kept ? kept.length : 3, Math.ceil(count / BATCH));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
+    if (npool > 1 && kept) { clearTimeout(self.__keepT); pool = kept; } else if (npool > 1) { try { pool = []; for (let i = 0; i < npool; i++) pool.push(new Worker(self.location.href)); } catch { if (pool) pool.forEach((w) => w.terminate()); pool = null; } }
     const results = new Map(); let nextW = 0, emit = 0, pending = 0, wake = null, failed = null;
     const drain = async () => { while (results.has(emit)) { const r = results.get(emit); results.delete(emit); emit++; await write(packer2.pushPacked(r)); } };
     if (pool) for (const w of pool) w.onmessage = (e) => { const d = e.data || {}; pending--; if (d.error) failed = new Error(d.error); else results.set(d.rid, d.r); if (wake) { const r = wake; wake = null; r(); } };
@@ -1426,7 +1430,7 @@ async function exportLfcp(m) {
       for (const r of objs) { let line = ''; for (let k = 0; k < cols.length; k++) { const v = r[cols[k].name]; line += keyQ[k] + (v == null ? 'null' : JSON.stringify(v)); } text += line + '}\n'; }
       tm.text += performance.now() - ts; ts = performance.now(); await write(packer2.push(enc.encode(text))); tm.pack += performance.now() - ts;
     }
-    if (pool) { const ts = performance.now(); while (pending > 0 || results.size) { if (failed) throw failed; await drain(); if (pending > 0) await new Promise((r) => { wake = r; }); } tm.pack += performance.now() - ts; pool.forEach((w) => w.terminate()); }
+    if (pool) { const ts = performance.now(); while (pending > 0 || results.size) { if (failed) throw failed; await drain(); if (pending > 0) await new Promise((r) => { wake = r; }); } tm.pack += performance.now() - ts; if (kept) { self.__keepT = setTimeout(dropKeep, 60000); } else pool.forEach((w) => w.terminate()); }
     await write(packer2.finish()); await writable.close(); closed = true; writable = null;
     const v = await validate(name, count); if (!v.ok) throw new Error('The written file failed footer validation: ' + v.reason);
     const cat = await store.catalog(), outCols = cols.map((c) => { const o = Object.assign({}, c); delete o.derived; delete o.from; delete o.fn; return o; });
