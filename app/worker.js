@@ -637,7 +637,7 @@ async function importOnce(m) {
     const v = await validate(name, rows);
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
-    if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: R2.blocks.length > 0 && R2.blocks.every((b) => b.kind === 'f' && !b.table), live: null }); liveChunks = null; } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
+    if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: R2.blocks.length > 0 && R2.blocks.every((b) => b.kind === 'f' && !b.table), live: null }); liveChunks = null; textFromChunks(view); } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
     if (view && view.live && view.name === name) { view = null; send('liveclosed', m.id, {}); }
@@ -694,14 +694,14 @@ const FIRST_PAGE_ROWS = 1000;   // a sort answers with this many rows first
 const ensureFull = () => { if (view.pending) { const f = view.pending.full(); view.indices = f; view.pending = null; } };
 const MAX_COLUMN_ROWS = 20000000;   // column path: only the filtered and sorted columns are decoded, one block at a time
 let view = null, queryMod = null, colMod = null;
-function scheduleWarm(m, total) {
+function scheduleWarm(m, total, delay) {
   // Warm the sort columns: whole-number, decimal and date columns are decoded on helper threads while the person looks at the first page,
   // so the first sort of one of them only has the selection scan left (the decode was most of a first sort).
   if (!m.noWarm && view.flat && total <= MAX_WARM_ROWS && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory <= 4) && LfcPack.unpackColumnsParallel && view.f.size <= WHOLE_FILE_MAX) {
     // Text columns are warmed too when memory allows (about 40 bytes a cell): up to 3 million rows anywhere, up to 10 million on a desktop browser that does not report less than 8 GB.
     const warmText = !m.noWarmText && (total <= 3000000 || (total <= MAX_WARM_ROWS && !/Mobi|Android/.test(navigator.userAgent) && !(navigator.deviceMemory < 8)));
     const v = view, names = v.columns.filter((c) => c.type === 'integer' || c.type === 'number' || c.type === 'date' || (warmText && c.type === 'string')).map((c) => c.name);
-    setTimeout(async () => { for (const n of names) { if (view !== v) return; try { await warmColumn(n); } catch {} } }, 300);
+    setTimeout(async () => { if (view !== v) return; try { await warmCols(names, true); } catch {} }, 300);
   }
 }
 async function openView(m) {
@@ -709,7 +709,7 @@ async function openView(m) {
   if (view && !view.live && view.name === m.name && view.R && view.cols && !m.fresh) {   // the same dataset is already open (just imported): keep its decoded columns, start with no filter
     view.indices = null; view.filtered = false; view.pending = null; view.rows = null; view.cache = new Map();
     send('opened', m.id, { dictKept: Object.keys(view.dictCols || {}), name: m.name, total: view.total, columns: view.columns, reused: true });
-    return scheduleWarm(m, view.total);   // the columns the import did not keep are decoded in the background, as after a fresh open
+    return scheduleWarm(m, view.total, m.warmDelay == null ? 0 : m.warmDelay);   // the columns the import did not keep are decoded in the background, as after a fresh open
   }
   try {
     await LfcPack.init({ readOnly: true });
@@ -740,9 +740,10 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   const find = (r) => { let lo = 0, hi = chunks.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= r) lo = mid; else hi = mid - 1; } return lo; };
   const L = {
     row(r) { const o = {}, c = find(r), i = r - starts[c]; for (let k = 0; k < n; k++) { if (kindOf[k]) { const x = nums.get(headers[k])[r]; o[headers[k]] = x !== x ? null : x; } else { const x = chunks[c].cols[k]; if (x.codes) { const q = x.codes[i], lb = x.lb; o[headers[k]] = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); } else o[headers[k]] = dec.decode(x.bytes.subarray(x.start[i], x.end[i])); } } return o; },
-    column(nm) {   // a text column (or a number column that stayed text) as an array of strings, made the first time a filter or sort needs it
+    *columnGen(nm) {   // a text column (or a number column that stayed text) as an array of strings, made the first time a filter or sort needs it
       const k = headers.indexOf(nm), out = new Array(rows); let at = 0;
       for (const ch of chunks) {
+        yield;   // between chunks: the caller may let queued messages run
         const x = ch.cols[k];
         if (x.codes) { const lb = x.lb, labs = new Array(lb.start.length); for (let q = 0; q < labs.length; q++) labs[q] = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); for (let r = 0; r < ch.n; r++) out[at++] = labs[x.codes[r]]; continue; }   // dictionary chunk: the distinct values decoded once, one lookup per row
         const b = x.bytes; let ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; }
@@ -751,10 +752,14 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
       }
       return out;
     },
+    column(nm) { const g = this.columnGen(nm); let r; while (!(r = g.next()).done); return r.value; },
   };
   view = { name, R: null, f: null, total: rows, rows: null, columns: colsMeta, indices: null, filtered: false, cols: nums, flat: true, cache: new Map(), live: L };
   send('live', id, { name, total: rows, columns: colsMeta });
   setTimeout(() => { if (colMod.primeTopN) for (const a of nums.values()) colMod.primeTopN(a); }, 0);
+  // The text columns the import does not keep as dictionary ids are made from the kept chunks as soon as the import has finished (see textFromChunks): a Save as LFCP or a text sort
+  // right after the import finds them in memory instead of decoding them from the file (6 columns: 0.7-0.9 s). Done after, not during, the import so the import time does not change.
+  view.liveRest = { names: headers.filter((h, k) => !kindOf[k] && !chunks.every((c) => c.cols[k].codes)), L };
 }
 async function warmColumn(n) {
   if (view.cols.has(n)) return;
@@ -1049,28 +1054,40 @@ async function groupView(m) {
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
 // Decode every file column that is not decoded yet in two parallel calls (numbers as typed arrays, text as strings), so a filtered export reads its rows from memory instead of from 450 scattered blocks.
-async function warmAll() {
-  const v = view; if (!v.flat || v.live || !LfcPack.unpackColumnsParallel || v.f.size > WHOLE_FILE_MAX || v.total > 3000000) return;
-  const want = v.columns.filter((c) => !c.derived && !v.cols.has(c.name)); if (!want.length) return;
-  const isNum = (c) => c.type === 'integer' || c.type === 'number', bytes = new Uint8Array(await v.f.arrayBuffer());
-  for (const group of [want.filter(isNum), want.filter((c) => !isNum(c))]) {
-    if (!group.length) continue;
-    const got = await LfcPack.unpackColumnsParallel(bytes, isNum(group[0]) ? { keys: group.map((c) => c.name), nulls: 'NaN' } : { keys: group.map((c) => c.name) });
-    if (view !== v) return;
-    for (const c of group) if (got[c.name] && !v.cols.has(c.name)) { v.cols.set(c.name, got[c.name]); if (ArrayBuffer.isView(got[c.name]) && colMod && colMod.primeTopN) colMod.primeTopN(got[c.name]); }
-  }
+// Decodes the wanted columns that are not in memory yet, all in one pass (two parallel calls: number columns as typed arrays, text columns as strings; a dictionary column kept from the import costs
+// one lookup per row and no decode). A column another call is already decoding is waited for, never decoded twice (a Save right after the background warm used to start the same decode again).
+const yieldNow = (() => { const mc = new MessageChannel(); let res = null; mc.port1.onmessage = () => { const r = res; res = null; if (r) r(); }; return () => new Promise((r) => { res = r; mc.port2.postMessage(0); }); })();   // a turn for queued messages without the timer delay
+function textFromChunks(v) {
+  const lr = v.liveRest; if (!lr) return; v.liveRest = null;
+  const fly = (v.inflight ||= new Map()); let done; const p = new Promise((r) => { done = r; }); for (const n of lr.names) fly.set(n, p);
+  setTimeout(async () => {
+    try { for (const nm of lr.names) { if (view !== v) break; if (!v.cols.has(nm)) { try { const g = lr.L.columnGen(nm); let r, k = 0; while (!(r = g.next()).done) { if (++k % 4 === 0) await yieldNow(); if (view !== v) break; } if (r.done && view === v) v.cols.set(nm, r.value); } catch {} } fly.delete(nm); await yieldNow(); } }
+    finally { for (const nm of lr.names) fly.delete(nm); done(); }
+  }, 0);
 }
-async function warmSome(names) {
+async function warmCols(names, background) {
   const v = view; if (!v.flat || v.live || !LfcPack.unpackColumnsParallel || v.f.size > WHOLE_FILE_MAX) return;
-  const want = v.columns.filter((c) => names.includes(c.name) && !c.derived && !v.cols.has(c.name)); if (!want.length) return;
-  const isNum = (c) => c.type === 'integer' || c.type === 'number', bytes = new Uint8Array(await v.f.arrayBuffer());
-  for (const group of [want.filter(isNum), want.filter((c) => !isNum(c))]) {
-    if (!group.length) continue;
-    const got = await LfcPack.unpackColumnsParallel(bytes, isNum(group[0]) ? { keys: group.map((c) => c.name), nulls: 'NaN' } : { keys: group.map((c) => c.name) });
-    if (view !== v) return;
-    for (const c of group) if (got[c.name] && !v.cols.has(c.name)) { v.cols.set(c.name, got[c.name]); if (ArrayBuffer.isView(got[c.name]) && colMod && colMod.primeTopN) colMod.primeTopN(got[c.name]); }
+  const fly = (v.inflight ||= new Map()), waits = [];
+  const want = [];
+  for (const c of v.columns) { if (c.derived || !names.includes(c.name) || v.cols.has(c.name)) continue; const p = fly.get(c.name); if (p) waits.push(p); else want.push(c); }
+  const isNum = (c) => c.type === 'integer' || c.type === 'number', rest = [];
+  for (const c of want) { const d = v.dictCols && v.dictCols[c.name]; if (d && !isNum(c) && d.ids.length === v.total) { const arr = new Array(v.total), dict = d.dict, ids = d.ids; for (let i = 0; i < arr.length; i++) arr[i] = dict[ids[i]]; v.cols.set(c.name, arr); } else rest.push(c); }
+  if (rest.length) {
+    let done; const p = new Promise((r) => { done = r; }); for (const c of rest) fly.set(c.name, p);
+    try {
+      const bytes = new Uint8Array(await v.f.arrayBuffer());
+      for (const group of [rest.filter(isNum), rest.filter((c) => !isNum(c))]) {
+        if (!group.length) continue;
+        const got = await LfcPack.unpackColumnsParallel(bytes, isNum(group[0]) ? { keys: group.map((c) => c.name), nulls: 'NaN' } : { keys: group.map((c) => c.name) });
+        if (view !== v) return;
+        for (const c of group) if (got[c.name] && !v.cols.has(c.name)) { v.cols.set(c.name, got[c.name]); if (ArrayBuffer.isView(got[c.name]) && colMod && colMod.primeTopN) colMod.primeTopN(got[c.name]); }
+      }
+    } finally { for (const c of rest) fly.delete(c.name); done(); }
   }
+  await Promise.all(waits);
 }
+const warmAll = () => (view && view.total <= 3000000 ? warmCols(view.columns.map((c) => c.name)) : Promise.resolve());
+const warmSome = (names) => warmCols(names);
 // Saves the rows now shown (filter and sort applied, derived columns included) as a new LFCP dataset in this browser and hands the file back for download.
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
