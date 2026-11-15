@@ -217,12 +217,12 @@
           if (qm.type === 'done') { const want = []; for (let i = 0; i < 3000; i++) want.push({ id: i, name: 'row ' + i, score: i % 5 ? i * 100 + 50 : null, note: i % 4 ? '' : 'two\nlines ' + i }); const v = await call({ type: 'verify', name: qm.dataset.name, expectJson: JSON.stringify(want) }); okq = v.json === true && qm.dataset.rows === 3000 && qm.dataset.timing.redos === 0; whyq = qm.dataset.rows + ' rows, redos ' + qm.dataset.timing.redos + ', fast rows ' + qm.dataset.timing.fastRows + ', rows ' + (v.json === true ? 'identical' : 'DIFFERENT'); await call({ type: 'delete', name: qm.dataset.name }); }
           add('quoted cells with line breaks import in pieces without re-parsing', okq, whyq);
         }
-        {   // a text-like cell ("007") in a number column cannot live in a typed column: the import starts again on the text path and stores the same cells
+        {   // a text-like cell ("007") in a number column cannot live in a typed column: the import starts again with only that column as text (its cells read back as text), the other columns stay typed
           const mixedRows = ['id,name,score\r\n', ...plain]; mixedRows[4501] = '007,row 4500,0.25\r\n';
           const mx = await runImport(new File(mixedRows, 'mixed.csv', { type: 'text/csv' }), false, { segBytes: 2048 });
           let okm = false, whym = mx.message || '';
-          if (mx.type === 'done') { const want = []; for (let i = 0; i < 6000; i++) want.push({ id: i === 4500 ? '007' : i, name: 'row ' + i, score: (i % 9) * 100 + 25 }); const v = await call({ type: 'verify', name: mx.dataset.name, expectJson: JSON.stringify(want) }); okm = v.json === true && mx.dataset.timing.columns === false; whym = mx.dataset.rows + ' rows, columns path ' + mx.dataset.timing.columns + ', rows ' + (v.json === true ? 'identical' : 'DIFFERENT'); await call({ type: 'delete', name: mx.dataset.name }); }
-          add('a text-like cell in a number column falls back to the text path', okm, whym);
+          if (mx.type === 'done') { const want = []; for (let i = 0; i < 6000; i++) want.push({ id: i === 4500 ? '007' : String(i), name: 'row ' + i, score: (i % 9) * 100 + 25 }); const v = await call({ type: 'verify', name: mx.dataset.name, expectJson: JSON.stringify(want) }); okm = v.json === true && mx.dataset.timing.columns === true; whym = mx.dataset.rows + ' rows, columns path ' + mx.dataset.timing.columns + ', rows ' + (v.json === true ? 'identical' : 'DIFFERENT'); await call({ type: 'delete', name: mx.dataset.name }); }
+          add('a text-like cell in a number column turns only that column into text', okm, whym);
         }
         const badRows = ['id,name,score\r\n', ...plain]; badRows[4001] = '4000,only two\r\n';
         const bf = new File(badRows, 'plainbad.csv', { type: 'text/csv' }), b1 = await runImport(bf, true), b2 = await runImport(bf, false, { segBytes: 2048 });
@@ -395,7 +395,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.1108 (LFC-pack 0.11.1)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.1108 (LFC-pack 0.10.42)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }

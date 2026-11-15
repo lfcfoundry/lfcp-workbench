@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.11.1/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.10.42/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -214,14 +214,14 @@ function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn) {
 }
 // Lines the wasm builder leaves to the character parser, collected until the next wasm chunk (or the end) and turned into a chunk of the same shape.
 function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink, dictOn) {
-  const n = headers.length, kind = headers.map((_, c) => (plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 ? plan[c] : 0));
+  const n = headers.length, kind = headers.map((_, c) => (plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 ? plan[c] : 0)), isInt = headers.map((_, c) => !!(plan && plan[c] === true));   // a column of 1 decimal has kind 1 too: isInt tells it from a whole-number column
   let vals = headers.map(() => []), rows = 0, bytes = 0;
   return {
     get n() { return rows; },
     add(f) {
       for (let c = 0; c < n; c++) {
         const raw = f[c]; trackers[c].add(raw); bytes += raw.length + 1;
-        if (kind[c]) { const v = kind[c] === 1 ? typedCell(raw) : typedDecimal(raw, kind[c]); if (v === null) vals[c].push(NaN); else if (typeof v === 'number') vals[c].push(v); else throw mixedErr(c); } else vals[c].push(raw);
+        if (kind[c]) { const v = isInt[c] ? typedCell(raw) : typedDecimal(raw, kind[c]); if (v === null) vals[c].push(NaN); else if (typeof v === 'number') vals[c].push(v); else throw mixedErr(c); } else vals[c].push(raw);
       }
       rows++;
     },
