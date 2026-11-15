@@ -53,6 +53,9 @@ self.onmessage = async (e) => {
   else if (m.type === 'query') queryView(m);
   else if (m.type === 'page') pageView(m);
   else if (m.type === 'export') exportView(m);
+  else if (m.type === 'derive') deriveColumn(m);
+  else if (m.type === 'groupby') groupView(m);
+  else if (m.type === 'exportLfcp') exportLfcp(m);
 };
 
 
@@ -770,7 +773,7 @@ async function dropFullMatch(filters, active) {
   if (view.live) return null;
   const keep = {}; let dropped = 0;
   for (const name of active) {
-    const col = view.columns.find((c) => c.name === name), parsed = col && col.type === 'integer' ? queryMod.parseFilter(filters[name], col.type) : null, f = parsed && parsed.filter;
+    const col = view.columns.find((c) => c.name === name), parsed = col && !col.derived && col.type === 'integer' ? queryMod.parseFilter(filters[name], col.type) : null, f = parsed && parsed.filter;
     let all = !!f && f.kind === 'num' && f.op !== 'ne' && view.R.blocks.length > 0;
     for (let b = 0; all && b < view.R.blocks.length; b++) {
       const z = await view.R.zone(b, name);
@@ -785,12 +788,12 @@ async function dropFullMatch(filters, active) {
 let zoneMinBlocks = 0;   // test hook (gate=N in the page address): the fewest blocks that make a zone plan worth trying
 let posMod = null;
 // A number range or equality by row numbers is only exact when every cell of the column is a stored number: a block without a number range may hold text cells.
-async function allBlocksHaveZone(col) { if (col.type !== 'integer') return true; for (let b = 0; b < view.R.blocks.length; b++) if (!(await view.R.zone(b, col.name))) return false; return true; }
+async function allBlocksHaveZone(col) { if (col.derived) return false; if (col.type !== 'integer') return true; for (let b = 0; b < view.R.blocks.length; b++) if (!(await view.R.zone(b, col.name))) return false; return true; }
 async function zonePlan(filters, active) {
   if (view.live) return null;
   const need = [];
   for (const name of active) {
-    const col = view.columns.find((c) => c.name === name); if (!col) continue;
+    const col = view.columns.find((c) => c.name === name); if (!col || col.derived) continue;
     const { filter: f } = queryMod.parseFilter(filters[name], col.type); if (!f) continue;
     if (col.type === 'integer' && f.kind === 'num' && f.op !== 'ne') need.push([name, f.op, f.value]);
     else if (col.type === 'integer' && f.op === 'eq' && /^-?(0|[1-9]\d{0,14})$/.test(f.value)) need.push([name, 'eq', +f.value]);
@@ -818,7 +821,11 @@ async function loadBlocks(zp, names) {
   return out;
 }
 // Row objects for some row numbers, grouped by block so each block is decoded once. Keeps a few decoded blocks for scrolling back and forth.
-async function rowsAt(idx, from, to) {
+async function rowsAt(idx, from, to) { const o = await rowsAtBase(idx, from, to); if (view.derived && view.derived.size) overlayDerived(o, (i) => idx[from + i]); return o; }
+function overlayDerived(objs, rowOf) {   // derived columns live beside the file: put their values into the row objects
+  for (const [name, d] of view.derived) for (let i = 0; i < objs.length; i++) { const x = d[rowOf(i)]; objs[i][name] = x !== x ? null : x; }
+}
+async function rowsAtBase(idx, from, to) {
   if (view.live) { const o = []; for (let i = from; i < to; i++) o.push(view.live.row(idx[i])); return o; }
   if (view.rows) { const o = []; for (let i = from; i < to; i++) o.push(view.rows[idx[i]]); return o; }
   if (view.columns.length && view.columns.every((c) => view.cols.has(c.name))) {   // every column is already warmed: read the visible rows from them, not 28 whole blocks (223 to 57 ms for a score sort of 7M rows)
@@ -900,6 +907,7 @@ async function pageView(m) {
   if (!view.filtered) {
     const n = Math.max(0, Math.min(m.count, view.total - m.start));
     const objs = n ? (view.live ? Array.from({ length: n }, (_, i) => view.live.row(m.start + i)) : await view.R.rows({ from: m.start, count: n })) : [];
+    if (view.derived && view.derived.size) overlayDerived(objs, (i) => m.start + i);
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name], c))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
     if (view.pending && m.start + m.count > view.pending.topN) ensureFull();
@@ -915,7 +923,29 @@ async function exportView(m) {
   try {
     const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
     ensureFull();
+    if (!m.noFast) await warmAll();   // columns decoded together on helper threads (when not already), then the CSV is written straight from them
     const count = view.filtered ? view.indices.length : view.total, parts = [...(m.bom ? ['\uFEFF'] : []), csvHeader(view.columns, d)];
+    if (!m.noFast && view.columns.length && view.columns.every((c) => view.cols.has(c.name))) {   // fast path: no row objects, no per-cell function calls
+      const srcs = view.columns.map((c) => ({ a: view.cols.get(c.name), dec: c.decimals || 0 })), idx = view.filtered ? view.indices : null, quote = new RegExp('["\\r\\n' + (d === '\t' ? '\\t' : d.replace(/[\\\]^-]/g, '\\$&')) + ']'), nc = srcs.length, arr = srcs.map((x) => x.a), dec = srcs.map((x) => x.dec), isT = arr.map((a) => ArrayBuffer.isView(a)), STEP = 20000;
+      const tb0 = performance.now();
+      for (let start = 0; start < count; start += STEP) {
+        const end = Math.min(count, start + STEP); let text = '';
+        for (let i = start; i < end; i++) {
+          const r = idx ? idx[i] : i; let line = '';
+          for (let k = 0; k < nc; k++) {
+            const x = arr[k][r]; let t;
+            if (isT[k]) { line += (x !== x ? '' : dec[k] ? formatScaled(x, dec[k]) : '' + x); if (k < nc - 1) line += d; continue; }   // a typed number column: no quoting needed
+            if (typeof x === 'string') t = x; else if (x !== x || x == null) t = ''; else t = dec[k] && typeof x === 'number' ? formatScaled(x, dec[k]) : '' + x;
+            if (t.length !== 0 && quote.test(t)) t = '"' + t.replace(/"/g, '""') + '"';
+            line += t; if (k < nc - 1) line += d;
+          }
+          text += line + '\r\n';
+        }
+        parts.push(text);
+      }
+      const tb1 = performance.now(), blob = new Blob(parts, { type: 'text/csv;charset=utf-8' });
+      return send('exported', m.id, { blob, rows: count, bytes: blob.size, fast: true, textMs: Math.round(tb1 - tb0), blobMs: Math.round(performance.now() - tb1) });
+    }
     for (let start = 0; start < count; start += BATCH) {
       const n = Math.min(BATCH, count - start); let rows;
       if (view.filtered) rows = (await rowsAt(view.indices, start, start + n)).map((r) => view.columns.map((c) => cellText(r[c.name], c)));
@@ -939,4 +969,110 @@ async function genBig(m) {
     let file; if (w) { await w.close(); file = await (await (await store.dir()).getFileHandle('scratch-big.csv')).getFile(); } else file = new File(parts, 'big.csv', { type: 'text/csv' });
     send('generated', m.id, { file, rows, bytes, onDisk: !!w });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
+}
+
+// ---- Derived columns, group-by and LFCP export (src/query/derive.mjs, groupby.mjs) ----
+// A derived column is computed from one column by a named function, kept beside the file (not in it) and shown, filtered, sorted and exported like any other column.
+let deriveMod = null, groupMod = null;
+async function deriveColumn(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  try {
+    deriveMod ||= MODS() && MODS().derive ? { derive: MODS().derive, isNumberDerive: MODS().isNumberDerive } : await import('../src/query/derive.mjs');
+    const t0 = performance.now(), src = view.columns.find((c) => c.name === m.source), name = String(m.name || '').trim();
+    if (!src) throw new Error('Pick a column to work from.');
+    if (!name || view.columns.some((c) => c.name === name)) throw new Error('Give the new column a name no other column has.');
+    const cols = await loadColumns([m.source], false, true), data = deriveMod.derive(cols[m.source], view.total, m.fn), isNum = ArrayBuffer.isView(data);
+    let whole = isNum; if (isNum) for (let i = 0; i < data.length; i++) { const x = data[i]; if (x === x && x !== Math.floor(x)) { whole = false; break; } }
+    const meta = { name, type: isNum ? (whole ? 'integer' : 'number') : 'string', nullable: true, derived: true, from: m.source, fn: m.fn };
+    (view.derived ||= new Map()).set(name, data); view.cols.set(name, data); view.columns = view.columns.concat([meta]); view.cache && view.cache.clear();
+    if (isNum && colMod && colMod.primeTopN) colMod.primeTopN(data);
+    send('derived', m.id, { columns: view.columns, ms: Math.round(performance.now() - t0) });
+  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
+}
+async function groupView(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  try {
+    groupMod ||= MODS() && MODS().groupBy ? { groupBy: MODS().groupBy } : await import('../src/query/groupby.mjs');
+    queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
+    if (view.total > MAX_COLUMN_ROWS || !view.flat) throw new Error('Group by works up to ' + MAX_COLUMN_ROWS.toLocaleString() + ' rows for now.');
+    const t0 = performance.now(), aggs = m.aggs || [{ fn: 'count' }], names = [...new Set([m.key].concat(aggs.filter((a) => a.col).map((a) => a.col)))];
+    const active = Object.keys(m.filters || {}).filter((k) => m.filters[k]);
+    for (const n of names) if (!view.columns.some((c) => c.name === n)) throw new Error('No column named ' + n + '.');
+    const need = Array.from(new Set(names.concat(active)));
+    if (!/AppleWebKit(?!.*Chrome)/.test(self.navigator.userAgent || '') && !m.noParallel) await warmSome(need);   // missing columns decoded on helper threads at once (not in WebKitGTK: slower there)
+    const cols = await loadColumns(need, false), tLoad = performance.now() - t0, tg = performance.now();
+    let rows = null; if (active.length) rows = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters }).indices;
+    const g = groupMod.groupBy(cols, view.total, rows, { key: m.key, aggs }), order = Array.from(g.keys, (_, i) => i).sort((a, b) => g.counts[b] - g.counts[a] || (g.keys[a] < g.keys[b] ? -1 : 1));
+    const head = [m.key].concat(aggs.map((a) => (a.fn === 'count' ? 'count' : a.fn + '_' + a.col)));
+    const table = order.slice(0, 1000).map((gi) => { let v = 0; return [g.keys[gi]].concat(aggs.map((a) => { const x = a.fn === 'count' ? g.counts[gi] : g.values[v++][gi]; return x !== x ? '' : a.fn === 'avg' || a.fn === 'rate' ? String(Math.round(x * 10000) / 10000) : String(x); })); });
+    send('grouped', m.id, { headers: head, rows: table, groups: g.keys.length, rowsUsed: rows ? rows.length : view.total, ms: Math.round(performance.now() - t0), loadMs: Math.round(tLoad), groupMs: Math.round(performance.now() - tg) });
+  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
+}
+// Decode every file column that is not decoded yet in two parallel calls (numbers as typed arrays, text as strings), so a filtered export reads its rows from memory instead of from 450 scattered blocks.
+async function warmAll() {
+  const v = view; if (!v.flat || v.live || !LfcPack.unpackColumnsParallel || v.f.size > WHOLE_FILE_MAX || v.total > 3000000) return;
+  const want = v.columns.filter((c) => !c.derived && !v.cols.has(c.name)); if (!want.length) return;
+  const isNum = (c) => c.type === 'integer' || c.type === 'number', bytes = new Uint8Array(await v.f.arrayBuffer());
+  for (const group of [want.filter(isNum), want.filter((c) => !isNum(c))]) {
+    if (!group.length) continue;
+    const got = await LfcPack.unpackColumnsParallel(bytes, isNum(group[0]) ? { keys: group.map((c) => c.name), nulls: 'NaN' } : { keys: group.map((c) => c.name) });
+    if (view !== v) return;
+    for (const c of group) if (got[c.name] && !v.cols.has(c.name)) { v.cols.set(c.name, got[c.name]); if (ArrayBuffer.isView(got[c.name]) && colMod && colMod.primeTopN) colMod.primeTopN(got[c.name]); }
+  }
+}
+async function warmSome(names) {
+  const v = view; if (!v.flat || v.live || !LfcPack.unpackColumnsParallel || v.f.size > WHOLE_FILE_MAX) return;
+  const want = v.columns.filter((c) => names.includes(c.name) && !c.derived && !v.cols.has(c.name)); if (!want.length) return;
+  const isNum = (c) => c.type === 'integer' || c.type === 'number', bytes = new Uint8Array(await v.f.arrayBuffer());
+  for (const group of [want.filter(isNum), want.filter((c) => !isNum(c))]) {
+    if (!group.length) continue;
+    const got = await LfcPack.unpackColumnsParallel(bytes, isNum(group[0]) ? { keys: group.map((c) => c.name), nulls: 'NaN' } : { keys: group.map((c) => c.name) });
+    if (view !== v) return;
+    for (const c of group) if (got[c.name] && !v.cols.has(c.name)) { v.cols.set(c.name, got[c.name]); if (ArrayBuffer.isView(got[c.name]) && colMod && colMod.primeTopN) colMod.primeTopN(got[c.name]); }
+  }
+}
+// Saves the rows now shown (filter and sort applied, derived columns included) as a new LFCP dataset in this browser and hands the file back for download.
+async function exportLfcp(m) {
+  if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  let writable = null, name = null, closed = false;
+  try {
+    await LfcPack.init(); ensureFull();
+    const t0 = performance.now();
+    await warmAll(); const tWarm = performance.now() - t0;
+    const cols = view.columns, count = view.filtered ? view.indices.length : view.total, keyQ = cols.map((c, i) => (i ? ',' : '{') + JSON.stringify(c.name) + ':');
+    name = safe(view.name.replace(/-[0-9a-f-]{36}\.json\.lfc$/, '')) + '-view-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
+    writable = await store.create(name);
+    const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
+    let outBytes = 0;
+    const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
+    const BATCH = 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: 2097152, share: false };
+    const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
+    for (let start = 0; start < count; start += BATCH) {
+      const end = Math.min(count, start + BATCH); let ts = performance.now();
+      if (allWarm && LfcPack.packBlock) {   // every column is in memory: gather the batch column by column and pack it as columns (no row objects, no JSON text)
+        const out = {}, n = end - start;
+        for (const c of cols) {
+          const src = view.cols.get(c.name), a = new Array(n);
+          if (ArrayBuffer.isView(src)) { for (let i = 0; i < n; i++) { const x = src[view.filtered ? view.indices[start + i] : start + i]; a[i] = x !== x ? null : x; } }
+          else for (let i = 0; i < n; i++) a[i] = src[view.filtered ? view.indices[start + i] : start + i];
+          out[c.name] = a;
+        }
+        tm.rows += performance.now() - ts; ts = performance.now();
+        const r = await LfcPack.packBlock(out, popts); await write(packer2.pushPacked(r)); tm.pack += performance.now() - ts; continue;
+      }
+      const objs = view.filtered ? await rowsAt(view.indices, start, end) : view.live ? Array.from({ length: end - start }, (_, i) => view.live.row(start + i)) : await view.R.rows({ from: start, count: end - start });
+      if (!view.filtered && view.derived && view.derived.size) overlayDerived(objs, (i) => start + i);
+      tm.rows += performance.now() - ts; ts = performance.now(); let text = '';
+      for (const r of objs) { let line = ''; for (let k = 0; k < cols.length; k++) { const v = r[cols[k].name]; line += keyQ[k] + (v == null ? 'null' : JSON.stringify(v)); } text += line + '}\n'; }
+      tm.text += performance.now() - ts; ts = performance.now(); await write(packer2.push(enc.encode(text))); tm.pack += performance.now() - ts;
+    }
+    await write(packer2.finish()); await writable.close(); closed = true; writable = null;
+    const v = await validate(name, count); if (!v.ok) throw new Error('The written file failed footer validation: ' + v.reason);
+    const cat = await store.catalog(), outCols = cols.map((c) => { const o = Object.assign({}, c); delete o.derived; delete o.from; delete o.fn; return o; });
+    cat.push({ name, source: 'view of ' + view.name, rows: count, bytes: outBytes, columns: outCols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
+    send('exportedLfcp', m.id, { name, rows: count, bytes: outBytes, blob: await store.file(name), ms: Math.round(performance.now() - t0), warmMs: Math.round(tWarm), rowsMs: Math.round(tm.rows), textMs: Math.round(tm.text), packMs: Math.round(tm.pack) });
+  } catch (err) {
+    if (writable && !closed) { try { await writable.abort(); } catch {} } if (name) await store.remove(name);
+    send('error', m.id, { message: String(err && err.message || err) });
+  }
 }

@@ -94,7 +94,7 @@
     status('Opening ' + name + '…');
     const r = await call({ type: 'open', name, noWarm: /[?&]nowarm=1/.test(location.search), noWarmText: /[?&]nowarmtext=1/.test(location.search) });
     if (r.type === 'error') { status(r.message, true); return; }
-    Object.assign(G, { cols: r.columns, filters: {}, sort: null }); $('gridbox').hidden = false; $('gridtitle').textContent = 'Data: ' + r.name; buildHead(); await applyQuery(); status('Opened. Type in a filter box or click a column name.');
+    Object.assign(G, { cols: r.columns, filters: {}, sort: null }); fillTools(); $('gridbox').hidden = false; $('gridtitle').textContent = 'Data: ' + r.name; buildHead(); await applyQuery(); status('Opened. Type in a filter box or click a column name.');
     return r;
   }
   $('gridscroll').addEventListener('scroll', () => { if (!G.busy) { G.busy = true; requestAnimationFrame(async () => { G.busy = false; await loadWindow(); }); } });
@@ -111,6 +111,34 @@
     return r;
   }
   $('exportcsv').addEventListener('click', () => exportCsv(true));
+  // Add column, Summarize and Save as LFCP (the worker does the work: src/query/derive.mjs, groupby.mjs)
+  const FUNCS = ['hour', 'year', 'month', 'day', 'minute', 'length', 'upper', 'lower', 'trim', 'first'];
+  const fillTools = () => {
+    const opts = (f) => G.cols.filter(f || (() => true)).map((c) => '<option>' + esc(c.name) + '</option>').join('');
+    $('dsrc').innerHTML = opts(); $('dfn').innerHTML = FUNCS.map((f) => '<option>' + f + '</option>').join(''); $('gkey').innerHTML = opts(); $('gcol').innerHTML = opts();
+  };
+  async function addColumn(src, fn, name) {
+    const r = await call({ type: 'derive', source: src, fn, name });
+    if (r.type === 'error') { status(r.message, true); return r; }
+    G.cols = r.columns; fillTools(); buildHead(); await applyQuery(); status('Added column ' + name + ' (' + r.ms + ' ms).'); return r;
+  }
+  async function summarize(key, fn, col, eq) {
+    const aggs = [{ fn: 'count' }]; if (fn) aggs.push(fn === 'rate' ? { fn, col, equals: eq } : { fn, col });
+    const r = await call({ type: 'groupby', key, aggs, filters: G.filters });
+    if (r.type === 'error') { status(r.message, true); return r; }
+    $('gres').innerHTML = '<table><tr>' + r.headers.map((h) => '<th>' + esc(h) + '</th>').join('') + '</tr>' + r.rows.slice(0, 200).map((x) => '<tr>' + x.map((v) => '<td>' + esc(v) + '</td>').join('') + '</tr>').join('') + '</table>';
+    $('gmsg').textContent = r.groups.toLocaleString() + ' groups from ' + r.rowsUsed.toLocaleString() + ' rows in ' + r.ms + ' ms'; G.lastGroup = r; return r;
+  }
+  async function saveLfcp(download) {
+    status('Saving LFCP…'); const r = await call({ type: 'exportLfcp' });
+    if (r.type === 'error') { status(r.message, true); return r; }
+    if (download) { const a = document.createElement('a'); a.href = URL.createObjectURL(r.blob); a.download = r.name.replace(/-[0-9a-f-]{36}(\.json\.lfc)$/, '$1'); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
+    status('Saved ' + r.name + ': ' + r.rows.toLocaleString() + ' rows, ' + (r.bytes / 1048576).toFixed(2) + ' MB (also kept in this browser).'); return r;
+  }
+  $('dgo').addEventListener('click', () => addColumn($('dsrc').value, $('dfn').value, $('dname').value || $('dfn').value));
+  $('ggo').addEventListener('click', () => summarize($('gkey').value, $('gfn').value, $('gcol').value, $('geq').value));
+  $('exportlfcp').addEventListener('click', () => saveLfcp(true));
+  window.__wb = { addColumn, summarize, saveLfcp, call, applyQuery, openGrid, G };
   $('closegrid').addEventListener('click', () => { $('gridbox').hidden = true; });
 
   // Self-test: messy generated CSV, imported in the worker, read back, compared row by row.

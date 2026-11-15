@@ -1,0 +1,24 @@
+// Node pass/fail gate for src/query/groupby.mjs and derive.mjs (no timing).
+import assert from 'node:assert/strict';
+import { groupBy } from '../src/query/groupby.mjs';
+import { derive } from '../src/query/derive.mjs';
+const date = ['2002-12-11T03:00:00.000', '2002-12-11 23:59:00', '', 'bad', '2001-01-01T10:40:00.000', null];
+assert.deepEqual(Array.from(derive(date, 6, 'hour')), [3, 23, NaN, NaN, 10, NaN]);
+assert.deepEqual(Array.from(derive(date, 6, 'year')), [2002, 2002, NaN, NaN, 2001, NaN]);
+assert.deepEqual(Array.from(derive(date, 6, 'month')), [12, 12, NaN, NaN, 1, NaN]);
+assert.deepEqual(derive(['Ab ', null], 2, 'upper'), ['AB ', '']);
+assert.throws(() => derive(date, 6, 'nope'));
+const cols = { t: ['A', 'B', 'A', 'A', 'B', ''], arrest: ['true', 'false', 'false', 'true', 'false', 'true'], n: Float64Array.from([1, 2, NaN, 4, 5, 6]) };
+const g = groupBy(cols, 6, null, { key: 't', aggs: [{ fn: 'count' }, { fn: 'rate', col: 'arrest', equals: 'true' }, { fn: 'sum', col: 'n' }, { fn: 'avg', col: 'n' }, { fn: 'min', col: 'n' }, { fn: 'max', col: 'n' }] });
+assert.deepEqual(g.keys, ['A', 'B', '']); assert.deepEqual(Array.from(g.counts), [3, 2, 1]);
+assert.deepEqual(Array.from(g.values[0]), [2 / 3, 0, 1]); assert.deepEqual(Array.from(g.values[1]), [5, 7, 6]); assert.deepEqual(Array.from(g.values[2]), [2.5, 3.5, 6]);
+assert.deepEqual(Array.from(g.values[3]), [1, 2, 6]); assert.deepEqual(Array.from(g.values[4]), [4, 5, 6]);
+const f = groupBy(cols, 6, Uint32Array.from([1, 4]), { key: 't', aggs: [{ fn: 'count' }] }); assert.deepEqual(f.keys, ['B']); assert.deepEqual(Array.from(f.counts), [2]);
+const num = groupBy({ k: Float64Array.from([1, NaN, 1, NaN]) }, 4, null, { key: 'k', aggs: [{ fn: 'count' }] }); assert.deepEqual(num.keys, ['1', '']); assert.deepEqual(Array.from(num.counts), [2, 2]);
+const empty = groupBy({ k: ['x'], n: Float64Array.from([NaN]) }, 1, null, { key: 'k', aggs: [{ fn: 'avg', col: 'n' }] }); assert.ok(Number.isNaN(empty.values[0][0]));
+import { groupByCodes } from '../src/query/groupby.mjs';
+const dict = ['A', 'B', ''], ids = Uint32Array.from([0, 1, 0, 0, 1, 2]), codes = groupByCodes(ids, dict, cols, 6, null, { aggs: [{ fn: 'count' }, { fn: 'rate', col: 'arrest', equals: 'true' }, { fn: 'sum', col: 'n' }] });
+assert.deepEqual(codes.keys, g.keys); assert.deepEqual(Array.from(codes.counts), Array.from(g.counts)); assert.deepEqual(Array.from(codes.values[0]), Array.from(g.values[0])); assert.deepEqual(Array.from(codes.values[1]), Array.from(g.values[1]));
+const cf = groupByCodes(ids, dict, cols, 6, Uint32Array.from([1, 4]), { aggs: [{ fn: 'count' }] }); assert.deepEqual(cf.keys, ['B']); assert.deepEqual(Array.from(cf.counts), [2]);
+const arrestIds = Uint32Array.from([0, 1, 1, 0, 1, 0]), cc = groupByCodes(ids, dict, cols, 6, null, { aggs: [{ fn: 'rate', col: 'arrest', equals: 'true' }], codeCols: { arrest: { ids: arrestIds, dict: ['true', 'false'] } } }); assert.deepEqual(Array.from(cc.values[0]), Array.from(g.values[0]));
+console.log('groupby-derive: PASS');
