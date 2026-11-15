@@ -10,7 +10,7 @@
 <script defer src="app.js"></script>
 </head>
 <body>
-<header><h1>LFCP Workbench <small id="ver">2026.11.15.0859</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<header><h1>LFCP Workbench <small id="ver">2026.11.15.1156</small></h1><p>Import CSV or TSV into a local LFCP dataset. Nothing leaves this browser.</p></header>
 <main>
   <section>
     <h2>Import</h2>
@@ -34,7 +34,7 @@
     <p class="hint">Filter boxes: text finds matches anywhere; use &gt;5, &lt;=10, =exact, !=exact, = for empty cells, ! for filled cells. Click a column name to sort.</p>
     <div id="tools">
       <div><b>Add column</b> <label>from <select id="dsrc"></select></label> <label>work out <select id="dfn"></select></label> <label>named <input id="dname" size="10" placeholder="hour"></label> <button id="dgo">Add column</button></div>
-      <div><b>Summarize</b> <label>group by <select id="gkey"></select></label> <label>also <select id="gfn"><option value="">count only</option><option value="rate">share equal to</option><option value="sum">sum</option><option value="avg">average</option><option value="min">smallest</option><option value="max">largest</option></select></label> <select id="gcol"></select> <input id="geq" size="8" placeholder="true"> <button id="ggo">Summarize</button> <span id="gmsg" role="status"></span></div>
+      <div><b>Summarize</b> <label>group by <select id="gkey"></select></label> <label>then by <select id="gkey2"></select></label> <label>also <select id="gfn"><option value="">count only</option><option value="rate">share equal to</option><option value="sum">sum</option><option value="avg">average</option><option value="min">smallest</option><option value="max">largest</option></select></label> <select id="gcol"></select> <input id="geq" size="8" placeholder="true"> <button id="ggo">Summarize</button> <button id="gsave" disabled>Save summary as LFCP</button> <span id="gmsg" role="status"></span></div>
       <div id="gres"></div>
     </div>
     <button id="exportcsv">Export CSV</button> <button id="exportlfcp">Save as LFCP</button> <label><input type="checkbox" id="excelbom"> Excel-friendly (adds a byte-order mark)</label> <button id="closegrid">Close data view</button>

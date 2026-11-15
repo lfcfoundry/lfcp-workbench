@@ -14,7 +14,7 @@ if (!out) { console.error('usage: node tools/build-single.mjs OUT.html [--test]'
 const rd = (p) => readFileSync(join(root, p), 'utf8');
 const strip = (src) => src.replace(/^import .*$/gm, '').replace(/^export (class|function|const|async function) /gm, '$1 ');
 const mods = '(function(){\n' + ['src/ingest/delimited.mjs', 'src/ingest/infer.mjs', 'src/ingest/colbuild.mjs', 'src/ingest/records.mjs', 'src/query/query.mjs', 'src/query/positions.mjs', 'src/query/topn.mjs', 'src/query/columnar.mjs', 'src/query/groupby.mjs', 'src/query/derive.mjs', 'src/export/csv.mjs', 'app/bigdata.mjs'].map((f) => strip(rd(f))).join('\n') +
-  '\nreturn { DelimitedParser, IngestError, placeColumns, cleanHeaders, detectDelimiter, TypeTracker, typedCell, typedDecimal, sampleDecimals, cellFormat, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, primeTopN, groupBy, groupByCodes, derive, isNumberDerive, topSortIndices, positionsQuery, csvField, csvLines, csvHeader, HEADER, cells, line };\n})()';
+  '\nreturn { DelimitedParser, IngestError, placeColumns, cleanHeaders, detectDelimiter, TypeTracker, typedCell, typedDecimal, sampleDecimals, cellFormat, readRecords, parseFilter, matches, runQuery, sortKeyFor, runColumnQuery, primeTopN, groupBy, groupByCodes, groupBy2, derive, isNumberDerive, topSortIndices, positionsQuery, csvField, csvLines, csvHeader, HEADER, cells, line };\n})()';
 const lfc = rd('vendor/lfcp/0.10.42/lfc-pack.js');
 const worker = rd('app/worker.js').replace(/^importScripts\(.*$/m, '');
 const workerSrc = 'self.__M = ' + mods + ';\n' + lfc + '\n;\n' + worker;

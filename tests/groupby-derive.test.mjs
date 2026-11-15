@@ -21,4 +21,17 @@ const dict = ['A', 'B', ''], ids = Uint32Array.from([0, 1, 0, 0, 1, 2]), codes =
 assert.deepEqual(codes.keys, g.keys); assert.deepEqual(Array.from(codes.counts), Array.from(g.counts)); assert.deepEqual(Array.from(codes.values[0]), Array.from(g.values[0])); assert.deepEqual(Array.from(codes.values[1]), Array.from(g.values[1]));
 const cf = groupByCodes(ids, dict, cols, 6, Uint32Array.from([1, 4]), { aggs: [{ fn: 'count' }] }); assert.deepEqual(cf.keys, ['B']); assert.deepEqual(Array.from(cf.counts), [2]);
 const arrestIds = Uint32Array.from([0, 1, 1, 0, 1, 0]), cc = groupByCodes(ids, dict, cols, 6, null, { aggs: [{ fn: 'rate', col: 'arrest', equals: 'true' }], codeCols: { arrest: { ids: arrestIds, dict: ['true', 'false'] } } }); assert.deepEqual(Array.from(cc.values[0]), Array.from(g.values[0]));
+import { groupBy2 } from '../src/query/groupby.mjs';
+{ // two keys: dense, Map and kept-id paths agree with a plain Map reference (random data incl. empty text and NaN numbers)
+  const N = 5000, A = Array.from({ length: N }, (_, i) => ['x', 'y', '', 'z'][(i * 7 + (i >> 3)) % 4]), Bn = Float64Array.from({ length: N }, (_, i) => (i % 9 === 0 ? NaN : i % 5)), V = Float64Array.from({ length: N }, (_, i) => (i % 11 === 0 ? NaN : i % 13)), T = Array.from({ length: N }, (_, i) => (i % 3 ? 'true' : 'false'));
+  const c = { A, B: Bn, V, T }, rows = Uint32Array.from({ length: 2000 }, (_, i) => i * 2 + 1), aggs = [{ fn: 'count' }, { fn: 'sum', col: 'V' }, { fn: 'avg', col: 'V' }, { fn: 'min', col: 'V' }, { fn: 'max', col: 'V' }, { fn: 'rate', col: 'T', equals: 'true' }];
+  for (const rs of [null, rows]) {
+    const ref = new Map(), m = rs ? rs.length : N; for (let i = 0; i < m; i++) { const r = rs ? rs[i] : i, k = A[r] + '\u0001' + (Bn[r] !== Bn[r] ? '' : String(Bn[r])); const e = ref.get(k) || { n: 0, s: 0, sn: 0, mn: Infinity, mx: -Infinity, t: 0 }; e.n++; if (V[r] === V[r]) { e.s += V[r]; e.sn++; e.mn = Math.min(e.mn, V[r]); e.mx = Math.max(e.mx, V[r]); } if (T[r] === 'true') e.t++; ref.set(k, e); }
+    const dictA = ['x', 'y', '', 'z'], idsA = Uint8Array.from(A, (v) => dictA.indexOf(v));
+    for (const o of [{}, { forceMap: true }, { ids1: idsA, dict1: dictA }, { ids1: idsA, dict1: dictA, forceMap: true }]) {
+      const g = groupBy2(c, N, rs, { key: 'A', key2: 'B', aggs, ...o }); assert.equal(g.keys.length, ref.size);
+      g.keys.forEach((k, i) => { const e = ref.get(k[0] + '\u0001' + k[1]); assert.ok(e); assert.equal(g.counts[i], e.n); assert.equal(g.values[0][i], e.sn ? e.s : NaN); assert.equal(g.values[1][i], e.sn ? e.s / e.sn : NaN); assert.equal(g.values[2][i], e.sn ? e.mn : NaN); assert.equal(g.values[3][i], e.sn ? e.mx : NaN); assert.ok(Math.abs(g.values[4][i] - e.t / e.n) < 1e-12); });
+    }
+  }
+}
 console.log('groupby-derive: PASS');

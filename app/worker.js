@@ -58,6 +58,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'parseJob') parseJob(m);
   else if (m.type === 'seg') segJob(m);
   else if (m.type === 'packBlock') packBlockJob(m);
+  else if (m.type === 'packPlain') packPlainJob(m);
   else if (m.type === 'packCols') packColsJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importFile(m);
@@ -66,12 +67,14 @@ self.onmessage = async (e) => {
   else if (m.type === 'verify') verify(m);
   else if (m.type === 'gen') genBig(m);
   else if (m.type === 'genclean') store.remove('scratch-big.csv').then(() => send('cleaned', m.id, {}));
+  else if (view && view.preview && (m.type === 'query' || m.type === 'derive' || m.type === 'groupby' || m.type === 'export' || m.type === 'exportLfcp')) send('error', m.id, { message: 'The file is still being read; sorting and filtering start when the rows are all in.' });
   else if (m.type === 'open') openView(m);
   else if (m.type === 'query') queryView(m);
   else if (m.type === 'page') pageView(m);
   else if (m.type === 'export') exportView(m);
   else if (m.type === 'derive') deriveColumn(m);
   else if (m.type === 'groupby') groupView(m);
+  else if (m.type === 'exportSummary') exportSummary(m);
   else if (m.type === 'exportLfcp') exportLfcp(m);
 };
 
@@ -179,10 +182,10 @@ function makeFastW(headers, plan, trackers, delimiter) {
 // The wasm builder takes the lines that keep every column's type flags (the same rules as the row builder above) and stops at any other line; that line goes through
 // the character parser (slow rows, below) and lands in the same columns, so the result does not depend on which path a line took.
 // A cell that stays text in a number column (for example "007") cannot live in a Float64Array: the import stops with err.mixed and starts again on the JSON-lines path.
-const mixedErr = () => Object.assign(new Error('A number column holds a text-like cell; the file is imported on the text path.'), { mixed: true });
+const mixedErr = (col) => Object.assign(new Error('A number column holds a text-like cell; the file is imported on the text path.'), { mixed: true, col: col == null ? -1 : col });   // col: the number column that held the cell (-1 when not known)
 const COLB = 1048576;   // bytes of CSV per wasm call and per chunk
 let C = null;
-const loadC = () => { if (C === null) { try { const s = atob('AGFzbQEAAAABMglgAn9/AGAFf39/f38AYAF/AGABfwF/YAABf2AEf39/fwBgAABgA39/fwBgA39/fwF/AxgXAAECAwMEBQMGBAQEBAcBAAQEBAAEBwgEBQFwAQEBBQQBAIAEBhECfwFBgOOWAQt/AEGA45YBCweLAhkGbWVtb3J5AgAIc2V0X2RpY3QAAAxzZXRfZGljdF9vdXQAAQpkaWN0X3Jlc2V0AAIGZGljdF9uAAMJZGljdF9ibGVuAAQHYmFpbGNvbAAFB3NldF9vdXQABgR0bGVuAAcKcmVzZXRfdGV4dAAICGtleXNfcHRyAAkJZmxhZ3NfcHRyAAoJY250X25fcHRyAAsJY250X2VfcHRyAAwFc2V0dXAADQdzZXRfY29sAA4Ic2V0X3Nsb3QADwdvdXRfbGVuABAEcm93cwARBGJhaWwAEgtzZXRfZGF0ZW51bQATBm5saW5lcwAUCWNhY2hlX2FkZAAVBWJ1aWxkABYLX19oZWFwX2Jhc2UDAQq1OxcQACAAQYCIgIAAaiABOgAACz8AIABBAnQiAEHAioCAAGogAjYCACAAQcCIgIAAaiABNgIAIABBwIyAgABqIAM2AgAgAEHAjoCAAGogBDYCAAs4ACAAQQ50QcCQgIAAakEAQYCAAfwLACAAQQJ0IgBBwJLAgABqQQA2AgAgAEHAkMCAAGpBADYCAAsRACAAQQJ0QcCQwIAAaigCAAsRACAAQQJ0QcCSwIAAaigCAAsLAEEAKALAlMCAAAs/ACAAQQJ0IgBB0JbAgABqIAI2AgAgAEHQlMCAAGogATYCACAAQdCYwIAAaiADNgIAIABB0JrAgABqQQA2AgALEQAgAEECdEHQmsCAAGooAgALEABB0JrAgABBAEGAAvwLAAsIAEHQnMCAAAsIAEHQ3MCAAAsIAEGQ3cCAAAsIAEGQ38CAAAtwAEEAIAE6AJThwIAAQQAgADYCkOHAgABBAEJ/NwOg4cCAAEEAQn83A6jhwIAAQQBCfzcDsOHAgABBAEJ/NwO44cCAAEEAQn83A8DhwIAAQQBCfzcDyOHAgABBAEJ/NwPQ4cCAAEEAQn83A9jhwIAACx4AIABBoOHAgABqIAQ6AAAgAEHg4cCAAGogAzoAAAsQACAAQaDhwIAAaiABOgAACwQAQQALCwBBACgCoOLAgAALCwBBACgCpOLAgAALEAAgAEGw4sCAAGogAToAAAsLAEEAKALw4sCAAAvtAwEMfwJAIAJBV2pBWEkNACACQQNxIQMCQAJAIAJBf2pBA08NAEHFu/KIeCEEQQAhBQwBCyACQTxxIQZBxbvyiHghBEEAIQUDQCAEIAEgBWoiBy0AAHNBk4OACGwgB0EBai0AAHNBk4OACGwgB0ECai0AAHNBk4OACGwgB0EDai0AAHMiCEGTg4AIbCEEIAYgBUEEaiIFRw0ACwsCQCADRQ0AIAEgBWohBwNAIAQgBy0AAHMiCEGTg4AIbCEEIAdBAWohByADQX9qIgMNAAsLAkACQCAAQYCgCmwiCSAEQf8fcUEpbGpBgOPAgABqIgUtAAAiBw0AQQAhCgwBCyACQQFqIQsgCUGB48CAAGohDEEAIQogBCENA0ACQAJAIAdB/wFxIAJHDQAgDCANQf8fcUEpbGohBSABIQMgCyEHA0AgB0EBRg0FIAdBf2ohByADLQAAIQYgBS0AACEOIANBAWohAyAFQQFqIQUgDiAGRg0ACyAHRQ0EIApB/x9JDQEMBAsgCkH+H0sNAwsgDUEBaiENIAkgCkEBaiIKIARqQf8fcUEpbGpBgOPAgABqIgUtAAAiBw0ACwsgBSACOgAAIAJFDQAgCEGTA2wgCmpB/x9xQSlsIABBgKAKbGpBgePAgABqIAEgAvwKAAAPCwunMwcLfwF7B38BexF/AXwCfiOAgICAAEHACmsiAySAgICAAEEAIQRBAEEANgLw4sCAAEEAQQA2AqTiwIAAQQAtAJThwIAAIQUCQEEAKAKQ4cCAACIGRQ0AQZDdwIAAQQAgBkECdCIH/AsAQZDfwIAAQQAgB/wLAAtBACEIAkAgAUUNACABQQFqIQkgAEF/aiEKIANBgAZqIAZBf2oiC2ohDCADQcAGaiALQQJ0aiENIAX9DyEOIABBAWohD0EAIQhBACEEQQAhEANAIAMgCDYCwAggA0EAOgCABkF/IRFBACESIAghE0EAIRRBACEVAkACQAJAAkACQAJAA0ACQCAAIBNq/QAAACIWIA79IyAW/QwiIiIiIiIiIiIiIiIiIiIi/SP9UCAW/QxcXFxcXFxcXFxcXFxcXFxc/SP9UCAW/QyBgYGBgYGBgYGBgYGBgYGB/W79DKGhoaGhoaGhoaGhoaGhoaH9Jv1Q/WQiB0UNAANAIAdoIBNqIhcgAU8NAwJAIBcgEUYNAEEBIRggACAXaiIZLQAAIhpB/gBLDQYgGkHcAEYNBgJAIBRFDQACQCAaQQpGDQBBASEUIBpBIkcNAiAXQQFqIhogAU8NBkEBIRggACAaai0AACIaQSJGDQgCQCAaIAVB/wFxRg0AIBpBCkYNACAaQQ1HDQkCQCAXQQJqIhQgAU8NACAAIBRqLQAAQQpGDQELIBQgAUkNCSAJIRcgGkENRg0IDAkLIANBwAZqIBJBAnRqIBc2AgBBACEUDAILQQEhFCAVQQFqIRUMAQsCQCAaQSJHDQAgFyADQcAIaiASQQJ0IhtqIhQoAgBHDQcgA0GABmogEmoiHC0AAA0HIBdBAWohGgJAIBdBAmoiHSABTw0AIAAgGmotAABBIkcNAAJAIAAgHWotAAAiHSAFQf8BcUYNACAdQQpGDQAgF0EDaiABTw0BIB1BDUcNASAZQQNqLQAAQQpHDQELIBxBAToAACAUIBo2AgAgA0HABmogG2ogGjYCAEEAIRQgGiERDAILIBQgGjYCAEEBIRQgHEEBOgAADAELAkAgGiAFQf8BcUcNAEEBIRggEkEBaiIaIAZPDQcCQCADQYAGaiASai0AAA0AIANBwAZqIBJBAnRqIBc2AgALQQAhFCADQYAGaiAaakEAOgAAIANBwAhqIBpBAnRqIBdBAWo2AgAgGiESDAELAkAgGkENRg0AIBpBCkcNByAVQQFqIRUMBgtBASEYIBdBAWoiGiABTw0GQQAhFCAAIBpqLQAAQQpHDQYLIAdBf2ogB3EiBw0ACwsgE0EQaiITIAFJDQALCyAJIRcLIBcgAUsNBSAXIQcCQCAXIAhNDQAgFyAKIBdqLQAAQQ1GayEHC0EBIRggEiALRw0AIAcgCEYNAAJAIAwtAAANACANIAc2AgALIAQgAk8NBSAGRQ0DQQAhGQNAAkAgA0HABmogGUECdCIHaigCACIaIANBwAhqIAdqKAIAIhRGDQAgGUHQ3MCAAGotAAAiHEUNACAaIBRrIRsgACAUaiEdAkACQCAcQQNxDQBBACEeDAELQQAhEQJAIBsgHS0AACIfQS1GIiBNIiENAAJAIB0gIGotAAAiB0EwRw0AQQJBASAfQS1GGyAbRiERDAELIAdBRmpB/wFxQfcBSQ0AIBsgIGtBD0sNACAPIBQgIGoiB2ohEyAHIBprQQFqIQcDQCAHRSERIAdFDQEgB0EBaiEHIBMtAAAhEiATQQFqIRMgEkFGakH/AXFB9QFLDQALCyAcIBFxIR4gHEECcUUNAAJAIBENACAhDQECQAJAIB0gIGotAAAiB0EwRw0AQQJBASAfQS1GGyEHDAELIAdBT2pB/wFxQQhLDQIgDyAUaiESIBtBf2ohEQNAIBEgIEYNAiASICBqIRMgIEEBaiIHISAgEy0AAEFQakH/AXFBCkkNAAsLAkAgByAbTw0AIB0gB2otAABBLkcNACAHQQFqIhMgG08NAiATIQcCQANAIB0gB2otAABBUGpB/wFxQQlLDQEgGyAHQQFqIgdHDQALIBshBwsgByATRg0CCwJAIAcgG08NACAdIAdqLQAAQSByQeUARw0AAkAgB0EBaiITIBtPDQACQCAdIBNqLQAAQVVqDgMAAQABCyAHQQJqIRMLIBMgG08NAiATIQcCQANAIB0gB2otAABBUGpB/wFxQQlLDQEgGyAHQQFqIgdHDQALIBshBwsgByATRg0CCyAHIBtHDQELIB5BAnIhHgsCQCAcQQRxRQ0AAkACQAJAIBtBfGoOAgABAwsgHS0AAEHfAXFB1ABHDQIgHS0AAUHfAXFB0gBHDQJBAyEHIB0tAAJB3wFxQdUARg0BDAILIB0tAABB3wFxQcYARw0BIB0tAAFB3wFxQcEARw0BIB0tAAJB3wFxQcwARw0BQQQhByAdLQADQd8BcUHTAEcNAQsgHSAHai0AAEHfAXFBxQBHDQAgHkEEciEeCwJAIBxBCHFFDQACQAJAAkACQAJAIBtBCkkNACAdLQAEQS1HDQAgHS0AB0EtRw0AQX8hB0F/IRMCQCAdLQAAIhFBUGpB/wFxQQlLDQBBfyETIB1BAWotAAAiEkFQakH/AXFBCUsNAEF/IRMgHUECai0AACIgQVBqQf8BcUEJSw0AQX8hEyAdQQNqLQAAIh9BUGpB/wFxQQlLDQAgEUEKbCASakEKbCAgakEKbCAfakGw33xqIRMLAkAgHUEFai0AACIRQVBqQf8BcUEJSw0AIB1BBmotAAAiEkFQakH/AXFBCUsNACARQQpsIBJqQfB7aiEHC0F/IRECQCAdQQhqLQAAIhJBUGpB/wFxQQlLDQAgHUEJai0AACIgQVBqQf8BcUEJSw0AIBJBCmwgIGpB8HtqIRELIBNB6AdIDQAgB0EBSA0AIAdBDEoNACARQQFIDQBBHyESAkAgB0ELSw0AAkBBASAHdEHQFHENACAHQQJHDQFBHCESIBNBA3ENAUEdQRxBHSATQZADcBsgE0HkAHAbIRIMAQtBHiESCyARIBJLDQAgG0EKRg0EIBtBEEkNAAJAIB0tAAoiB0HUAEYNACAHQSBHDQELIB0tAA1BOkcNAEEBIQcCQCAdQQtqLQAAIhNBUGpB/wFxQQlLDQAgHUEMai0AACIRQVBqQf8BcUEJSw0AIBNBCmwgEWpB8HtqQRdLIQcLIB1BDmotAAAiE0FQakH/AXFBCUsNACAdQQ9qLQAAIhFBUGpB/wFxQQlLDQAgByATQQpsIBFqQfB7akE7S3INACAbQRBGDQQgG0ETSQ0AIB0tABBBOkcNACAdQRFqLQAAIgdBUGpB/wFxQQlLDQAgHUESai0AACITQVBqQf8BcUEJSw0AIAdBCmwgE2pB8HtqQTtLDQAgG0ETRg0EQRMhBwJAIB0tABNBLkcNACAbQRVJDQJBFCEHAkADQCAdIAdqLQAAQVBqQf8BcUEJSw0BIBsgB0EBaiIHRw0ACyAbIQcLIAdBFEYNAQsgByAbRg0EIAdBAWogG0cNACAdIAdqLQAAQdoARg0ECyAbQShLDQQgGUGg4cCAAGotAAAiIEH/AUYNBCAbDQFBxbvyiHghEgwCCyAZQaDhwIAAai0AACIgQf8BRg0DCyAbQQNxIRMCQAJAIBQgGmtBfE0NAEHFu/KIeCESQQAhGgwBCyAbQXxxIRFBxbvyiHghEkEAIRoDQCASIB0gGmoiBy0AAHNBk4OACGwgB0EBai0AAHNBk4OACGwgB0ECai0AAHNBk4OACGwgB0EDai0AAHNBk4OACGwhEiARIBpBBGoiGkcNAAsLIBNFDQAgACAaIBRqaiEHA0AgEiAHLQAAc0GTg4AIbCESIAdBAWohByATQX9qIhMNAAsLICBBgKAKbCIhQYHjwIAAaiEiQQAhICASIR8DQCAhICAgEmpB/x9xQSlsakGA48CAAGotAAAiB0UNAgJAIBsgB0cNACAiIB9B/x9xQSlsaiEaIBshByAdIRMDQCAHRQ0DIAdBf2ohByATLQAAIRQgGi0AACERIBpBAWohGiATQQFqIRMgESAURg0ACwsgH0EBaiEfICBBAWoiIEGAIEcNAAwCCwsgHkEIciEeCyAeIBxHDQILIBlBAWoiGSAGRw0AC0EAIREDQAJAIBFB4OHAgABqLQAAIhpFDQAgA0HABmogEUECdCIHaigCACIZIANBwAhqIAdqKAIAIhNGDQAgGSATayESAkACQCAaQQFHDQBBAiEYIBIgACATaiIaLQAAQS1GIgdNDQQgGiAHai0AACIaQTBGDQEgGkFGakH/AXFB9wFJDQQgEiAHa0EPSw0EQQJBASAHGyIHIBJPDQIgACAHIBNqIhpqIQcgGiAZayEaA0AgBy0AAEFGakH/AXFB9gFJDQUgB0EBaiEHIBpBAWoiGkUNAwwACwtBAiEYIBogACATaiIULQAAIh5BLUYiB2oiG0FyaiASSw0DIBIgGmtBD2oiGiAHTQ0DIBQgGmotAABBLkcNAyAHIBJrQXBJDQMgFCAHai0AAEEwRiAaIAdrQQFLcQ0DAkACQCAHIBJJDQBBASEdQQAhBwwBCyATIBlrIRpBACEdQQEhE0EAIRkCQANAAkAgGyAaakEPRg0AIBQgB2otAAAiHEFQakH/AXFBCUsNAiAZQQEgHEEwRhshGQsgFEEBaiEUIAcgE2ogEk8hHSATQQFqIRMgByAaQQFqIhpqDQALCyAZQQBHIQcLIB1BAXFFDQMgHkEtRyAHckUNAwwBCyASQQFHDQILIBFBAWoiESAGRw0ACyADQYACaiEUQQAhE0EAIRoCQANAAkAgGkGw4sCAAGotAABFDQAgGkHg4cCAAGotAAANACADQcAGaiATaigCACADQcAIaiATaigCACIHa0EXRw0CIAAgB2oiBy0ABEEtRw0CIActAAdBLUcNAiAHLQAKQdQARw0CIActAA1BOkcNAiAHLQAQQTpHDQIgBy0AE0EuRw0CIActAAAiEUFQakH/AXFBCUsNAiAHLQABIhJBUGpB/wFxQQlLDQIgBy0AAiIZQVBqQf8BcUEJSw0CIActAAMiHEFQakH/AXFBCUsNAiAHLQAFIh1BUGpB/wFxQQlLDQIgBy0ABiIbQVBqQf8BcUEJSw0CIActAAgiGEFQakH/AXFBCUsNAiAHLQAJIh5BUGpB/wFxQQlLDQIgBy0ACyIgQVBqQf8BcUEJSw0CIActAAwiH0FQakH/AXFBCUsNAiAHLQAOIiFBUGpB/wFxQQlLDQIgBy0ADyIiQVBqQf8BcUEJSw0CIActABEiI0FQakH/AXFBCUsNAiAHLQASIiRBUGpB/wFxQQlLDQIgBy0AFCIlQVBqQf8BcUEJSw0CIActABUiJkFQakH/AXFBCUsNAiAHLQAWIidBUGpB/wFxQQlLDQIgEUEKbCASakEKbCAZakEKbCAcakGw33xqIhlB6AdJDQIgHUEKbCAbakHwe2oiB0UNAiAHQQxLDQIgGEEKbCAeakHwe2oiEUUNAiAgQQpsIB9qQfB7aiIcQRdLDQIgIUEKbCAiakHwe2oiHUE7Sw0CICNBCmwgJGpB8HtqIhtBO0sNAkEeIRICQAJAAkAgB0F+ag4IAAECAQIBAQIBC0EcIRIgGUEDcQ0BQR0hEiAZQf//A3EiGEHkAHANAUEcQR0gGEGQA3AbIRIMAQtBHkEfIAdBC0YbIRILIBEgEksNAiAUIBkgB0EDSWsiEkGQA24iGa1CsfUIfiAZQfB8bCASaiISQe0CbCASQQRtaiASQZx/bWpB/f8DQQkgB0ECSxsgB2pBmQFsQQJqwUEFbUF/asFqIBFqrHxCGH4gHK18Qjx+IB2tfEI8fiAbrXxCgLzqtph+fLlEAAAAAABAj0CiICVBCmwgJmpBCmwgJ2pBsFZqt6A5AwALIBNBBGohEyAUQQhqIRQgBiAaQQFqIhpHDQALQQAhFEEBIR4DQAJAIBRBgIiAgABqLQAARQ0AIBRB4OHAgABqLQAADQAgA0HABmogFEECdCIdaigCACIfIANBwAhqIB1qKAIAIiBrIRggACAgaiESAkACQAJAIB8gIEYiIw0AIBhBA3EhEQJAAkAgICAfa0F8TQ0AQcW78oh4IQdBACETDAELIBhBfHEhGUHFu/KIeCEHQQAhEwNAIAcgEiATaiIaLQAAc0GTg4AIbCAaQQFqLQAAc0GTg4AIbCAaQQJqLQAAc0GTg4AIbCAaQQNqLQAAc0GTg4AIbCEHIBkgE0EEaiITRw0ACwsCQCARRQ0AIAAgEyAgamohGgNAIAcgGi0AAHNBk4OACGwhByAaQQFqIRogEUF/aiIRDQALCyAdQcCIgIAAaiEiIB1BwI6AgABqIRkgHUHAjICAAGohHCAYIAdBD3ZzIAdzISFBACEbA0AgFEEOdCAbICFqQf8/cUEBdHJBwJCAgABqIhMvAQAiB0UNAgJAIBkoAgAgB0F/aiIRQQJ0IgdqKAIAIBwoAgAgB2ooAgAiB2sgGEcNACAiKAIAIAdqIQcgEiEaIBghEwNAAkAgBy0AACAaLQAARg0AIBNFDQYMAgsgB0EBaiEHIBpBAWohGiATQX9qIhMNAAwFCwsgG0EBaiIbQYDAAEcNAAwICwsgHUHAiICAAGohIiAdQcCOgIAAaiEZIB1BwIyAgABqIRxB/D8hByAUQQ50IRsDQCAbIAdB/z9xQQF0ckHAkICAAGoiEy8BACIaRQ0BIBkoAgAgGkF/aiIRQQJ0IhpqKAIAIBwoAgAgGmooAgBGDQIgB0EBaiIHQfz/AEYNBwwACwsgHUHAkMCAAGoiBygCACIRQf8fSw0FIB1BwJLAgABqIiUoAgAiJCAYaiIhIB1BwIqAgABqKAIASw0FIAcgEUEBaiIeNgIAIBwoAgAgEUECdCImaiAkNgIAAkAgIw0AICIoAgAiIyAkaiEcQQAhIgJAIBhBEEkNACAjICRqIAAgIGprQRBJDQAgGEFwcSIiIRsgHCEHIBIhGgNAIAcgGv0AAAD9CwAAIAdBEGohByAaQRBqIRogG0FwaiIbDQALIBggIkYNAQsgIiEaAkAgHyAga0EDcSIHRQ0AICIhGgNAIBwgGmogEiAaai0AADoAACAaQQFqIRogB0F/aiIHDQALCyAiIB9rICBqQXxLDQAgIyAaICRqaiEHIAAgGiAgaiISaiEaIBIgH2shEgNAIAcgGi0AADoAACAHQQFqIBpBAWotAAA6AAAgB0ECaiAaQQJqLQAAOgAAIAdBA2ogGkEDai0AADoAACAHQQRqIQcgGkEEaiEaIBJBBGoiEg0ACwsgJSAhNgIAIBMgHjsBACAZKAIAICZqICE2AgALIAMgHWogETYCAAsgFEEBaiIUIAZJIR4gFCAGRw0ADAQLC0EAIBo2AsCUwIAAQQBBBTYCpOLAgAAMBQtBACAYNgKk4sCAAAwEC0EAIBQ2AsCUwIAAQQBBBDYCpOLAgAAgHkEBcQ0DIAZFDQELQQAhFANAIBRBAnQiEUGQ3cCAAGoiByAHKAIAQQFqNgIAAkACQAJAAkACQCADQcAGaiARaigCACISIANBwAhqIBFqKAIAIhpHDQAgEUGQ38CAAGoiByAHKAIAQQFqNgIARAAAAAAAAPh/ISggFEHg4cCAAGotAABFDQEMAwsgFEHg4cCAAGotAAANAQsCQCAUQbDiwIAAai0AAEUNACARQdCUwIAAaigCACAEQQN0aiADQYACaiAUQQN0aisDADkDAAwDCwJAIBRBgIiAgABqLQAARQ0AIBFB0JTAgABqKAIAIARBAXRqIAMgEWooAgA7AQAMAwsgEiAaayEYIBFB0JrAgABqIh4oAgAhGwJAIBIgGkYNACAAIBpqIRkgEUHQmMCAAGooAgAiICAbaiEcQQAhCAJAIBhBEEkNACAgIBtqIAAgGmprQRBJDQAgGEFwcSIIIR0gHCEHIBkhEwNAIAcgE/0AAAD9CwAAIAdBEGohByATQRBqIRMgHUFwaiIdDQALIBggCEYNAQsgCCETAkAgGEEDcSIHRQ0AIAghEwNAIBwgE2ogGSATai0AADoAACATQQFqIRMgB0F/aiIHDQALCyAIIBJrIBpqQXxLDQAgACATIBpqIhlqIQcgICATIBtqaiEaIBkgEmshEwNAIBogBy0AADoAACAaQQFqIAdBAWotAAA6AAAgGkECaiAHQQJqLQAAOgAAIBpBA2ogB0EDai0AADoAACAHQQRqIQcgGkEEaiEaIBNBBGoiEw0ACwsgEUHQlMCAAGooAgAgBEECdCIHaiAbNgIAIBFB0JbAgABqKAIAIAdqIBsgGGoiBzYCACAeIAc2AgAMAgtCACEpAkAgGiAAIBpqLQAAQS1GIhlqIgcgEk8NACASIBogGWprIhNBAXEhHEIAISkCQCASIBpBf3NqIBlGDQAgE0F+cSEaQgAhKQNAICkgKUIKfiAAIAdqIhMxAAAiKnxCUHwgKkIuURsiKSApQgp+IBNBAWoxAAAiKXxCUHwgKUIuURshKSAHQQJqIQcgGkF+aiIaDQALCyAcRQ0AICkgKUIKfiAAIAdqMQAAIip8QlB8ICpCLlEbISkLICm6IiiaICggGRshKAsgEUHQlMCAAGooAgAgBEEDdGogKDkDAAsgFEEBaiIUIAZHDQALC0EAIBAgFWoiEDYC8OLAgAAgBEEBaiEEIBdBAWoiCCABSQ0ACwtBACAENgKg4sCAACADQcAKaiSAgICAACAICw=='), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); C = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch { C = false; } } return C; };
+const loadC = () => { if (C === null) { try { const s = atob('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'), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); C = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch { C = false; } } return C; };
 function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn) {
   const n = headers.length, D = delimiter.charCodeAt(0);
   if (n === 0 || n > 64 || D > 126 || typeof WebAssembly === 'undefined' || !core.placeColumns || !loadC()) return null;
@@ -202,7 +205,7 @@ function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn) {
       const r = B.build(b.subarray(i, i + Math.min(end - i, COLB)));
       if (r.n) { const m = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 64), e = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 64); for (let c = 0; c < n; c++) { trackers[c].n += m[c]; trackers[c].empty += e[c]; } parser.line += C.nlines(); parser.startLine = parser.line; F.rows += r.n; F.miss = 0; sink({ n: r.n, bytes: r.used, cols: r.arr }); }
       i += r.used;
-      if (r.bail === 'mixed') throw mixedErr();
+      if (r.bail === 'mixed') { if (++F.miss >= 64) F.off = true; break; }   // the character parser reads this line next and names the column if the cell really is text-like
       if (r.bail === 'dict') { B.undict(r.bailcol); if (dictOn) dictOn[r.bailcol] = false; continue; }   // more than 4096 distinct values in a chunk: this column is text from here on
       if (r.bail) { if (++F.miss >= 64) F.off = true; break; }
       if (r.used === 0) break;
@@ -213,14 +216,14 @@ function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn) {
 }
 // Lines the wasm builder leaves to the character parser, collected until the next wasm chunk (or the end) and turned into a chunk of the same shape.
 function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink, dictOn) {
-  const n = headers.length, kind = headers.map((_, c) => (plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 ? plan[c] : 0));
+  const n = headers.length, kind = headers.map((_, c) => (plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 ? plan[c] : 0)), isInt = headers.map((_, c) => !!(plan && plan[c] === true));   // a column of 1 decimal has kind 1 too: isInt tells it from a whole-number column
   let vals = headers.map(() => []), rows = 0, bytes = 0;
   return {
     get n() { return rows; },
     add(f) {
       for (let c = 0; c < n; c++) {
         const raw = f[c]; trackers[c].add(raw); bytes += raw.length + 1;
-        if (kind[c]) { const v = kind[c] === 1 ? typedCell(raw) : typedDecimal(raw, kind[c]); if (v === null) vals[c].push(NaN); else if (typeof v === 'number') vals[c].push(v); else throw mixedErr(); } else vals[c].push(raw);
+        if (kind[c]) { const v = isInt[c] ? typedCell(raw) : typedDecimal(raw, kind[c]); if (v === null) vals[c].push(NaN); else if (typeof v === 'number') vals[c].push(v); else throw mixedErr(c); } else vals[c].push(raw);
       }
       rows++;
     },
@@ -253,6 +256,11 @@ function expandDict(x, n) {
   return { bytes, start, end };
 }
 // Pack worker side: join the chunks of one block (columns side by side, text offsets moved to the joined bytes) and pack them (LFC-pack packBlock over columns).
+// Save as LFCP: a pack thread packs one batch of plain columns (arrays of cells) into one block.
+async function packPlainJob(m) {
+  try { await LfcPack.init(); const r = await LfcPack.packBlock(m.cols, m.o); self.postMessage({ type: 'packed', rid: m.rid, r }, [r.buffer]); }
+  catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
+}
 async function packColsJob(m) {
   try {
     await LfcPack.init();
@@ -455,7 +463,7 @@ async function segJob(m) {
     const r = await parseSegment(m);
     if (m.dup) r.chunks2 = r.chunks.map(dupChunk);   // live columns: a second copy made here, in parallel, so the import worker keeps one and forwards the other to the pack workers
     self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer).concat(...r.chunks.map(chunkBuffers), ...(r.chunks2 || []).map(chunkBuffers)));
-  } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed) } }); }
+  } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed), col: err && err.col != null ? err.col : -1 } }); }
 }
 
 
@@ -503,7 +511,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
         t.redos = (t.redos || 0) + 1;
         r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, dict, cols, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
         stop(job);
-        if (r.mixed) throw mixedErr();   // from a verified start: the file really has a text-like cell in a number column
+        if (r.mixed) throw mixedErr(r.col);   // from a verified start: the file really has a text-like cell in a number column
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
       for (const b of r.pieces) await packBytes(b);
@@ -530,9 +538,10 @@ async function samplePlan(file, delimiter) {
   samplePlan.dict = null;
   try {
     await loadCore(); const { DelimitedParser, TypeTracker } = core;
-    const text = new TextDecoder().decode(new Uint8Array(await file.slice(0, 1048576).arrayBuffer()));
-    const rows = []; const parser = new DelimitedParser(delimiter, (f) => { if (rows.length < 2001) rows.push(f); });
-    try { parser.feed(text, file.size <= 1048576); } catch { /* a bad row in the sample: use the rows before it */ }
+    let text = new TextDecoder().decode(new Uint8Array(await file.slice(0, 4194304).arrayBuffer())); let cutAll = file.size <= 4194304;
+    { let cut = 0, n = 0; while (n < 6003) { const k = text.indexOf('\n', cut); if (k < 0) { cut = text.length; break; } cut = k + 1; n++; } if (cut < text.length) { text = text.slice(0, cut); cutAll = false; } }
+    const rows = []; const parser = new DelimitedParser(delimiter, (f) => { if (rows.length < 6001) rows.push(f); });
+    try { parser.feed(text, cutAll); } catch { /* a bad row in the sample: use the rows before it */ }
     if (rows.length < 2) return null;
     const cols = rows[0].length, tr = Array.from({ length: cols }, () => new TypeTracker());
     for (let r = 1; r < rows.length; r++) { if (rows[r].length !== cols) return null; for (let c = 0; c < cols; c++) tr[c].add(rows[r][c]); }
@@ -549,7 +558,17 @@ async function samplePlan(file, delimiter) {
 }
 
 // Staged columns can find a text-like cell in a number column late in the file; then the whole import runs again on the JSON-lines path (nothing was kept).
-async function importFile(m) { if (await importOnce(m) === 'mixed') await importOnce(Object.assign({}, m, { noColumns: true })); }
+// A number column that meets a text-like cell late in the file (a sample of the first rows said integer) no longer sends the whole import to the text path: that one column is
+// read as text and the import starts again with the other number columns kept (up to 3 times), so the staged columns, live view and pack workers stay on.
+async function importFile(m) {
+  const demote = new Set(); let mm = m;
+  for (let tries = 0; tries < 4; tries++) {
+    const r = await importOnce(mm); if (!r) return;
+    if (r === 'mixed' || tries === 3) break;
+    demote.add(r.col); mm = Object.assign({}, m, { demote: [...demote] });
+  }
+  await importOnce(Object.assign({}, m, { noColumns: true }));
+}
 const columnsOk = (m) => !m.noColumns && typeof WebAssembly !== 'undefined' && (m.columns === true || (!((self.navigator && self.navigator.deviceMemory) < 8) && (!/Android|iPhone|iPad|iPod|Mobile/i.test((self.navigator && self.navigator.userAgent) || '') || (self.navigator && self.navigator.deviceMemory) >= 8)))   // phones too when the browser reports 8 GB or more (Chrome caps the report at 8): measured on an 8 GB Android phone, first rows 1.0 s instead of 1.8-2.0 s, save 16-24% later;
 async function importOnce(m) {
   let restart = false;
@@ -602,7 +621,21 @@ async function importOnce(m) {
         const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b = blockQ.shift(); await send1({ type: 'packCols', chunks: b, headers: colHeaders, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
         const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; if (liveChunks) { blockQ.push(list); pump(); } else await send1({ type: 'packCols', chunks: list, headers: colHeaders, o: popts }, [].concat(...list.map(chunkBuffers))); };
         colFlush = async () => { if (cq.length) await sendCols(); while (pumping) await pumping; if (pumpErr) throw pumpErr; };
-        col = { begin: async (h) => { colHeaders = h; }, dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { liveChunks.push(c); cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
+        // Early view: the grid opens on the first parsed chunks and the row count grows while the file is still being read (a preview: no sort or filter until the end).
+        const pvStarts = [0], pvDec = new TextDecoder(); let pvSent = 0, pvKind = null, pvOn = liveChunks !== null && m.preview !== false;
+        const pvTick = () => {
+          const total = pvStarts[pvStarts.length - 1], now = performance.now();
+          if (!pvKind) {
+            pvKind = colHeaders.map((_, k) => !!(plan && (plan[k] === true || (typeof plan[k] === 'number' && plan[k] > 0))));
+            const columns = colHeaders.map((h, k) => Object.assign({ name: h, type: !pvKind[k] ? 'string' : plan[k] === true ? 'integer' : 'number', nullable: true }, pvKind[k] && typeof plan[k] === 'number' ? { decimals: plan[k] } : {}));
+            const chunks = liveChunks, hs = colHeaders, kind = pvKind, find = (r) => { let lo = 0, hi = pvStarts.length - 2; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (pvStarts[mid] <= r) lo = mid; else hi = mid - 1; } return lo; };
+            const pv = { row(r) { const o = {}, c = find(r), i = r - pvStarts[c], ch = chunks[c]; for (let k = 0; k < hs.length; k++) { const x = ch.cols[k]; if (kind[k]) { const v = x[i]; o[hs[k]] = v !== v ? null : v; } else if (x.codes) { const q = x.codes[i], lb = x.lb; o[hs[k]] = pvDec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); } else o[hs[k]] = pvDec.decode(x.bytes.subarray(x.start[i], x.end[i])); } return o; } };
+            view = { name, preview: true, pv, total, columns, R: null, f: null, rows: null, indices: null, filtered: false, cols: new Map(), flat: true, cache: new Map() };
+            send('preview', m.id, { name, total, columns }); pvSent = now; return;
+          }
+          if (view && view.preview && now - pvSent >= 250) { view.total = total; send('previewGrow', m.id, { total }); pvSent = now; }
+        };
+        col = { begin: async (h) => { colHeaders = h; }, dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
       }
       const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
       packBytes = async (bytes) => {
@@ -622,7 +655,7 @@ async function importOnce(m) {
       };
       var packWorkersToStop = ws;
     }
-    const plan = m.untyped ? null : await samplePlan(file, delimiter); const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null;
+    let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null;
     let res = null;
     if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
     if (!res) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
@@ -647,6 +680,7 @@ async function importOnce(m) {
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
     if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) view.cols.set(c.name, view.live.column(c.name));   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ if (morePack && m.morePack !== 0) morePack(m.morePack || (isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 1 : 2)); }
+    if (view && view.preview && view.name === name && !(view.live)) { view = null; send('liveclosed', m.id, {}); }
     await finishPacking();
     if (dkBlocks && dkBlocks.size) { try { keptDict.set(name, mergeDicts(dkBlocks, rows)); } catch { keptDict.delete(name); } }
     await write(packer.finish());
@@ -658,13 +692,13 @@ async function importOnce(m) {
     if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: R2.blocks.length > 0 && R2.blocks.every((b) => b.kind === 'f' && !b.table), live: null }); liveChunks = null; textFromChunks(view); } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
   } catch (err) {
-    if (view && view.live && view.name === name) { view = null; send('liveclosed', m.id, {}); }
+    if (view && (view.live || view.preview) && view.name === name) { view = null; send('liveclosed', m.id, {}); }
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
-    if (err && err.mixed && !m.noColumns) restart = true;
+    if (err && err.mixed && !m.noColumns) restart = err.col != null && err.col >= 0 ? { col: err.col } : true;
     else send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
   } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => w.terminate()); jobs.delete(m.id); }
-  return restart ? 'mixed' : null;
+  return restart ? (restart === true ? 'mixed' : restart) : null;
 }
 
 async function validate(name, rows) {
@@ -723,7 +757,7 @@ function scheduleWarm(m, total, delay) {
   }
 }
 async function openView(m) {
-  if (view && view.live && view.name === m.name) return send('opened', m.id, { name: m.name, total: view.total, columns: view.columns });   // still being saved: the kept columns answer
+  if (view && (view.live || view.preview) && view.name === m.name) return send('opened', m.id, { name: m.name, total: view.total, columns: view.columns });   // still being saved: the kept columns answer
   if (view && !view.live && view.name === m.name && view.R && view.cols && !m.fresh) {   // the same dataset is already open (just imported): keep its decoded columns, start with no filter
     view.indices = null; view.filtered = false; view.pending = null; view.rows = null; view.cache = new Map();
     send('opened', m.id, { dictKept: Object.keys(view.dictCols || {}), name: m.name, total: view.total, columns: view.columns, reused: true });
@@ -760,7 +794,7 @@ function makeInterner() {
     get on() { return live; },
     chunk(out, at, b, st, en, rows, make) {   // fills out[at..at+rows); make(bytes, start, end) builds a string for a cell not seen before
       for (let r = 0; r < rows; r++) {
-        const a = st[r], e = en[r], len = e - a; let h = Math.imul(len + 2166136261, 16777619); const m = len < 12 ? e : a + 6; for (let i = a; i < m; i++) h = Math.imul(h ^ b[i], 16777619); if (len >= 12) for (let i = e - 6; i < e; i++) h = Math.imul(h ^ b[i], 16777619); h >>>= 0;   // hash of the length and the first and last 6 bytes (a full-bytes compare decides equality)
+        const a = st[r], e = en[r], len = e - a; let h = Math.imul(len + 2166136261, 16777619); if (len <= 32) { for (let i = a; i < e; i++) h = Math.imul(h ^ b[i], 16777619); } else { const mid = a + (len >> 1) - 4; for (let i = a; i < a + 10; i++) h = Math.imul(h ^ b[i], 16777619); for (let i = mid; i < mid + 8; i++) h = Math.imul(h ^ b[i], 16777619); for (let i = e - 10; i < e; i++) h = Math.imul(h ^ b[i], 16777619); } h >>>= 0;   // hash of the length and all bytes up to 32, else the first 10, middle 8 and last 10 (a full-bytes compare decides equality); timestamps differ only in the middle, so a first-and-last hash made every one collide
         let p = h & mask, id = -1;
         for (;;) {
           const t = tab[p]; if (t === 0) break;
@@ -808,6 +842,7 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   // The text columns the import does not keep as dictionary ids are made from the kept chunks as soon as the import has finished (see textFromChunks): a Save as LFCP or a text sort
   // right after the import finds them in memory instead of decoding them from the file (6 columns: 0.7-0.9 s). Done after, not during, the import so the import time does not change.
   view.liveRest = { names: headers.filter((h, k) => !kindOf[k] && !chunks.every((c) => c.cols[k].codes)), L };
+  if (EARLY_TEXT) textFromChunks(view);   // variant: start now, while the pack threads finish the file
 }
 async function warmColumn(n) {
   if (view.cols.has(n)) return;
@@ -976,7 +1011,7 @@ async function pageView(m) {
   let out, numbers;
   if (!view.filtered) {
     const n = Math.max(0, Math.min(m.count, view.total - m.start));
-    const objs = n ? (view.live ? Array.from({ length: n }, (_, i) => view.live.row(m.start + i)) : await view.R.rows({ from: m.start, count: n })) : [];
+    const objs = n ? (view.live || view.pv ? Array.from({ length: n }, (_, i) => (view.live || view.pv).row(m.start + i)) : await view.R.rows({ from: m.start, count: n })) : [];
     if (view.derived && view.derived.size) overlayDerived(objs, (i) => m.start + i);
     out = objs.map((r) => view.columns.map((c) => cellText(r[c.name], c))); numbers = objs.map((_, i) => m.start + i + 1);
   } else {
@@ -1079,25 +1114,41 @@ async function deriveColumn(m) {
     send('derived', m.id, { columns: view.columns, ms: Math.round(performance.now() - t0) });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
+// The groups to show: most rows first, ties by key text. Only the first `top` are needed, so groups below the count that the top-th group has are skipped before the sort (299k groups: a full sort with array keys took 2 s).
+function topGroups(g, two, top) {
+  const G = g.keys.length, c = g.counts; let cand;
+  if (G > top * 4) {
+    let mx = 0; for (let i = 0; i < G; i++) if (c[i] > mx) mx = c[i];
+    if (mx <= 1048576) {
+      const h = new Uint32Array(mx + 2); for (let i = 0; i < G; i++) h[c[i]]++;
+      let thr = mx, acc = 0; for (; thr > 0; thr--) { acc += h[thr]; if (acc >= top) break; }
+      cand = []; for (let i = 0; i < G; i++) if (c[i] >= thr) cand.push(i);
+    }
+  }
+  if (!cand) { cand = []; for (let i = 0; i < G; i++) cand.push(i); }
+  const K = g.keys;
+  return cand.sort(two ? (a, b) => c[b] - c[a] || (K[a][0] < K[b][0] ? -1 : K[a][0] > K[b][0] ? 1 : K[a][1] < K[b][1] ? -1 : K[a][1] > K[b][1] ? 1 : 0) : (a, b) => c[b] - c[a] || (K[a] < K[b] ? -1 : K[a] > K[b] ? 1 : 0));
+}
 async function groupView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
-    groupMod ||= MODS() && MODS().groupBy ? { groupBy: MODS().groupBy, groupByCodes: MODS().groupByCodes } : await import('../src/query/groupby.mjs');
+    groupMod ||= MODS() && MODS().groupBy ? { groupBy: MODS().groupBy, groupByCodes: MODS().groupByCodes, groupBy2: MODS().groupBy2 } : await import('../src/query/groupby.mjs');
     queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
     if (view.total > MAX_COLUMN_ROWS || !view.flat) throw new Error('Group by works up to ' + MAX_COLUMN_ROWS.toLocaleString() + ' rows for now.');
-    const t0 = performance.now(), aggs = m.aggs || [{ fn: 'count' }], names = [...new Set([m.key].concat(aggs.filter((a) => a.col).map((a) => a.col)))];
+    const t0 = performance.now(), aggs = m.aggs || [{ fn: 'count' }], names = [...new Set([m.key].concat(m.key2 ? [m.key2] : [], aggs.filter((a) => a.col).map((a) => a.col)))];
     const active = Object.keys(m.filters || {}).filter((k) => m.filters[k]);
     for (const n of names) if (!view.columns.some((c) => c.name === n)) throw new Error('No column named ' + n + '.');
-    const dc = (!m.noDict && view.dictCols) || {}, useIds = !!dc[m.key];
+    const dc = (!m.noDict && view.dictCols) || {}, useIds = !m.key2 && !!dc[m.key], two = !!m.key2;
     // a column kept as dictionary ids from the import is counted by id: no text is decoded for it (the key, or an equal-to column in a 'share equal to' aggregate)
-    const need = Array.from(new Set(names.concat(active))).filter((n) => !(useIds && dc[n] && !active.includes(n)));
+    const need = Array.from(new Set(names.concat(active))).filter((n) => !((useIds || two) && dc[n] && !active.includes(n)));
     if (!/AppleWebKit(?!.*Chrome)/.test(self.navigator.userAgent || '') && !m.noParallel) await warmSome(need);   // missing columns decoded on helper threads at once (not in WebKitGTK: slower there)
     const cols = await loadColumns(need, false), tLoad = performance.now() - t0, tg = performance.now();
     let rows = null; if (active.length) rows = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters }).indices;
     const codeCols = {}; for (const a of aggs) if (a.col && dc[a.col] && a.fn === 'rate' && !m.noDict) codeCols[a.col] = dc[a.col];
-    const g = useIds ? groupMod.groupByCodes(dc[m.key].ids, dc[m.key].dict, cols, view.total, rows, { aggs, codeCols }) : groupMod.groupBy(cols, view.total, rows, { key: m.key, aggs }), order = Array.from(g.keys, (_, i) => i).sort((a, b) => g.counts[b] - g.counts[a] || (g.keys[a] < g.keys[b] ? -1 : 1));
-    const head = [m.key].concat(aggs.map((a) => (a.fn === 'count' ? 'count' : a.fn + '_' + a.col)));
-    const table = order.slice(0, 1000).map((gi) => { let v = 0; return [g.keys[gi]].concat(aggs.map((a) => { const x = a.fn === 'count' ? g.counts[gi] : g.values[v++][gi]; return x !== x ? '' : a.fn === 'avg' || a.fn === 'rate' ? String(Math.round(x * 10000) / 10000) : String(x); })); });
+    const g = two ? groupMod.groupBy2(cols, view.total, rows, { key: m.key, key2: m.key2, aggs, forceMap: !!m.forceMap, codeCols, ids1: dc[m.key] && dc[m.key].ids, dict1: dc[m.key] && dc[m.key].dict, ids2: dc[m.key2] && dc[m.key2].ids, dict2: dc[m.key2] && dc[m.key2].dict }) : useIds ? groupMod.groupByCodes(dc[m.key].ids, dc[m.key].dict, cols, view.total, rows, { aggs, codeCols }) : groupMod.groupBy(cols, view.total, rows, { key: m.key, aggs }), order = topGroups(g, two, 1000);
+    const head = (two ? [m.key, m.key2] : [m.key]).concat(aggs.map((a) => (a.fn === 'count' ? 'count' : a.fn + '_' + a.col)));
+    const table = order.slice(0, 1000).map((gi) => { let v = 0; return (two ? g.keys[gi] : [g.keys[gi]]).concat(aggs.map((a) => { const x = a.fn === 'count' ? g.counts[gi] : g.values[v++][gi]; return x !== x ? '' : a.fn === 'avg' || a.fn === 'rate' ? String(Math.round(x * 10000) / 10000) : String(x); })); });
+    view.lastGroup = { g, two, aggs, head, key: m.key, key2: m.key2, source: view.name };
     send('grouped', m.id, { byIds: useIds, headers: head, rows: table, groups: g.keys.length, rowsUsed: rows ? rows.length : view.total, ms: Math.round(performance.now() - t0), loadMs: Math.round(tLoad), groupMs: Math.round(performance.now() - tg) });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
@@ -1105,6 +1156,7 @@ async function groupView(m) {
 // Decodes the wanted columns that are not in memory yet, all in one pass (two parallel calls: number columns as typed arrays, text columns as strings; a dictionary column kept from the import costs
 // one lookup per row and no decode). A column another call is already decoding is waited for, never decoded twice (a Save right after the background warm used to start the same decode again).
 const yieldNow = (() => { const mc = new MessageChannel(); let res = null; mc.port1.onmessage = () => { const r = res; res = null; if (r) r(); }; return () => new Promise((r) => { res = r; mc.port2.postMessage(0); }); })();   // a turn for queued messages without the timer delay
+const EARLY_TEXT = true;
 function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
   const fly = (v.inflight ||= new Map()); let done; const p = new Promise((r) => { done = r; }); for (const n of lr.names) fly.set(n, p);
@@ -1137,6 +1189,31 @@ async function warmCols(names, background) {
 const warmAll = () => (view && view.total <= 3000000 ? warmCols(view.columns.map((c) => c.name)) : Promise.resolve());
 const warmSome = (names) => warmCols(names);
 // Saves the rows now shown (filter and sort applied, derived columns included) as a new LFCP dataset in this browser and hands the file back for download.
+// Saves the last Summarize result (every group, most rows first) as a new LFCP dataset: one text column per key, a count column, one number column per aggregate.
+async function exportSummary(m) {
+  let writable = null, name = null, closed = false;
+  try {
+    const lg = view && view.lastGroup; if (!lg) throw new Error('Run Summarize first.');
+    await LfcPack.init(); const t0 = performance.now(), { g, two, aggs, head } = lg, order = topGroups(g, two, Infinity), n = order.length;
+    const cols = {}, types = [], numCols = [];
+    const nk = two ? 2 : 1; for (let k = 0; k < nk; k++) { const a = new Array(n); for (let i = 0; i < n; i++) a[i] = two ? g.keys[order[i]][k] : g.keys[order[i]]; cols[head[k]] = a; types.push('string'); }
+    let v = 0; aggs.forEach((a, j) => { const arr = new Array(n), src = a.fn === 'count' ? g.counts : g.values[v++]; for (let i = 0; i < n; i++) { const x = src[order[i]]; arr[i] = x !== x ? null : x; } cols[head[nk + j]] = arr; types.push(a.fn === 'count' || a.fn === 'min' || a.fn === 'max' || a.fn === 'sum' ? 'number' : 'number'); });
+    const names = Object.keys(cols), colMeta = names.map((nm, i) => ({ id: 'field-' + (i + 1), name: nm.slice(0, 100), type: types[i] === 'string' ? 'string' : (names[i] === 'count' ? 'integer' : 'number'), nullable: true }));
+    name = safe(view.name.replace(/-[0-9a-f-]{36}\.json\.lfc$/, '')) + '-summary-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
+    writable = await store.create(name);
+    const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'summary of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: n, columns: colMeta }] };
+    const popts = { level: 3, blockBytes: 2097152, share: false }, packer = LfcPack.packStream(Object.assign({}, popts, { meta })); let outBytes = 0;
+    const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
+    const BATCH = 65536; for (let s = 0; s < n; s += BATCH) { const out = {}; for (const nm of names) out[nm] = cols[nm].slice(s, s + BATCH); const r = await LfcPack.packBlock(out, popts); await write(packer.pushPacked(r)); }
+    await write(packer.finish()); await writable.close(); closed = true; writable = null;
+    const vd = await validate(name, n); if (!vd.ok) throw new Error('The written file failed footer validation: ' + vd.reason);
+    const cat = await store.catalog(); cat.push({ name, source: 'summary of ' + view.name, rows: n, bytes: outBytes, columns: colMeta.map((c) => ({ name: c.name, type: c.type, nullable: true })), created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
+    send('exportedLfcp', m.id, { name, rows: n, bytes: outBytes, blob: await store.file(name), ms: Math.round(performance.now() - t0) });
+  } catch (err) {
+    if (writable && !closed) { try { await writable.abort(); } catch {} } if (name) await store.remove(name);
+    send('error', m.id, { message: String(err && err.message || err) });
+  }
+}
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let writable = null, name = null, closed = false;
@@ -1150,8 +1227,15 @@ async function exportLfcp(m) {
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
-    const BATCH = 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: 2097152, share: false };
+    const BATCH = m.batch || 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: 2097152, share: false };
     const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
+    // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
+    let pool = null; const npool = m.noPool || !isFirefox || !allWarm || !LfcPack.packBlock ? 0 : Math.min(3, Math.ceil(count / BATCH));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
+    if (npool > 1) { try { pool = []; for (let i = 0; i < npool; i++) pool.push(new Worker(self.location.href)); } catch { if (pool) pool.forEach((w) => w.terminate()); pool = null; } }
+    const results = new Map(); let nextW = 0, emit = 0, pending = 0, wake = null, failed = null;
+    const drain = async () => { while (results.has(emit)) { const r = results.get(emit); results.delete(emit); emit++; await write(packer2.pushPacked(r)); } };
+    if (pool) for (const w of pool) w.onmessage = (e) => { const d = e.data || {}; pending--; if (d.error) failed = new Error(d.error); else results.set(d.rid, d.r); if (wake) { const r = wake; wake = null; r(); } };
+    let seq = 0;
     for (let start = 0; start < count; start += BATCH) {
       const end = Math.min(count, start + BATCH); let ts = performance.now();
       if (allWarm && LfcPack.packBlock) {   // every column is in memory: gather the batch column by column and pack it as columns (no row objects, no JSON text)
@@ -1163,7 +1247,12 @@ async function exportLfcp(m) {
           out[c.name] = a;
         }
         tm.rows += performance.now() - ts; ts = performance.now();
-        const r = await LfcPack.packBlock(out, popts); await write(packer2.pushPacked(r)); tm.pack += performance.now() - ts; continue;
+        if (pool) {
+          while (pending >= pool.length) { await new Promise((r) => { wake = r; }); if (failed) throw failed; await drain(); }
+          pending++; pool[nextW++ % pool.length].postMessage({ type: 'packPlain', rid: seq++, cols: out, o: popts });
+          await drain();
+        } else { const r = await LfcPack.packBlock(out, popts); await write(packer2.pushPacked(r)); }
+        tm.pack += performance.now() - ts; continue;
       }
       const objs = view.filtered ? await rowsAt(view.indices, start, end) : view.live ? Array.from({ length: end - start }, (_, i) => view.live.row(start + i)) : await view.R.rows({ from: start, count: end - start });
       if (!view.filtered && view.derived && view.derived.size) overlayDerived(objs, (i) => start + i);
@@ -1171,6 +1260,7 @@ async function exportLfcp(m) {
       for (const r of objs) { let line = ''; for (let k = 0; k < cols.length; k++) { const v = r[cols[k].name]; line += keyQ[k] + (v == null ? 'null' : JSON.stringify(v)); } text += line + '}\n'; }
       tm.text += performance.now() - ts; ts = performance.now(); await write(packer2.push(enc.encode(text))); tm.pack += performance.now() - ts;
     }
+    if (pool) { const ts = performance.now(); while (pending > 0 || results.size) { if (failed) throw failed; await drain(); if (pending > 0) await new Promise((r) => { wake = r; }); } tm.pack += performance.now() - ts; pool.forEach((w) => w.terminate()); }
     await write(packer2.finish()); await writable.close(); closed = true; writable = null;
     const v = await validate(name, count); if (!v.ok) throw new Error('The written file failed footer validation: ' + v.reason);
     const cat = await store.catalog(), outCols = cols.map((c) => { const o = Object.assign({}, c); delete o.derived; delete o.from; delete o.fn; return o; });
