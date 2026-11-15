@@ -666,7 +666,7 @@ async function importWithEncoding(m) {
       else break;
     }
   } catch (err) { jobs.delete(m.id); return send('error', m.id, { message: String(err && err.message || err) }); }
-  if (m.file && await isParquet(m.file)) return importFile(Object.assign({}, m, { parquet: true, untyped: true, noColumns: true, packWorkers: 0 }));   // binary: no text checks
+  if (m.file && await isParquet(m.file)) return importFile(Object.assign({}, m, { parquet: true, untyped: true }));   // binary: no text checks
   try { const u16 = m.file && m.file.size > 1 ? await sniffUtf16(m.file) : null; if (u16) { m = Object.assign({}, m, { file: await utf16ToUtf8File(m.file, u16) }); send('notice', m.id, { text: 'This file was UTF-16, so it was converted to UTF-8.' }); } else if (m.file && m.file.size && await notUtf8(m.file)) { m = Object.assign({}, m, { file: await toUtf8File(m.file) }); send('notice', m.id, { text: 'This file is not UTF-8, so it was read as Windows-1252.' }); } }
   catch { /* the normal import reports any real problem */ }
   return importFile(m);
@@ -759,7 +759,7 @@ async function importOnce(m) {
     let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
     const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? 1 : 2);   // live columns: Firefox packs with one worker while parsing (the cores go to the parse helpers) and gets three more when parsing is done; Chromium also packs with one while parsing and gets one more (measured: each is the best of the variants in its browser)   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
-    if (packWorkers > 0 && useSegments(m, file)) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(mkWorker()); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
+    if (packWorkers > 0 && (useSegments(m, file) || (m.parquet && columnsOk(m)))) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(mkWorker()); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
     if (pws) {   // blocks packed by worker threads, appended here in file order (LFC-pack 0.7.0 packBlock / pushPacked)
       const bb = m.blockBytes || 2097152, popts = Object.assign({ level: m.level || 3 }, { blockBytes: bb, share: false });
       packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
@@ -826,7 +826,7 @@ async function importOnce(m) {
     let res = null;
     if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
     if (!res && !m.ndjson && !m.parquet) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
-    if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
+    if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer, col, (p) => { plan = p; }); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
         let chain = Promise.resolve();
         job.abort = () => reject(Object.assign(new Error('Import cancelled.'), { cancelled: true }));
@@ -1692,6 +1692,12 @@ function pqDateText(a, kind, unit) {
   }
   return { bytes: bytes.subarray(0, o), start, end };
 }
+function pqNumText(a) {   // doubles have no fixed-decimal form: they are stored as the text a CSV would hold (the column still reads as a number)
+  const n = a.length, parts = new Array(n); let tot = 0; for (let i = 0; i < n; i++) { const v = a[i]; const sx = v !== v ? '' : String(v); parts[i] = sx; tot += sx.length; }
+  const bytes = new Uint8Array(tot), start = new Int32Array(n), end = new Int32Array(n); let o = 0;
+  for (let i = 0; i < n; i++) { start[i] = o; const sx = parts[i]; for (let j = 0; j < sx.length; j++) bytes[o++] = sx.charCodeAt(j); end[i] = o; }
+  return { bytes, start, end };
+}
 async function pqGroupJob(m) {
   try {
     pqInit(); await LfcPack.init(); const g = m.group, out = [], dec = new TextDecoder();
@@ -1702,12 +1708,18 @@ async function pqGroupJob(m) {
     const len = (c) => c instanceof Float64Array ? c.length : c.codes ? c.codes.length : c.start.length, n = out.length ? len(out[0]) : 0;
     let sample = null;
     if (m.first) { sample = []; const rowsN = Math.min(20, n); for (let r = 0; r < rowsN; r++) { const rec = {}; m.cols.forEach((col, i) => { const c = out[i]; let v; if (c instanceof Float64Array) { v = c[r]; v = v !== v ? null : col.kind === 'decimal' && col.scale ? v / Math.pow(10, col.scale) : v; } else if (c.codes) { const q = c.codes[r]; v = dec.decode(c.lb.bytes.subarray(c.lb.start[q], c.lb.end[q])); } else v = dec.decode(c.bytes.subarray(c.start[r], c.end[r])); rec[col.name] = v === '' ? null : v; }); sample.push(rec); } }
+    if (m.chunk) {   // staged columns: hand back a chunk in the shape the CSV builder makes, so the live grid and the pack workers take it as they take a CSV piece
+      const cols = out.map((c, i) => { const k = m.cols[i].kind; if (c instanceof Float64Array) { if (k === 'int' || k === 'decimal') return c; return pqNumText(c); } if (c.codes) { const q = c.lb.n; return { codes: c.codes, lb: { bytes: c.lb.bytes, start: c.lb.start.slice(0, q), end: c.lb.end.slice(0, q) } }; } return c; });
+      let est = 0; for (const c of cols) est += c instanceof Float64Array ? n * 8 : c.codes ? n : c.bytes.length + n;
+      const chunk = { n, bytes: est, cols }, chunk2 = m.dup ? dupChunk(chunk) : null, tr = [].concat(chunkBuffers(chunk), chunk2 ? chunkBuffers(chunk2) : []);
+      self.postMessage({ type: 'pqdone', rid: m.rid, chunk, chunk2, rows: n, sample }, tr); return;
+    }
     const named = {}; out.forEach((c, i) => { named[m.cols[i].name] = c instanceof Float64Array ? c : c.codes ? { kind: 'dict', labels: { bytes: c.lb.bytes, start: Uint32Array.from(c.lb.start.subarray(0, c.lb.n)), end: Uint32Array.from(c.lb.end.subarray(0, c.lb.n)) }, ids: c.codes } : c; });
     const r = await LfcPack.packBlock(named, { level: m.level || 3, blockBytes: 2097152, share: false });
     self.postMessage({ type: 'pqdone', rid: m.rid, r, rows: n, sample }, [r.buffer]);
   } catch (err) { self.postMessage({ type: 'pqdone', rid: m.rid, error: String(err && err.message || err) }); }
 }
-async function parseParquet(file, job, progress, t, write, packer) {
+async function parseParquet(file, job, progress, t, write, packer, col, setPlan) {
   const t0 = performance.now(); let tailN = Math.min(file.size, 1048576), tail = new Uint8Array(await file.slice(file.size - tailN).arrayBuffer());
   const fl = new DataView(tail.buffer, tail.byteLength - 8, 4).getUint32(0, true); if (fl + 8 > tailN && fl + 8 <= file.size) tail = new Uint8Array(await file.slice(file.size - fl - 8).arrayBuffer());
   const ft = PQ.readFooter(tail), cols = ft.cols, groups = ft.groups;
@@ -1715,6 +1727,8 @@ async function parseParquet(file, job, progress, t, write, packer) {
   const KIND = { int: 'integer', decimal: 'number', double: 'number', bool: 'boolean', text: 'string', date: 'date', timestamp: 'date' };
   const headers = cols.map((c) => c.name), types = cols.map((c) => ({ type: KIND[c.kind] || 'string', nullable: true }));
   const plan = cols.map((c) => c.kind === 'int' ? true : c.kind === 'decimal' ? (c.scale > 0 ? c.scale : true) : false);
+  if (col && cols.some((c) => c.kind === 'double')) col = null;   // doubles have no fixed-decimal form, so the staged path would store them as text (bigger file, slower): take the direct pack path
+  setPlan(plan); if (col) { await col.begin(headers); t.cols = true; }
   const hw = (self.navigator && navigator.hardwareConcurrency) || 4, nw = Math.max(1, Math.min(4, hw - 1, groups.length)), helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
@@ -1724,17 +1738,17 @@ async function parseParquet(file, job, progress, t, write, packer) {
   const rpc = (h, msg) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'pqGroup', rid: id }, msg)); });
   let rows = 0, sample = [], next = 0, nextW = 0; const done = new Map(), waiters = new Set(); const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } }, wait = () => new Promise((r) => waiters.add(r));
   const WINDOW = nw * 2; let quit = false, bytes = 0;
-  const run = async (h) => { while (!quit && next < groups.length) { if (next >= nextW + WINDOW) { await wait(); continue; } const k = next++; done.set(k, await rpc(h, { file, cols, group: groups[k], first: k === 0, level: 3 }).catch((err) => ({ error: err }))); signal(); } };
+  const run = async (h) => { while (!quit && next < groups.length) { if (next >= nextW + WINDOW) { await wait(); continue; } const k = next++; done.set(k, await rpc(h, { file, cols, group: groups[k], first: k === 0, level: 3, chunk: !!col, dup: !!(col && col.dup) }).catch((err) => ({ error: err }))); signal(); } };
   try {
     const loops = helpers.map(run);
     for (let k = 0; k < groups.length; k++) {
       while (!done.has(k)) { stop(job); await wait(); }
       const r = done.get(k); done.delete(k); nextW = k + 1; signal(); stop(job);
       if (r.error) throw r.error;
-      await write(packer.pushPacked(r.r)); rows += r.rows; if (r.sample) sample = r.sample; for (const c of groups[k].chunks) bytes += c.comp; progress(Math.min(file.size, bytes), rows);
+      if (r.chunk) await col.push(r.chunk, r.chunk2); else await write(packer.pushPacked(r.r)); rows += r.rows; if (r.sample) sample = r.sample; for (const c of groups[k].chunks) bytes += c.comp; progress(Math.min(file.size, bytes), rows);
     }
     quit = true; signal(); await Promise.all(loops);
-    t.parseMs = performance.now() - t0; t.readMs = 0; t.columns = false;
-    return { headers, types, rows, sample, pieces: 0, plan };
+    t.parseMs = performance.now() - t0; t.readMs = 0;
+    return { headers, types, rows, sample, pieces: col ? groups.length : 0, plan };
   } finally { quit = true; closeAll(); }
 }
