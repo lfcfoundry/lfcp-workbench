@@ -61,6 +61,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'packPlain') packPlainJob(m);
   else if (m.type === 'packCols') packColsJob(m);
   else if (m.type === 'pqGroup') pqGroupJob(m);
+  else if (m.type === 'pqPackPart') pqPartJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importWithEncoding(m);
   else if (m.type === 'zipList') zipList(m);
@@ -1870,9 +1871,26 @@ async function pqGroupJob(m) {
       self.postMessage({ type: 'pqdone', rid: m.rid, chunk, chunk2, rows: n, sample }, tr); return;
     }
     const named = {}; out.forEach((c, i) => { named[m.cols[i].name] = c instanceof Float64Array || c.kind === 'ts' ? c : c.codes ? { kind: 'dict', labels: { bytes: c.lb.bytes, start: Uint32Array.from(c.lb.start.subarray(0, c.lb.n)), end: Uint32Array.from(c.lb.end.subarray(0, c.lb.n)) }, ids: c.codes } : c; });
-    const r = await LfcPack.packBlock(named, { level: m.level || 3, blockBytes: 2097152, share: false });
+    const popts = { level: m.level || 3, blockBytes: 2097152, share: false }, S = n >= 131072 ? (m.parts || 1) : 1;
+    if (S > 1) {   // spare cores: cut the decoded group into S row ranges; range 0 is packed here, the others go to pack helpers through the importing worker (blocks stay in (group, range) order)
+      const cut = (c, a, b) => c instanceof Float64Array ? c.subarray(a, b) : c.kind === 'ts' ? Object.assign({}, c, { values: c.values.subarray(a, b) }) : c.kind === 'dict' ? { kind: 'dict', labels: c.labels, ids: c.ids.subarray(a, b) } : { bytes: c.bytes, start: c.start.subarray(a, b), end: c.end.subarray(a, b) };
+      const dup = (c, trf) => { if (c instanceof Float64Array) { const x = c.slice(); trf.push(x.buffer); return x; } if (c.kind === 'ts') { const x = Object.assign({}, c, { values: c.values.slice() }); trf.push(x.values.buffer); return x; } if (c.kind === 'dict') { const x = { kind: 'dict', labels: c.labels, ids: c.ids.slice() }; trf.push(x.ids.buffer); return x; } const x = { bytes: c.bytes.slice(), start: c.start.slice(), end: c.end.slice() }; trf.push(x.bytes.buffer, x.start.buffer, x.end.buffer); return x; };
+      for (let q = 1; q < S; q++) {
+        const a = Math.floor(n * q / S), b = Math.floor(n * (q + 1) / S), part = {}, trf = [];
+        for (const nm in named) part[nm] = dup(cut(named[nm], a, b), trf);
+        self.postMessage({ type: 'pqPart', grp: m.grp, p: q, rows: b - a, named: part, o: popts }, trf);
+      }
+      const n0 = Math.floor(n / S), part0 = {}; for (const nm in named) part0[nm] = cut(named[nm], 0, n0);
+      const r0 = await LfcPack.packBlock(part0, popts);
+      self.postMessage({ type: 'pqdone', rid: m.rid, r: r0, rows: n0, parts: S, sample }, [r0.buffer]); return;
+    }
+    const r = await LfcPack.packBlock(named, popts);
     self.postMessage({ type: 'pqdone', rid: m.rid, r, rows: n, sample }, [r.buffer]);
   } catch (err) { self.postMessage({ type: 'pqdone', rid: m.rid, error: String(err && err.message || err) }); }
+}
+async function pqPartJob(m) {   // pack helper: pack one row range that a decode worker handed over
+  try { pqInit(); await LfcPack.init(); const r = await LfcPack.packBlock(m.named, m.o); self.postMessage({ type: 'pqpartdone', grp: m.grp, p: m.p, rows: m.rows, r }, [r.buffer]); }
+  catch (err) { self.postMessage({ type: 'pqpartdone', grp: m.grp, p: m.p, error: String(err && err.message || err) }); }
 }
 async function parseParquet(file, job, progress, t, write, packer, col, setPlan, exact) {
   const t0 = performance.now(); let tailN = Math.min(file.size, 1048576), tail = new Uint8Array(await file.slice(file.size - tailN).arrayBuffer());
@@ -1885,22 +1903,25 @@ async function parseParquet(file, job, progress, t, write, packer, col, setPlan,
   if (col && cols.some((c) => c.kind === 'double')) col = null;   // doubles have no fixed-decimal form, so the staged path would store them as text (bigger file, slower): take the direct pack path
   setPlan(plan); if (col) { await col.begin(headers); t.cols = true; }
   const hw = (self.navigator && navigator.hardwareConcurrency) || 4, nw = Math.max(1, Math.min(4, hw - 1, groups.length)), helpers = [], pending = new Map(); let rid = 0;
-  const closeAll = () => helpers.forEach((h) => h.terminate());
+  const ph = [], idle = [], partQ = [], partsIn = new Map();   // pack helpers for row ranges handed over by the decode workers
+  const closeAll = () => { helpers.forEach((h) => h.terminate()); ph.forEach((h) => h.terminate()); };
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   try { for (let i = 0; i < nw; i++) helpers.push(mkWorker()); } catch { closeAll(); throw new Error('Parquet files need worker threads, and this page cannot start them.'); }
-  for (const h of helpers) { h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'pqdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); if (d.error) p.rej(Object.assign(new Error(d.error), { pqExact: d.exactCol })); else p.res(d); } } }; h.onerror = (e) => failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); }
+  const spare = col ? 0 : (hw > 4 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8)) ? Math.min(8, hw - 1 - nw) : 0, PARTS = spare > 0 ? 1 + Math.ceil(spare / nw) : 1;
+  const dispatch = () => { while (partQ.length && (idle.length || ph.length < spare)) { let h = idle.shift(); if (!h) { try { h = mkWorker(); } catch { return; } h.onmessage = (e) => { const d = e.data || {}; if (d.type !== 'pqpartdone') return; if (d.error) failAll(new Error(d.error)); else { (partsIn.get(d.grp) || partsIn.set(d.grp, new Map()).get(d.grp)).set(d.p, d); idle.push(h); dispatch(); } signal(); }; h.onerror = (e) => { failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); signal(); }; ph.push(h); } const q = partQ.shift(), trf = []; for (const nm in q.named) { const c = q.named[nm]; if (c instanceof Float64Array) trf.push(c.buffer); else if (c.kind === 'ts') trf.push(c.values.buffer); else if (c.kind === 'dict') trf.push(c.ids.buffer); else trf.push(c.bytes.buffer, c.start.buffer, c.end.buffer); } h.postMessage({ type: 'pqPackPart', grp: q.grp, p: q.p, rows: q.rows, named: q.named, o: q.o }, trf); } };
+  for (const h of helpers) { h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'pqPart') { partQ.push(d); dispatch(); return; } if (d.type === 'pqdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); if (d.error) p.rej(Object.assign(new Error(d.error), { pqExact: d.exactCol })); else p.res(d); } } }; h.onerror = (e) => failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); }
   job.abort = () => { closeAll(); failAll(Object.assign(new Error('Import cancelled.'), { cancelled: true })); };
   const rpc = (h, msg) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'pqGroup', rid: id }, msg)); });
   let rows = 0, sample = [], next = 0, nextW = 0; const done = new Map(), waiters = new Set(); const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } }, wait = () => new Promise((r) => waiters.add(r));
   const WINDOW = nw * 2; let quit = false, bytes = 0;
-  const run = async (h) => { while (!quit && next < groups.length) { if (next >= nextW + WINDOW) { await wait(); continue; } const k = next++; done.set(k, await rpc(h, { file, cols, exact, group: groups[k], first: k === 0, level: 3, chunk: !!col, dup: !!(col && col.dup) }).catch((err) => ({ error: err }))); signal(); } };
+  const run = async (h) => { while (!quit && next < groups.length) { if (next >= nextW + WINDOW) { await wait(); continue; } const k = next++; done.set(k, await rpc(h, { file, cols, exact, group: groups[k], grp: k, parts: PARTS, first: k === 0, level: 3, chunk: !!col, dup: !!(col && col.dup) }).catch((err) => ({ error: err }))); signal(); } };
   try {
     const loops = helpers.map(run);
     for (let k = 0; k < groups.length; k++) {
-      while (!done.has(k)) { stop(job); await wait(); }
+      while (!(done.has(k) && (!done.get(k).parts || done.get(k).parts <= 1 || (partsIn.get(k) && partsIn.get(k).size >= done.get(k).parts - 1)))) { stop(job); await wait(); }
       const r = done.get(k); done.delete(k); nextW = k + 1; signal(); stop(job);
       if (r.error) throw r.error;
-      if (r.chunk) await col.push(r.chunk, r.chunk2); else await write(packer.pushPacked(r.r)); rows += r.rows; if (r.sample) sample = r.sample; for (const c of groups[k].chunks) bytes += c.comp; progress(Math.min(file.size, bytes), rows);
+      if (r.chunk) await col.push(r.chunk, r.chunk2); else { await write(packer.pushPacked(r.r)); if (r.parts > 1) { const pi = partsIn.get(k); partsIn.delete(k); for (let q = 1; q < r.parts; q++) { const d = pi.get(q); await write(packer.pushPacked(d.r)); rows += d.rows; } } } rows += r.rows; if (r.sample) sample = r.sample; for (const c of groups[k].chunks) bytes += c.comp; progress(Math.min(file.size, bytes), rows);
     }
     quit = true; signal(); await Promise.all(loops);
     t.parseMs = performance.now() - t0; t.readMs = 0;
