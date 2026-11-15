@@ -35,7 +35,7 @@ export function placeColumns(X, headers, plan, delimiter, opts = {}) {
         const pl = pls[c];
         if (pl.kind) out.push(new Float64Array(mem(), pl.a, rows).slice());
         else if (pl.on) { const nl = X.dict_n(c); out.push({ codes: new Uint16Array(mem(), pl.a, rows).slice(), lb: { bytes: new Uint8Array(mem(), pl.dict.bytes, X.dict_blen(c)).slice(), start: new Uint32Array(mem(), pl.dict.start, nl).slice(), end: new Uint32Array(mem(), pl.dict.end, nl).slice() } }); }
-        else { const tl = X.tlen(c); out.push({ bytes: new Uint8Array(mem(), pl.t, tl).slice(), start: new Int32Array(mem(), pl.a, rows).slice(), end: new Int32Array(mem(), pl.b, rows).slice() }); }
+        else { const tl = X.tlen(c), off = new Int32Array(rows + 1); off.set(new Int32Array(mem(), pl.a, rows)); off[rows] = tl; out.push({ bytes: new Uint8Array(mem(), pl.t, tl).slice(), start: off.subarray(0, rows), end: off.subarray(1, rows + 1) }); }   // cells are written one after another, so each cell ends where the next starts: one offsets array serves as both (half the memory)
       }
       return out;
     },
