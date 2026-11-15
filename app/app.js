@@ -403,7 +403,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.1506 (LFC-pack 0.13.4)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.1700 (LFC-pack 0.13.4)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
@@ -414,12 +414,13 @@
   $('file').addEventListener('change', async () => {
     const f = $('file').files[0]; $('go').disabled = !f; $('zipbox').hidden = true; $('zipentry').innerHTML = '';
     if (f) status(fmt(f.size) + ' selected. No upload happens.');
-    if (f && /\.zip$/i.test(f.name)) {   // list the files inside so one can be chosen (the largest text file is picked by default)
+    if (f && /\.(zip|xlsx|xlsm)$/i.test(f.name)) {   // list the files inside so one can be chosen (the largest text file is picked by default)
       const r = await call({ type: 'zipList', file: f });
       if ($('file').files[0] !== f) return;
-      if (r.error) { status('Cannot read this zip file: ' + r.error, true); return; }
-      const text = r.entries.filter((x) => /\.(csv|tsv|txt|json|ndjson|jsonl|gz)$/i.test(x.name));
-      $('zipentry').innerHTML = (text.length ? text : r.entries).map((x) => '<option value="' + esc(x.name) + '"' + (x.name === r.picked ? ' selected' : '') + '>' + esc(x.name) + ' (' + fmt(x.size) + ')</option>').join('');
+      if (r.error) { status(r.error.indexOf('Excel') >= 0 ? r.error : 'Cannot read this zip file: ' + r.error, true); return; }
+      $('zipboxlabel').textContent = r.sheets ? 'Sheet' : 'File in the zip';
+      const text = r.entries.filter((x) => r.sheets || /\.(csv|tsv|txt|json|ndjson|jsonl|gz|xlsx|xlsm)$/i.test(x.name));
+      $('zipentry').innerHTML = (text.length ? text : r.entries).map((x) => '<option value="' + esc(x.name) + '"' + (x.name === r.picked ? ' selected' : '') + '>' + esc(x.name) + (x.size >= 0 ? ' (' + fmt(x.size) + ')' : '') + '</option>').join('');
       $('zipbox').hidden = $('zipentry').options.length < 2;
     }
   });
