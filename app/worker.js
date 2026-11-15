@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.13.3/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.13.4/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -1692,6 +1692,16 @@ function pqDateText(a, kind, unit) {
   }
   return { bytes: bytes.subarray(0, o), start, end };
 }
+// Timestamps as numbers for lfc-pack's { kind: 'ts' } input (no text formatting, no date parse); null when the values do not fit a form it takes.
+function pqTs(a, unit) {
+  const per = unit === 'ms' ? 1e3 : unit === 'us' ? 1e6 : 1e9, n = a.length; let frac = false;
+  for (let i = 0; i < n; i++) { const v = a[i]; if (v === v && ((v % per) + per) % per !== 0) { frac = true; break; } }
+  let values, u, fmt = 'YYYY-MM-DD HH:MM:SS';
+  if (!frac) { values = new Float64Array(n); for (let i = 0; i < n; i++) values[i] = a[i] / per; u = 's'; }
+  else if (unit === 'ms' || unit === 'us') { values = a; u = unit; fmt += unit === 'ms' ? '.fff' : '.ffffff'; }
+  else { for (let i = 0; i < n; i++) { const v = a[i]; if (v === v && v % 1000 !== 0) return null; } values = new Float64Array(n); for (let i = 0; i < n; i++) values[i] = a[i] / 1000; u = 'us'; fmt += '.ffffff'; }
+  return { kind: 'ts', unit: u, values, fmt };
+}
 function pqNumText(a) {   // doubles have no fixed-decimal form: they are stored as the text a CSV would hold (the column still reads as a number)
   const n = a.length, parts = new Array(n); let tot = 0; for (let i = 0; i < n; i++) { const v = a[i]; const sx = v !== v ? '' : String(v); parts[i] = sx; tot += sx.length; }
   const bytes = new Uint8Array(tot), start = new Int32Array(n), end = new Int32Array(n); let o = 0;
@@ -1703,18 +1713,18 @@ async function pqGroupJob(m) {
     pqInit(); await LfcPack.init(); const g = m.group, out = [], dec = new TextDecoder();
     for (let i = 0; i < g.chunks.length; i++) {
       const ch = g.chunks[i], b = new Uint8Array(await m.file.slice(ch.start, ch.start + ch.comp).arrayBuffer()), col = m.cols[i];
-      let c = PQ.decodeChunk(col, ch, b, pqInfl); if (c instanceof Float64Array && (col.kind === 'date' || col.kind === 'timestamp')) c = pqDateText(c, col.kind, col.unit); out.push(c);
+      let c = PQ.decodeChunk(col, ch, b, pqInfl); if (c instanceof Float64Array && (col.kind === 'date' || col.kind === 'timestamp')) c = (!m.chunk && col.kind === 'timestamp' && pqTs(c, col.unit)) || pqDateText(c, col.kind, col.unit); out.push(c);
     }
-    const len = (c) => c instanceof Float64Array ? c.length : c.codes ? c.codes.length : c.start.length, n = out.length ? len(out[0]) : 0;
+    const len = (c) => c instanceof Float64Array ? c.length : c.kind === 'ts' ? c.values.length : c.codes ? c.codes.length : c.start.length, n = out.length ? len(out[0]) : 0;
     let sample = null;
-    if (m.first) { sample = []; const rowsN = Math.min(20, n); for (let r = 0; r < rowsN; r++) { const rec = {}; m.cols.forEach((col, i) => { const c = out[i]; let v; if (c instanceof Float64Array) { v = c[r]; v = v !== v ? null : col.kind === 'decimal' && col.scale ? v / Math.pow(10, col.scale) : v; } else if (c.codes) { const q = c.codes[r]; v = dec.decode(c.lb.bytes.subarray(c.lb.start[q], c.lb.end[q])); } else v = dec.decode(c.bytes.subarray(c.start[r], c.end[r])); rec[col.name] = v === '' ? null : v; }); sample.push(rec); } }
+    if (m.first) { sample = []; const rowsN = Math.min(20, n); for (let r = 0; r < rowsN; r++) { const rec = {}; m.cols.forEach((col, i) => { const c = out[i]; let v; if (c.kind === 'ts') { const x = c.values[r]; v = x !== x ? null : new Date(x * (c.unit === 's' ? 1000 : c.unit === 'ms' ? 1 : 0.001)).toISOString().slice(0, 19).replace('T', ' '); } else if (c instanceof Float64Array) { v = c[r]; v = v !== v ? null : col.kind === 'decimal' && col.scale ? v / Math.pow(10, col.scale) : v; } else if (c.codes) { const q = c.codes[r]; v = dec.decode(c.lb.bytes.subarray(c.lb.start[q], c.lb.end[q])); } else v = dec.decode(c.bytes.subarray(c.start[r], c.end[r])); rec[col.name] = v === '' ? null : v; }); sample.push(rec); } }
     if (m.chunk) {   // staged columns: hand back a chunk in the shape the CSV builder makes, so the live grid and the pack workers take it as they take a CSV piece
       const cols = out.map((c, i) => { const k = m.cols[i].kind; if (c instanceof Float64Array) { if (k === 'int' || k === 'decimal') return c; return pqNumText(c); } if (c.codes) { const q = c.lb.n; return { codes: c.codes, lb: { bytes: c.lb.bytes, start: c.lb.start.slice(0, q), end: c.lb.end.slice(0, q) } }; } return c; });
       let est = 0; for (const c of cols) est += c instanceof Float64Array ? n * 8 : c.codes ? n : c.bytes.length + n;
       const chunk = { n, bytes: est, cols }, chunk2 = m.dup ? dupChunk(chunk) : null, tr = [].concat(chunkBuffers(chunk), chunk2 ? chunkBuffers(chunk2) : []);
       self.postMessage({ type: 'pqdone', rid: m.rid, chunk, chunk2, rows: n, sample }, tr); return;
     }
-    const named = {}; out.forEach((c, i) => { named[m.cols[i].name] = c instanceof Float64Array ? c : c.codes ? { kind: 'dict', labels: { bytes: c.lb.bytes, start: Uint32Array.from(c.lb.start.subarray(0, c.lb.n)), end: Uint32Array.from(c.lb.end.subarray(0, c.lb.n)) }, ids: c.codes } : c; });
+    const named = {}; out.forEach((c, i) => { named[m.cols[i].name] = c instanceof Float64Array || c.kind === 'ts' ? c : c.codes ? { kind: 'dict', labels: { bytes: c.lb.bytes, start: Uint32Array.from(c.lb.start.subarray(0, c.lb.n)), end: Uint32Array.from(c.lb.end.subarray(0, c.lb.n)) }, ids: c.codes } : c; });
     const r = await LfcPack.packBlock(named, { level: m.level || 3, blockBytes: 2097152, share: false });
     self.postMessage({ type: 'pqdone', rid: m.rid, r, rows: n, sample }, [r.buffer]);
   } catch (err) { self.postMessage({ type: 'pqdone', rid: m.rid, error: String(err && err.message || err) }); }

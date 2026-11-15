@@ -2,7 +2,7 @@
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
  * Part of JS-modules, https://github.com/lfcfoundry/JS-modules
  * Copyright (c) 2026 LFC Foundry. MIT License (see LICENSE at the repository root).
- * Version 0.13.3 (API 0)
+ * Version 0.13.4 (API 0)
  *
  * Needs WebAssembly (zstd, the tokenizer and the string deduplicator are compiled from C; page policy 'wasm-unsafe-eval' and nothing else). No other dependency, one file.
  * Contains zstd 1.5.7 (BSD-3-Clause, Meta Platforms), compiled to wasm32; see NOTICE-zstd.txt next to this file.
@@ -1739,6 +1739,32 @@
   var BC_UTF8 = null;
   // dictionary column input { kind: 'dict', labels: { bytes, start, end }, ids: Uint8Array|Uint16Array|Int32Array (one label number per row) }; the block's labels are renumbered in first-seen order so the bytes equal packing the same text. Idea and first version: the parse-research thread
   function isDictCol(x) { return !!x && !Array.isArray(x) && !ArrayBuffer.isView(x) && x.kind === 'dict' && isByteCol(x.labels) && x.ids && ArrayBuffer.isView(x.ids) && typeof x.ids.length === 'number'; }
+  // Typed timestamp columns (since 0.13.4): { kind: 'ts', unit: 's' | 'ms' | 'us', values: Float64Array (NaN = empty), fmt?: 'YYYY-MM-DD[T ]HH:MM:SS[.fff|.ffffff]' } is the same column as the text it stands for (the date column W, or the
+  // text path's own answer when W does not apply), with no text built or parsed. Without fmt the form is T and no fraction for 's', T.fff for 'ms', T.ffffff for 'us'.
+  function isTsCol(x) { return !!x && !Array.isArray(x) && !ArrayBuffer.isView(x) && x.kind === 'ts' && (x.unit === 's' || x.unit === 'ms' || x.unit === 'us') && x.values instanceof Float64Array; }
+  function tsForm(x) {
+    var m, f;
+    if (x.fmt === undefined) return x.unit === 's' ? 1 : x.unit === 'ms' ? 0 : 4;
+    m = /^YYYY-MM-DD([T ])HH:MM:SS(?:\.(f{3}|f{6}))?$/.exec(String(x.fmt)); if (!m) throw new Error('LfcPack: timestamp column fmt must be YYYY-MM-DD[T or space]HH:MM:SS with no fraction, .fff or .ffffff');
+    f = !m[2] ? 1 : m[2].length === 3 ? 0 : 4; return m[1] === ' ' ? f | 2 : f;
+  }
+  function tsStore(x, a0, n, f) {   // the values a0..a0+n as stored numbers (ms, or us for the six-digit forms); null when one is NaN; throws when a value does not fit its form
+    var v = x.values, out = new Float64Array(n), mul = x.unit === 's' ? (f & 4 ? 1e6 : 1000) : x.unit === 'ms' ? (f & 4 ? 1000 : 1) : (f & 4 ? 1 : 0.001), i, t, nan = false, lim = f & 4 ? 9007199254740991 : 253402300799999, cut = f & 1 ? (f & 4 ? 1e6 : 1000) : 1;
+    for (i = 0; i < n; i++) { t = v[a0 + i]; if (t !== t) { nan = true; continue; } t *= mul;
+      if (!(t >= 0 && t <= lim && t % cut === 0)) throw new Error('LfcPack: timestamp column value ' + (a0 + i) + ' is outside the years 1970 to 9999 or has more precision than its fmt'); out[i] = t; }
+    return nan ? null : out;
+  }
+  function tsText(x, a0, n, f) {   // the text of the values (null for NaN): what a caller would have handed over as strings
+    var v = x.values, mul = x.unit === 's' ? (f & 4 ? 1e6 : 1000) : x.unit === 'ms' ? (f & 4 ? 1000 : 1) : (f & 4 ? 1 : 0.001), keep = [], nums = [], i, t, out = new Array(n), txt, q = 0, lim = f & 4 ? 9007199254740991 : 253402300799999, cut = f & 1 ? (f & 4 ? 1e6 : 1000) : 1;
+    for (i = 0; i < n; i++) { t = v[a0 + i]; if (t !== t) { out[i] = null; continue; } t *= mul;
+      if (!(t >= 0 && t <= lim && t % cut === 0)) throw new Error('LfcPack: timestamp column value ' + (a0 + i) + ' is outside the years 1970 to 9999 or has more precision than its fmt'); keep.push(i); nums.push(t); }
+    txt = nums.length ? dateCol(Float64Array.from(nums), nums.length, f) : []; for (i = 0; i < keep.length; i++) out[keep[i]] = txt[q++]; return out;
+  }
+  function tsCol(x, a0, n, zs, level, tmode, key) {
+    var f = tsForm(x), a = tsStore(x, a0, n, f), w;
+    if (a && n >= 2 && DATE_MODE && dateMany(a, n)) { w = dateWrap({ f: f, a: a }, zs, level, key); if (w) return w; }
+    return encodeColumn(tsText(x, a0, n, f), zs, level, tmode, undefined, key);   // empty cells, few different values or a short column: the text path decides, so the bytes are the text's
+  }
   function dictStrings(dc, a, n) { var D = dc.labels, B = D.bytes, out = new Array(n), cache = new Array(D.start.length), i, c; for (i = 0; i < n; i++) { c = dc.ids[a + i]; out[i] = cache[c] !== undefined ? cache[c] : (cache[c] = td.decode(B.subarray(D.start[c], D.end[c]))); } return out; }
   function dcUniqueFixed(D, ids, a, n) { var m = n < 8 ? n : 8, i, j, k, l = D.end[ids[a]] - D.start[ids[a]], s0, s1, B = D.bytes; for (i = 1; i < m; i++) if (D.end[ids[a + i]] - D.start[ids[a + i]] !== l) return false; for (i = 1; i < m; i++) for (j = 0; j < i; j++) { s0 = D.start[ids[a + i]]; s1 = D.start[ids[a + j]]; for (k = 0; k < l && B[s0 + k] === B[s1 + k]; k++); if (k === l) return false; } return true; }   // bcUniqueFixed on a dictionary column's first values
   // Shared label tables (since 0.13.0): a dictionary column that a caller hands over whole (packBlock, { kind: 'dict', labels, ids }) and that is cut into several blocks writes its labels once, in a footer table (section 19)
@@ -1844,6 +1870,7 @@
     var full = new Uint8Array(pb), j, i, x, c21, arr, a = ci.a; full.fill(255); if (n & 7) full[pb - 1] = (1 << (n & 7)) - 1;
     for (j = 0; j < ci.keys.length; j++) { keys.push(ci.keys[j]); seen.set(ci.keys[j], j); cols.push(null); pls.push(full); arr = ci.A[j];
       if (isDictCol(arr)) { cs21.push({ a: null, nb: null, np: null, m: 0, c: n, bc: arr, a0: a, dc: true }); continue; }
+      if (isTsCol(arr)) { cs21.push({ a: null, nb: null, np: null, m: 0, c: n, bc: arr, a0: a, ts: true }); continue; }
       if (isByteCol(arr)) { cs21.push({ a: null, nb: null, np: null, m: 0, c: n, bc: arr, a0: a }); continue; }   // a text column as UTF-8 bytes plus value offsets: encoded from the bytes (byteCol), no strings
       if (!Array.isArray(arr)) { if (ci.view && arr instanceof Float64Array) { c21 = nanSplit(arr.subarray(a, a + n), n, pb); cs21.push(c21 || { a: null, nb: arr.subarray(a, a + n), np: null, m: n, c: n }); continue; } c21 = { a: null, nb: new Float64Array(n), np: null, m: n, c: n }; c21.nb.set(arr.subarray(a, a + n)); c21 = nanSplit(c21.nb, n, pb) || c21; cs21.push(c21); continue; }   // ci.view (packBlock(columns), no helpers): a Float64Array is read in place, not copied   // a typed number column: one copy, no per-value work
       c21 = { a: null, nb: new Float64Array(n), np: null, m: 0, c: 0 }; cs21.push(c21);
@@ -1856,7 +1883,7 @@
     if (pre === 1) fl = b21Flags(a, a.length); else if (pre === 2) fl = b21Flags(a.nb, a.m);
     if (chk26 && fl && (fl.nz || fl.nf)) throw B26_BAIL;
     if (pre === 2) { c21 = a; NN_FLAGS[0] = fl.nz; NN_FLAGS[1] = fl.ai; e = nullNumBest({ nn: c21.nb.subarray(0, c21.m), pl: c21.np, m: c21.m, nz: fl.nz, ai: fl.ai }, null, c21.c, zs, level, tm21, key); if (!e) e = encodeColumn(b21Generic(c21), zs, level, tm21, undefined, key); a = []; }
-    else if (pre === 3) e = a.dc ? byteColDict(a.bc, a.a0, a.c, zs, level, tm21, key) : byteCol(a.bc, a.a0, a.c, zs, level, tm21, key);
+    else if (pre === 3) e = a.ts ? tsCol(a.bc, a.a0, a.c, zs, level, tm21, key) : a.dc ? byteColDict(a.bc, a.a0, a.c, zs, level, tm21, key) : byteCol(a.bc, a.a0, a.c, zs, level, tm21, key);
     else if (pre === 1) e = settle(zs, level, encodeColumn0(a, zs, level, tm21, undefined, key, fl));
     else e = encodeColumn(a, zs, level, tm21, undefined, key);
     NK_BUF = null;
@@ -3501,7 +3528,7 @@
       .then(function (ok) { return ok === true; }, function () { return false; });
     return warmP;
   }
-  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, aggregate: auto(aggregate, false), unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.13.3', apiVersion: 0 };
+  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, aggregate: auto(aggregate, false), unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.13.4', apiVersion: 0 };
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
   // ================================================================ delta saves v2 (prototype, off by default): packTables(x, { base }) / unpackTables(file, { base })
@@ -3910,16 +3937,17 @@
     for (j = 0; j < keys.length; j++) { a = obj[keys[j]];
       if (isDictCol(a)) { for (var i8 = 0, NL8 = a.labels.start.length, BL8 = a.labels.bytes.length, s8, e8; i8 < NL8; i8++) { s8 = a.labels.start[i8]; e8 = a.labels.end[i8]; if (!(s8 >= 0 && e8 >= s8 && e8 <= BL8)) return new Error('LfcPack: text column "' + keys[j] + '": label ' + i8 + ' has offsets outside its bytes'); }
         for (i8 = 0; i8 < a.ids.length; i8++) if (!(a.ids[i8] >= 0 && a.ids[i8] < NL8)) return new Error('LfcPack: text column "' + keys[j] + '": id out of range at row ' + i8); }
-      if (isDictCol(a)) { G.push(function (dc) { var cache = []; return function (i) { var c = dc.ids[i]; return cache[c] !== undefined ? cache[c] : (cache[c] = td.decode(dc.labels.bytes.subarray(dc.labels.start[c], dc.labels.end[c]))); }; }(a)); }
+      if (isTsCol(a)) { var tf; try { tf = tsForm(a); } catch (e7) { return e7; } for (var i7 = 0, v7; i7 < a.values.length; i7++) { v7 = a.values[i7]; if (v7 === v7 && !(v7 >= 0)) return new Error('LfcPack: timestamp column "' + keys[j] + '": value ' + i7 + ' is not a time since 1970'); } G.push(function (tc, ff) { return function (i) { var t = tsText(tc, i, 1, ff)[0]; return t; }; }(a, tf)); }
+      else if (isDictCol(a)) { G.push(function (dc) { var cache = []; return function (i) { var c = dc.ids[i]; return cache[c] !== undefined ? cache[c] : (cache[c] = td.decode(dc.labels.bytes.subarray(dc.labels.start[c], dc.labels.end[c]))); }; }(a)); }
       else if (isByteCol(a)) { for (var i9 = 0, BL9 = a.bytes.length, s9, e9; i9 < a.start.length; i9++) { s9 = a.start[i9]; e9 = a.end[i9]; if (!(s9 >= 0 && e9 >= s9 && e9 <= BL9)) return new Error('LfcPack: text column "' + keys[j] + '": value ' + i9 + ' has offsets outside its bytes'); } G.push(function (bc) { return function (i) { return td.decode(bc.bytes.subarray(bc.start[i], bc.end[i])); }; }(a)); }
       else if (!Array.isArray(a) && !(ArrayBuffer.isView(a) && !(a instanceof DataView) && !(typeof BigInt64Array !== 'undefined' && (a instanceof BigInt64Array || a instanceof BigUint64Array)))) return new Error('LfcPack: ' + who + ' needs an array, a number typed array or { bytes, start, end } for "' + keys[j] + '"');
       else G.push(null);
-      var len = isDictCol(a) ? a.ids.length : isByteCol(a) ? a.start.length : a.length;
+      var len = isTsCol(a) ? a.values.length : isDictCol(a) ? a.ids.length : isByteCol(a) ? a.start.length : a.length;
       if (n < 0) n = len; else if (len !== n) return new Error('LfcPack: ' + who + ' columns must all have the same length'); A.push(a); }
     if (n < 0) n = 0;
     function rowsOf(i0, i1) { var out = new Array(Math.max(0, i1 - i0)), i, r, q; for (i = i0; i < i1; i++) { r = {}; for (q = 0; q < keys.length; q++) r[keys[q]] = G[q] ? G[q](i) : A[q][i]; out[i - i0] = r; } return out; }
     var CT = { __ct: { keys: keys, A: A }, length: n, slice: function (s0, s1) { if (s0 < 0) s0 = Math.max(0, n + s0); if (s1 == null || s1 > n) s1 = n; return rowsOf(s0, s1); } }, z;
-    for (z = 0; z < Math.min(256, n); z++) CT[z] = rowsOf(z, z + 1)[0];
+    try { for (z = 0; z < Math.min(256, n); z++) CT[z] = rowsOf(z, z + 1)[0]; } catch (e8) { return e8 instanceof Error ? e8 : new Error(String(e8)); }   // a timestamp column value that does not fit its fmt is refused here
     return { CT: CT, empty: !keys.length || n === 0, rowsOf: rowsOf, n: n };
   }
   // Save path (since 0.13.3): a piece of plain string arrays that is cut into several blocks gets its low-variety text columns turned into { kind: 'dict' } inputs first, so the blocks share one
