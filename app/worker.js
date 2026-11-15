@@ -58,6 +58,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'parseJob') parseJob(m);
   else if (m.type === 'seg') segJob(m);
   else if (m.type === 'packBlock') packBlockJob(m);
+  else if (m.type === 'packPlain') packPlainJob(m);
   else if (m.type === 'packCols') packColsJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importFile(m);
@@ -254,6 +255,11 @@ function expandDict(x, n) {
   return { bytes, start, end };
 }
 // Pack worker side: join the chunks of one block (columns side by side, text offsets moved to the joined bytes) and pack them (LFC-pack packBlock over columns).
+// Save as LFCP: a pack thread packs one batch of plain columns (arrays of cells) into one block.
+async function packPlainJob(m) {
+  try { await LfcPack.init(); const r = await LfcPack.packBlock(m.cols, m.o); self.postMessage({ type: 'packed', rid: m.rid, r }, [r.buffer]); }
+  catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
+}
 async function packColsJob(m) {
   try {
     await LfcPack.init();
@@ -1176,8 +1182,15 @@ async function exportLfcp(m) {
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
-    const BATCH = 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: 2097152, share: false };
+    const BATCH = m.batch || 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: 2097152, share: false };
     const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
+    // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
+    let pool = null; const npool = m.noPool || !isFirefox || !allWarm || !LfcPack.packBlock ? 0 : Math.min(3, Math.ceil(count / BATCH));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
+    if (npool > 1) { try { pool = []; for (let i = 0; i < npool; i++) pool.push(new Worker(self.location.href)); } catch { if (pool) pool.forEach((w) => w.terminate()); pool = null; } }
+    const results = new Map(); let nextW = 0, emit = 0, pending = 0, wake = null, failed = null;
+    const drain = async () => { while (results.has(emit)) { const r = results.get(emit); results.delete(emit); emit++; await write(packer2.pushPacked(r)); } };
+    if (pool) for (const w of pool) w.onmessage = (e) => { const d = e.data || {}; pending--; if (d.error) failed = new Error(d.error); else results.set(d.rid, d.r); if (wake) { const r = wake; wake = null; r(); } };
+    let seq = 0;
     for (let start = 0; start < count; start += BATCH) {
       const end = Math.min(count, start + BATCH); let ts = performance.now();
       if (allWarm && LfcPack.packBlock) {   // every column is in memory: gather the batch column by column and pack it as columns (no row objects, no JSON text)
@@ -1189,7 +1202,12 @@ async function exportLfcp(m) {
           out[c.name] = a;
         }
         tm.rows += performance.now() - ts; ts = performance.now();
-        const r = await LfcPack.packBlock(out, popts); await write(packer2.pushPacked(r)); tm.pack += performance.now() - ts; continue;
+        if (pool) {
+          while (pending >= pool.length) { await new Promise((r) => { wake = r; }); if (failed) throw failed; await drain(); }
+          pending++; pool[nextW++ % pool.length].postMessage({ type: 'packPlain', rid: seq++, cols: out, o: popts });
+          await drain();
+        } else { const r = await LfcPack.packBlock(out, popts); await write(packer2.pushPacked(r)); }
+        tm.pack += performance.now() - ts; continue;
       }
       const objs = view.filtered ? await rowsAt(view.indices, start, end) : view.live ? Array.from({ length: end - start }, (_, i) => view.live.row(start + i)) : await view.R.rows({ from: start, count: end - start });
       if (!view.filtered && view.derived && view.derived.size) overlayDerived(objs, (i) => start + i);
@@ -1197,6 +1215,7 @@ async function exportLfcp(m) {
       for (const r of objs) { let line = ''; for (let k = 0; k < cols.length; k++) { const v = r[cols[k].name]; line += keyQ[k] + (v == null ? 'null' : JSON.stringify(v)); } text += line + '}\n'; }
       tm.text += performance.now() - ts; ts = performance.now(); await write(packer2.push(enc.encode(text))); tm.pack += performance.now() - ts;
     }
+    if (pool) { const ts = performance.now(); while (pending > 0 || results.size) { if (failed) throw failed; await drain(); if (pending > 0) await new Promise((r) => { wake = r; }); } tm.pack += performance.now() - ts; pool.forEach((w) => w.terminate()); }
     await write(packer2.finish()); await writable.close(); closed = true; writable = null;
     const v = await validate(name, count); if (!v.ok) throw new Error('The written file failed footer validation: ' + v.reason);
     const cat = await store.catalog(), outCols = cols.map((c) => { const o = Object.assign({}, c); delete o.derived; delete o.from; delete o.fn; return o; });
