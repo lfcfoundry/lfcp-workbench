@@ -30,8 +30,15 @@ import { groupBy2 } from '../src/query/groupby.mjs';
     const dictA = ['x', 'y', '', 'z'], idsA = Uint8Array.from(A, (v) => dictA.indexOf(v));
     for (const o of [{}, { forceMap: true }, { ids1: idsA, dict1: dictA }, { ids1: idsA, dict1: dictA, forceMap: true }]) {
       const g = groupBy2(c, N, rs, { key: 'A', key2: 'B', aggs, ...o }); assert.equal(g.keys.length, ref.size);
-      g.keys.forEach((k, i) => { const e = ref.get(k[0] + '\u0001' + k[1]); assert.ok(e); assert.equal(g.counts[i], e.n); assert.equal(g.values[0][i], e.sn ? e.s : NaN); assert.equal(g.values[1][i], e.sn ? e.s / e.sn : NaN); assert.equal(g.values[2][i], e.sn ? e.mn : NaN); assert.equal(g.values[3][i], e.sn ? e.mx : NaN); assert.ok(Math.abs(g.values[4][i] - e.t / e.n) < 1e-12); });
+      g.keys.forEach((k, i) => { const e = ref.get(k + '\u0001' + g.keys2[i]); assert.ok(e); assert.equal(g.counts[i], e.n); assert.equal(g.values[0][i], e.sn ? e.s : NaN); assert.equal(g.values[1][i], e.sn ? e.s / e.sn : NaN); assert.equal(g.values[2][i], e.sn ? e.mn : NaN); assert.equal(g.values[3][i], e.sn ? e.mx : NaN); assert.ok(Math.abs(g.values[4][i] - e.t / e.n) < 1e-12); });
     }
   }
+}
+{ // a key-id cache gives the same groups on the second call, with and without a row selection
+  const A = ['x', 'y', 'x', 'z', 'y', 'x'], B = Float64Array.from([1, 1, 2, NaN, 1, 2]), c = { A, B }, cache = new Map(), aggs = [{ fn: 'count' }];
+  const r1 = groupBy2(c, 6, null, { key: 'A', key2: 'B', aggs, cache }), r2 = groupBy2(c, 6, null, { key: 'A', key2: 'B', aggs, cache }), sel = Uint32Array.from([0, 2, 5]);
+  assert.deepEqual(r2.keys, r1.keys); assert.deepEqual(Array.from(r2.counts), Array.from(r1.counts)); assert.equal(cache.size, 2);
+  const f = groupBy2(c, 6, sel, { key: 'A', key2: 'B', aggs, cache }), g = groupBy2(c, 6, sel, { key: 'A', key2: 'B', aggs });
+  assert.deepEqual(f.keys, g.keys); assert.deepEqual(f.keys2, g.keys2); assert.deepEqual(Array.from(f.counts), Array.from(g.counts));
 }
 console.log('groupby-derive: PASS');
