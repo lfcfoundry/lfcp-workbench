@@ -70,7 +70,7 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
     chunks++;
   }
   // bail rules agree
-  for (const t of ['007,a,1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01\n', '1,a,1.5,2026-11-01,n\n', '1,a,-0.00,2026-11-01,n\n', '-0,a,1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01,é\n']) {
+  for (const t of ['007,a,1.50,2026-11-01,n\n', '1,a,1.50,2026-11-01\n', '1,a,1.5,2026-11-01,n\n', '1,a,-0.00,2026-11-01,n\n', '-0,a,1.50,2026-11-01,n\n']) {
     const w = B.build(enc.encode(t)), r = buildColumns(enc.encode(t), headers, plan, ',');
     assert.equal(w.bail, r.bail, t); assert.equal(w.n, r.n, t);
   }
@@ -101,7 +101,7 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
       default: return [id, q('a'), sc, q('b') + 'x'].join(',');   // weird: text after the closing quote
     }
   };
-  const weird = new Set([4, 5, 6, 7, 8, 9]);
+  const weird = new Set([5, 7, 8, 9]);   // escaped quotes (4) and valid UTF-8 (6) are built by the wasm builder now
   let seed2 = 99; const r2 = () => (seed2 = (seed2 * 1103515245 + 12345) >>> 0) / 4294967296;
   for (const eol of ['\n', '\r\n']) {
     const recs = [], kinds = []; for (let i = 0; i < 4000; i++) { const k = r2() < 0.08 ? 4 + Math.floor(r2() * 6) : Math.floor(r2() * 4); kinds.push(k); recs.push(rec(i, k)); }

@@ -145,12 +145,29 @@ static int is_bool(const u8* b, u32 l){
   if (l == 5) return (b[0]|32)=='f' && (b[1]|32)=='a' && (b[2]|32)=='l' && (b[3]|32)=='s' && (b[4]|32)=='e';
   return 0;
 }
+// A line with bytes above 127 is copied as bytes only when it is valid UTF-8 (the character parser would turn bad bytes into U+FFFD).
+static int utf8_ok(const u8* p, u32 l){
+  u32 i = 0;
+  while (i < l) {
+    u8 c = p[i];
+    if (c < 0x80) { i++; continue; }
+    u32 n; u32 minv; u32 cp;
+    if ((c & 0xE0) == 0xC0) { n = 1; cp = c & 0x1F; minv = 0x80; }
+    else if ((c & 0xF0) == 0xE0) { n = 2; cp = c & 0x0F; minv = 0x800; }
+    else if ((c & 0xF8) == 0xF0) { n = 3; cp = c & 0x07; minv = 0x10000; }
+    else return 0;
+    for (u32 k = 1; k <= n; k++) { if (i + k >= l) return 0; u8 d = p[i + k]; if ((d & 0xC0) != 0x80) return 0; cp = (cp << 6) | (d & 0x3F); }
+    if (cp < minv || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return 0;
+    i += n + 1;
+  }
+  return 1;
+}
 EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
   u32 i = 0, nrows = 0; g_bail = 0; g_nl = 0;
   u32 n = ncols; u8 D0 = D;
   for (u32 c = 0; c < n; c++) { cnt_n[c] = 0; cnt_e[c] = 0; }
   while (i < len) {
-    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; int ok = 1, inq = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
+    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC], esc[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; esc[0] = 0; int ok = 1, inq = 0, hi8 = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
     {
       v128_t vd = wasm_i8x16_splat((int8_t)D0), vnl = wasm_i8x16_splat(10), vq = wasm_i8x16_splat(34), vbs = wasm_i8x16_splat(92), v31 = wasm_i8x16_splat(31), v126 = wasm_i8x16_splat(126);
       int done = 0;
@@ -163,12 +180,13 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
           if (q >= len) { done = 1; break; }
           if (q == skipq) continue;   // the second quote of an empty quoted cell
           u8 c = in[q];
-          if (c > 126 || c == 92) { ok = 0; done = 1; break; }   // non-ASCII and backslash stay with the character parser
+          if (c == 92) { ok = 0; done = 1; break; }   // backslash stays with the character parser
+          if (c > 126) { hi8 = 1; continue; }   // non-ASCII: the whole line is checked as UTF-8 below (invalid bytes stay with the character parser, which replaces them)
           if (inq) {
             if (c == 34) {   // inside a quoted field: a quote is either an escaped quote ("" -> the line goes to the character parser) or the closing quote
               if (q + 1 >= len) { done = 1; break; }   // cannot tell yet: wait for more bytes
               u8 nb = in[q + 1];
-              if (nb == 34) { ok = 0; done = 1; break; }
+              if (nb == 34) { esc[col] = 1; skipq = q + 1; continue; }   // an escaped quote (""): the cell is unescaped in place below
               if (nb != D0 && nb != 10 && !(nb == 13 && q + 2 < len && in[q + 2] == 10)) { if (q + 2 >= len && nb == 13) { done = 1; break; } ok = 0; done = 1; break; }
               inq = 0; fe[col] = q; qend = 1;
             } else if (c == 10) nl++;   // a line break inside quotes is part of the cell
@@ -179,7 +197,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
             if (q + 2 < len && in[q + 1] == 34) { u8 a = in[q + 2]; if (a == D0 || a == 10 || (a == 13 && q + 3 < len && in[q + 2 + 1] == 10)) { fq[col] = 1; fs[col] = fe[col] = q + 1; skipq = q + 1; continue; } }   // "" followed by a delimiter or line end: an empty quoted cell
             inq = 1; fq[col] = 1; fs[col] = q + 1; continue;
           }   // an opening quote must start the cell
-          if (c == D0) { if (col + 1 >= n) { ok = 0; done = 1; break; } if (!fq[col]) fe[col] = q; col++; fs[col] = q + 1; fq[col] = 0; }
+          if (c == D0) { if (col + 1 >= n) { ok = 0; done = 1; break; } if (!fq[col]) fe[col] = q; col++; fs[col] = q + 1; fq[col] = 0; esc[col] = 0; }
           else if (c == 10) { e = q; nl++; done = 1; break; }
           else if (c == 13 && q + 1 < len && in[q + 1] == 10) continue;   // CRLF: the line break comes next
           else { ok = 0; done = 1; break; }
@@ -192,6 +210,8 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
     if (col != n - 1 || end == i) { g_bail = 1; break; }
     if (!fq[n-1]) fe[n-1] = end;
     (void)qend;
+    if (hi8 && !utf8_ok(in + i, end - i)) { g_bail = 1; break; }
+    for (u32 c = 0; c < n; c++) if (esc[c]) { u32 w = fs[c], r = fs[c], z = fe[c]; while (r < z) { u8 ch = in[r++]; ((u8*)in)[w++] = ch; if (ch == 34) r++; } fe[c] = w; }
     if (nrows >= cap) break;
     // check every cell against the type flags before writing anything for the row
     for (u32 c = 0; c < n; c++) {
