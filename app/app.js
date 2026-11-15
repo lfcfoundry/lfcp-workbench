@@ -18,13 +18,14 @@
     const m = e.data || {};
     if (m.type === 'progress') { $('prog').value = m.total ? m.bytes / m.total : 0; status(m.rows.toLocaleString() + ' rows · ' + fmt(m.bytes) + ' of ' + fmt(m.total)); return; }
     if (m.type === 'preview') { if (!liveHook) previewOpen(m); return; }   // the first rows are in: the grid opens now, the row count grows until the file is read
+    if (m.type === 'notice') { encNote = m.text || ''; return; }
     if (m.type === 'previewGrow') { if (G.preview) previewGrow(m); return; }
     if (m.type === 'live' && G.preview && !liveHook) { liveSeen = performance.now(); liveDone = finishPreview(m); return; }
     if (m.type === 'live') { liveSeen = performance.now(); liveDone = (liveHook || ((x) => { status('Reading while the file is saved…'); return openGrid(x.name); }))(m); return; }   // the worker has parsed the file and keeps the columns: the grid can open before the save ends
     if (m.type === 'liveclosed') { G.preview = false; $('gridbox').hidden = true; return; }
     const w = waiters.get(m.id); if (w) { waiters.delete(m.id); w(m); }
   };
-  let liveHook = null, liveDone = null, liveSeen = 0;
+  let liveHook = null, liveDone = null, liveSeen = 0, encNote = '';
   worker.onerror = (e) => status('Worker stopped: ' + (e.message || 'unknown error'), true);
 
   function show(d, extra) {
@@ -50,7 +51,7 @@
     const id = 'j' + (++seq); active = id;
     const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage(Object.assign({ type: 'import', id, file, delimiter: $('delim').value, inline: !!inline || /[?&]inline=1/.test(location.search) }, opts || {})); });
     active = null; $('cancel').hidden = true; $('prog').hidden = true; $('selftest').disabled = false; $('go').disabled = !$('file').files.length;
-    if (res.type === 'done') { status('Import complete and checked.'); show(res.dataset); refresh(); }
+    if (res.type === 'done') { status('Import complete and checked.' + (encNote ? ' ' + encNote : '')); encNote = ''; show(res.dataset); refresh(); }
     else status((res.type === 'cancelled' ? 'Cancelled. Nothing was kept.' : 'Import failed: ' + res.message), res.type !== 'cancelled');
     return res;
   }
@@ -402,7 +403,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.1322 (LFC-pack 0.12.3)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.1330 (LFC-pack 0.12.3)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
