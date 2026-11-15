@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { buildColumns } from '../src/ingest/columns.mjs';
 import { typedCell, typedDecimal } from '../src/ingest/infer.mjs';
-const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.10.30/lfc-pack.js')); await lib.init();
+const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.10.38/lfc-pack.js')); await lib.init();
 const enc = new TextEncoder();
 let seed = 4242; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296, ri = (n) => Math.floor(rnd() * n);
 const headers = ['id', 'name', 'score', 'when', 'note'], plan = [true, false, 2, false, false];
@@ -132,4 +132,29 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
     const w2 = B.build(enc.encode([rec(1, 2), rec(2, 1)].join(eol) + eol)); assert.equal(w2.n, 2); assert.equal(B.exports.nlines(), 4 + (eol === '\r\n' ? 0 : 0) + 0 - 0, 'physical lines: 2 breaks inside the first record plus 2 record ends');
     console.log(`ok: quoted cells (${eol === '\n' ? 'LF' : 'CRLF'}): ${built} records built, ${bails} weird records stopped the chunk`);
   }
+}
+
+// Dictionary columns: a low-variety text column comes back as a code per row plus the distinct values; past 4096 distinct values in a chunk the builder stops (bail 'dict'),
+// the column goes back to text, and every cell still reads back as the same text.
+{
+  const { make } = await import('../src/ingest/colbuild.mjs');
+  const { readFileSync } = await import('node:fs');
+  const wasm = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../wasm/colbuild.wasm'));
+  const hs = ['id', 'tag', 'uid'];
+  const B = await make(wasm, hs, [true, false, false], ',', { capRows: 16384, chunkBytes: 1 << 20, dict: [false, true, false] });
+  const rows = []; for (let i = 0; i < 12000; i++) rows.push(`${i},${i < 1000 ? 'tag' + (i % 7) : i % 11 === 0 ? '' : 'v' + i},u${i}\n`);
+  const bytes = new TextEncoder().encode(rows.join('')), want = rows.map((r) => r.trim().split(',')[1]);
+  let pos = 0, idx = 0, dictChunks = 0, textChunks = 0, sawBail = false; const dec = new TextDecoder();
+  while (pos < bytes.length) {
+    const w = B.build(bytes.subarray(pos)), x = w.arr[1];
+    for (let r = 0; r < w.n; r++, idx++) {
+      const got = x.codes ? dec.decode(x.lb.bytes.subarray(x.lb.start[x.codes[r]], x.lb.end[x.codes[r]])) : dec.decode(x.bytes.subarray(x.start[r], x.end[r]));
+      assert.equal(got, want[idx], 'cell ' + idx);
+    }
+    if (w.n) { if (x.codes) dictChunks++; else textChunks++; }
+    pos += w.used;
+    if (w.bail === 'dict') { assert.equal(w.bailcol, 1); B.undict(1); sawBail = true; } else if (w.bail) assert.fail('unexpected bail ' + w.bail + ' at row ' + idx); else if (!w.used) break;
+  }
+  assert.equal(idx, 12000); assert.ok(sawBail && dictChunks >= 1 && textChunks >= 1, 'dict then text chunks, bail seen');
+  console.log(`ok: dictionary columns read back as text (${dictChunks} dictionary chunks, ${textChunks} text chunks after the bail)`);
 }
