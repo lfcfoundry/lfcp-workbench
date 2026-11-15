@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.10.42/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.11.1/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -180,7 +180,7 @@ function makeFastW(headers, plan, trackers, delimiter) {
 // The wasm builder takes the lines that keep every column's type flags (the same rules as the row builder above) and stops at any other line; that line goes through
 // the character parser (slow rows, below) and lands in the same columns, so the result does not depend on which path a line took.
 // A cell that stays text in a number column (for example "007") cannot live in a Float64Array: the import stops with err.mixed and starts again on the JSON-lines path.
-const mixedErr = () => Object.assign(new Error('A number column holds a text-like cell; the file is imported on the text path.'), { mixed: true });
+const mixedErr = (col) => Object.assign(new Error('A number column holds a text-like cell; the file is imported on the text path.'), { mixed: true, col: col == null ? -1 : col });   // col: the number column that held the cell (-1 when not known)
 const COLB = 1048576;   // bytes of CSV per wasm call and per chunk
 let C = null;
 const loadC = () => { if (C === null) { try { const s = atob('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'), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); C = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch { C = false; } } return C; };
@@ -203,7 +203,7 @@ function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn) {
       const r = B.build(b.subarray(i, i + Math.min(end - i, COLB)));
       if (r.n) { const m = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 64), e = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 64); for (let c = 0; c < n; c++) { trackers[c].n += m[c]; trackers[c].empty += e[c]; } parser.line += C.nlines(); parser.startLine = parser.line; F.rows += r.n; F.miss = 0; sink({ n: r.n, bytes: r.used, cols: r.arr }); }
       i += r.used;
-      if (r.bail === 'mixed') throw mixedErr();
+      if (r.bail === 'mixed') { if (++F.miss >= 64) F.off = true; break; }   // the character parser reads this line next and names the column if the cell really is text-like
       if (r.bail === 'dict') { B.undict(r.bailcol); if (dictOn) dictOn[r.bailcol] = false; continue; }   // more than 4096 distinct values in a chunk: this column is text from here on
       if (r.bail) { if (++F.miss >= 64) F.off = true; break; }
       if (r.used === 0) break;
@@ -221,7 +221,7 @@ function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink, dictOn
     add(f) {
       for (let c = 0; c < n; c++) {
         const raw = f[c]; trackers[c].add(raw); bytes += raw.length + 1;
-        if (kind[c]) { const v = kind[c] === 1 ? typedCell(raw) : typedDecimal(raw, kind[c]); if (v === null) vals[c].push(NaN); else if (typeof v === 'number') vals[c].push(v); else throw mixedErr(); } else vals[c].push(raw);
+        if (kind[c]) { const v = kind[c] === 1 ? typedCell(raw) : typedDecimal(raw, kind[c]); if (v === null) vals[c].push(NaN); else if (typeof v === 'number') vals[c].push(v); else throw mixedErr(c); } else vals[c].push(raw);
       }
       rows++;
     },
@@ -456,7 +456,7 @@ async function segJob(m) {
     const r = await parseSegment(m);
     if (m.dup) r.chunks2 = r.chunks.map(dupChunk);   // live columns: a second copy made here, in parallel, so the import worker keeps one and forwards the other to the pack workers
     self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer).concat(...r.chunks.map(chunkBuffers), ...(r.chunks2 || []).map(chunkBuffers)));
-  } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed) } }); }
+  } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed), col: err && err.col != null ? err.col : -1 } }); }
 }
 
 
@@ -504,7 +504,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
         t.redos = (t.redos || 0) + 1;
         r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, dict, cols, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
         stop(job);
-        if (r.mixed) throw mixedErr();   // from a verified start: the file really has a text-like cell in a number column
+        if (r.mixed) throw mixedErr(r.col);   // from a verified start: the file really has a text-like cell in a number column
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
       for (const b of r.pieces) await packBytes(b);
@@ -550,7 +550,17 @@ async function samplePlan(file, delimiter) {
 }
 
 // Staged columns can find a text-like cell in a number column late in the file; then the whole import runs again on the JSON-lines path (nothing was kept).
-async function importFile(m) { if (await importOnce(m) === 'mixed') await importOnce(Object.assign({}, m, { noColumns: true })); }
+// A number column that meets a text-like cell late in the file (a sample of the first rows said integer) no longer sends the whole import to the text path: that one column is
+// read as text and the import starts again with the other number columns kept (up to 3 times), so the staged columns, live view and pack workers stay on.
+async function importFile(m) {
+  const demote = new Set(); let mm = m;
+  for (let tries = 0; tries < 4; tries++) {
+    const r = await importOnce(mm); if (!r) return;
+    if (r === 'mixed' || tries === 3) break;
+    demote.add(r.col); mm = Object.assign({}, m, { demote: [...demote] });
+  }
+  await importOnce(Object.assign({}, m, { noColumns: true }));
+}
 const columnsOk = (m) => !m.noColumns && typeof WebAssembly !== 'undefined' && (m.columns === true || (!((self.navigator && self.navigator.deviceMemory) < 8) && (!/Android|iPhone|iPad|iPod|Mobile/i.test((self.navigator && self.navigator.userAgent) || '') || (self.navigator && self.navigator.deviceMemory) >= 8)))   // phones too when the browser reports 8 GB or more (Chrome caps the report at 8): measured on an 8 GB Android phone, first rows 1.0 s instead of 1.8-2.0 s, save 16-24% later;
 async function importOnce(m) {
   let restart = false;
@@ -615,7 +625,7 @@ async function importOnce(m) {
             view = { name, preview: true, pv, total, columns, R: null, f: null, rows: null, indices: null, filtered: false, cols: new Map(), flat: true, cache: new Map() };
             send('preview', m.id, { name, total, columns }); pvSent = now; return;
           }
-          if (view && view.preview && now - pvSent >= 80) { view.total = total; send('previewGrow', m.id, { total }); pvSent = now; }
+          if (view && view.preview && now - pvSent >= 250) { view.total = total; send('previewGrow', m.id, { total }); pvSent = now; }
         };
         col = { begin: async (h) => { colHeaders = h; }, dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
       }
@@ -637,7 +647,7 @@ async function importOnce(m) {
       };
       var packWorkersToStop = ws;
     }
-    const plan = m.untyped ? null : await samplePlan(file, delimiter); const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null;
+    let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null;
     let res = null;
     if (useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
     if (!res) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
@@ -677,10 +687,10 @@ async function importOnce(m) {
     if (view && (view.live || view.preview) && view.name === name) { view = null; send('liveclosed', m.id, {}); }
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
-    if (err && err.mixed && !m.noColumns) restart = true;
+    if (err && err.mixed && !m.noColumns) restart = err.col != null && err.col >= 0 ? { col: err.col } : true;
     else send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
   } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => w.terminate()); jobs.delete(m.id); }
-  return restart ? 'mixed' : null;
+  return restart ? (restart === true ? 'mixed' : restart) : null;
 }
 
 async function validate(name, rows) {
@@ -776,7 +786,7 @@ function makeInterner() {
     get on() { return live; },
     chunk(out, at, b, st, en, rows, make) {   // fills out[at..at+rows); make(bytes, start, end) builds a string for a cell not seen before
       for (let r = 0; r < rows; r++) {
-        const a = st[r], e = en[r], len = e - a; let h = Math.imul(len + 2166136261, 16777619); const m = len < 12 ? e : a + 6; for (let i = a; i < m; i++) h = Math.imul(h ^ b[i], 16777619); if (len >= 12) for (let i = e - 6; i < e; i++) h = Math.imul(h ^ b[i], 16777619); h >>>= 0;   // hash of the length and the first and last 6 bytes (a full-bytes compare decides equality)
+        const a = st[r], e = en[r], len = e - a; let h = Math.imul(len + 2166136261, 16777619); if (len <= 32) { for (let i = a; i < e; i++) h = Math.imul(h ^ b[i], 16777619); } else { const mid = a + (len >> 1) - 4; for (let i = a; i < a + 10; i++) h = Math.imul(h ^ b[i], 16777619); for (let i = mid; i < mid + 8; i++) h = Math.imul(h ^ b[i], 16777619); for (let i = e - 10; i < e; i++) h = Math.imul(h ^ b[i], 16777619); } h >>>= 0;   // hash of the length and all bytes up to 32, else the first 10, middle 8 and last 10 (a full-bytes compare decides equality); timestamps differ only in the middle, so a first-and-last hash made every one collide
         let p = h & mask, id = -1;
         for (;;) {
           const t = tab[p]; if (t === 0) break;

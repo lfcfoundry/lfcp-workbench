@@ -2,7 +2,7 @@
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
  * Part of JS-modules, https://github.com/lfcfoundry/JS-modules
  * Copyright (c) 2026 LFC Foundry. MIT License (see LICENSE at the repository root).
- * Version 0.10.42 (API 0)
+ * Version 0.11.1 (API 0)
  *
  * Needs WebAssembly (zstd, the tokenizer and the string deduplicator are compiled from C; page policy 'wasm-unsafe-eval' and nothing else). No other dependency, one file.
  * Contains zstd 1.5.7 (BSD-3-Clause, Meta Platforms), compiled to wasm32; see NOTICE-zstd.txt next to this file.
@@ -1032,7 +1032,87 @@
     if (b.t === 's' || b.t === 'D') { b.r0 = b.fr[0]; b.dl = b.fr.dl; }   // NX A: the uncompressed values (or labels), for the block filter
     b.fr = null; b.next = null; return b;
   }
-  function encodeColumn(v, zs, level, tmode, sj, key) { var nb = nullBest(v, zs, level, tmode, key); if (nb) return nb; return settle(zs, level, encodeColumn0(v, zs, level, tmode, sj, key)); }
+  // 'W' (since 0.11.0): a text column whose every cell is a date-time written "YYYY-MM-DDTHH:MM:SS.mmm" (f 0) or "YYYY-MM-DDTHH:MM:SS" (f 1), a real calendar date in years 1970 to 9999, no nulls. Stored as the epoch
+  // milliseconds (whole numbers, the number layouts V/B/F) and rebuilt as the same text, so it reads back identical. Anything else is written as before.
+  var DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  function dig(x, i, k) { var r = 0, c; for (; k > 0; k--, i++) { c = x.charCodeAt(i) - 48; if (c < 0 || c > 9) return -1; r = r * 10 + c; } return r; }
+  function dateParts(y, mo, d, h, mi, se, ms) {   // -> epoch ms (1970 on), or NaN if the parts are not a real date-time
+    if (!(y >= 1970) || mo < 1 || mo > 12 || d < 1 || h < 0 || h > 23 || mi < 0 || mi > 59 || se < 0 || se > 59 || ms < 0) return NaN;
+    if (d > DIM[mo - 1] + (mo === 2 && (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)) ? 1 : 0)) return NaN;
+    var yy = mo <= 2 ? y - 1 : y, era = Math.floor(yy / 400), yoe = yy - era * 400, doy = Math.floor((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5) + d - 1, doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+    return (((era * 146097 + doe - 719468) * 24 + h) * 60 + mi) * 60000 + se * 1000 + ms;
+  }
+  function dateMs(x, f) {   // -> epoch ms, or NaN if x is not exactly that form
+    if (x.length !== (f ? 19 : 23) || x.charCodeAt(4) !== 45 || x.charCodeAt(7) !== 45 || x.charCodeAt(10) !== 84 || x.charCodeAt(13) !== 58 || x.charCodeAt(16) !== 58 || (!f && x.charCodeAt(19) !== 46)) return NaN;
+    return dateParts(dig(x, 0, 4), dig(x, 5, 2), dig(x, 8, 2), dig(x, 11, 2), dig(x, 14, 2), dig(x, 17, 2), f ? 0 : dig(x, 20, 3));
+  }
+  function digB(b, i, k) { var r = 0, c; for (; k > 0; k--, i++) { c = b[i] - 48; if (c < 0 || c > 9) return -1; r = r * 10 + c; } return r; }
+  function dateAt(b, o, f) {   // one date-time of 19 (f 1) or 23 (f 0) bytes at o -> epoch ms, or NaN
+    if (b[o + 4] !== 45 || b[o + 7] !== 45 || b[o + 10] !== 84 || b[o + 13] !== 58 || b[o + 16] !== 58 || (!f && b[o + 19] !== 46)) return NaN;
+    return dateParts(digB(b, o, 4), digB(b, o + 5, 2), digB(b, o + 8, 2), digB(b, o + 11, 2), digB(b, o + 14, 2), digB(b, o + 17, 2), f ? 0 : digB(b, o + 20, 3));
+  }
+  function dateMany(a, n) { var h = new Set(), i, half = n >> 1; for (i = 0; i < n; i++) { h.add(a[i]); if (h.size > half) return true; } return false; }   // more than n / 2 distinct values: fewer would be written as a dictionary
+  function dateNumsB(b, n) {   // b: n values joined by 0 bytes (ASCII), more than n / 2 distinct (the caller knows) -> { f, a } or null
+    if (n < 2) return null;
+    var f = b.length === n * 20 - 1 ? 1 : b.length === n * 24 - 1 ? 0 : -1, w = f ? 20 : 24, a, i, o, t; if (f < 0) return null;
+    a = new Float64Array(n);
+    for (i = 0, o = 0; i < n; i++, o += w) { if (i < n - 1 && b[o + w - 1] !== 0) return null; t = dateAt(b, o, f); if (!(t >= 0)) return null; a[i] = t; }
+    return { f: f, a: a };
+  }
+  function dateNumsBC(B, S, E, a0, n) {   // a text column as bytes plus offsets -> { f, a } or null (also null when fewer than n / 2 + 1 values differ)
+    if (n < 2) return null;
+    var f = E[a0] - S[a0] === 19 ? 1 : 0, w = f ? 19 : 23, arr = new Float64Array(n), i, t; if (E[a0] - S[a0] !== w) return null;
+    for (i = 0; i < n; i++) { if (E[a0 + i] - S[a0 + i] !== w) return null; t = dateAt(B, S[a0 + i], f); if (!(t >= 0)) return null; arr[i] = t; }
+    return dateMany(arr, n) ? { f: f, a: arr } : null;
+  }
+  function p2(v) { return v < 10 ? '0' + v : '' + v; }
+  function dateText(t, f) {
+    var ms = t % 1000, s = (t - ms) / 1000, sec = s % 60, m = (s - sec) / 60, min = m % 60, hq = (m - min) / 60, h = hq % 24, z = (hq - h) / 24 + 719468, era = Math.floor(z / 146097), doe = z - era * 146097,
+      yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365), y = yoe + era * 400, doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)), mp = Math.floor((5 * doy + 2) / 153),
+      d = doy - Math.floor((153 * mp + 2) / 5) + 1, mo = mp < 10 ? mp + 3 : mp - 9; if (mo <= 2) y++;
+    return y + '-' + p2(mo) + '-' + p2(d) + 'T' + p2(h) + ':' + p2(min) + ':' + p2(sec) + (f ? '' : '.' + (ms < 10 ? '00' : ms < 100 ? '0' : '') + ms);
+  }
+  var P2 = new Uint8Array(200); for (var pi = 0; pi < 100; pi++) { P2[pi * 2] = 48 + ((pi / 10) | 0); P2[pi * 2 + 1] = 48 + (pi % 10); }
+  function dateCol(nums, n, f) {   // the text of n epoch-millisecond values: the digits go into one byte buffer (the calendar day is worked out once per day), decoded and cut once
+    if (f !== 0 && f !== 1) throw new Error('damaged block: unknown date form');
+    var X = BD_DEC && n >= 512 ? bdx() : null;
+    if (X && X.datefmt) {   // the digits are written in WebAssembly (bdec.wasm, datefmt); a value outside the date range makes it stop and the JavaScript loop below refuses the block
+      var ww = f ? 20 : 24, L = bdLay([n * 8, n * ww]), mem = bdMem(L.end), put = new Float64Array(mem, L.at[0], n), ii;
+      for (ii = 0; ii < n; ii++) put[ii] = nums[ii];
+      if (X.datefmt(L.at[0], n, f, L.at[1]) === 0) return tdr.decode(new Uint8Array(X.memory.buffer, L.at[1], n * ww - 1)).split('\0');
+    }
+    var w = f ? 19 : 23, buf = new Uint8Array(n * (w + 1)), o = 0, i, t, day, lastDay = -1, rem, ms, sod, hh, mm, ss, x, y = 0, mo = 0, d = 0, ymd0 = 0, ymd1 = 0, ymd2 = 0, ymd3 = 0, ymd5 = 0, ymd6 = 0, ymd8 = 0, ymd9 = 0;
+    for (i = 0; i < n; i++, o += w + 1) {
+      t = nums[i]; if (!(t >= 0 && t <= 253402300799999 && t % 1 === 0)) throw new Error('damaged block: date out of range');
+      day = Math.floor(t / 86400000);
+      if (day !== lastDay) { lastDay = day; var z = day + 719468, era = Math.floor(z / 146097), doe = z - era * 146097, yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365), doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100)), mp = Math.floor((5 * doy + 2) / 153);
+        y = yoe + era * 400; d = doy - Math.floor((153 * mp + 2) / 5) + 1; mo = mp < 10 ? mp + 3 : mp - 9; if (mo <= 2) y++;
+        ymd0 = 48 + ((y / 1000) | 0); ymd1 = 48 + (((y / 100) | 0) % 10); ymd2 = 48 + (((y / 10) | 0) % 10); ymd3 = 48 + (y % 10); ymd5 = 48 + ((mo / 10) | 0); ymd6 = 48 + (mo % 10); ymd8 = 48 + ((d / 10) | 0); ymd9 = 48 + (d % 10); }
+      buf[o] = ymd0; buf[o + 1] = ymd1; buf[o + 2] = ymd2; buf[o + 3] = ymd3; buf[o + 4] = 45; buf[o + 5] = ymd5; buf[o + 6] = ymd6; buf[o + 7] = 45; buf[o + 8] = ymd8; buf[o + 9] = ymd9; rem = (t - day * 86400000) | 0; ms = rem % 1000; sod = (rem - ms) / 1000; hh = (sod / 3600) | 0; mm = ((sod - hh * 3600) / 60) | 0; ss = sod - hh * 3600 - mm * 60;
+      buf[o + 10] = 84; buf[o + 11] = P2[hh * 2]; buf[o + 12] = P2[hh * 2 + 1]; buf[o + 13] = 58; buf[o + 14] = P2[mm * 2]; buf[o + 15] = P2[mm * 2 + 1]; buf[o + 16] = 58; buf[o + 17] = P2[ss * 2]; buf[o + 18] = P2[ss * 2 + 1];
+      if (!f) { x = (ms / 100) | 0; ms -= x * 100; buf[o + 19] = 46; buf[o + 20] = 48 + x; buf[o + 21] = P2[ms * 2]; buf[o + 22] = P2[ms * 2 + 1]; }
+      buf[o + w] = 0;
+    }
+    return n ? tdr.decode(buf.subarray(0, o - 1)).split('\0') : [];
+  }
+  function dateNums(v, n) {   // -> { f, a } or null
+    if (n < 2 || typeof v[0] !== 'string') return null;
+    var f = v[0].length === 19 ? 1 : 0, a = new Float64Array(n), i, t; if (v[0].length !== (f ? 19 : 23)) return null;
+    for (i = 0; i < n; i++) { if (typeof v[i] !== 'string') return null; t = dateMs(v[i], f); if (!(t >= 0)) return null; a[i] = t; }
+    return dateMany(a, n) ? { f: f, a: a } : null;
+  }
+  var WMARK = 0;   // counts the date columns written, so a pack call can tell whether its file needs format minor 2
+  function dateWrap(dn, zs, level, key) {   // the date numbers as the best number layout, as one 'W' column; null if the number layouts did not get a typed column
+    var wi = settle(zs, level, encodeColumn0(dn.a, zs, level, 0, undefined, key, { nz: 0, ai: 1 }));
+    if (!wi || !(wi.t === 'V' || wi.t === 'B' || wi.t === 'F')) return null;
+    WMARK++; return { t: 'W', p: { t: wi.t, p: wi.p, f: dn.f }, n: wi.n, z: wi.z, size: wi.size, st: wi.st };
+  }
+  function encodeColumn(v, zs, level, tmode, sj, key) {
+    var nb = nullBest(v, zs, level, tmode, key); if (nb) return nb;
+    if (DATE_MODE) { var dn = dateNums(v, v.length), w = dn && dateWrap(dn, zs, level, key); if (w) return w; }
+    return settle(zs, level, encodeColumn0(v, zs, level, tmode, sj, key));
+  }
+  var DATE_MODE = !(typeof globalThis !== 'undefined' && globalThis.__NODATE);
   // research prototype (null plane, type N): a column whose values are one scalar kind plus some nulls keeps the typed encoding of its non-null values, plus one bit plane that marks the nulls
   var NMARK = 0;   // counts the null-plane (N) columns written, so a pack call can tell whether its file needs format minor 1
   var NULL_MODE = (typeof globalThis !== 'undefined' && globalThis.__NULLMODE) || 'plane';
@@ -1126,7 +1206,7 @@
       if (sj) nD = (n >> 1) + 1;   // where the loop below would stop
       else if (B59 && B62 && n >= 4096 && (sd = someDistinct(v)) > 128 && sd < B62 && (codes = new Array(n), (nD = hxBig(v, n, cap, labels, codes)) >= 0)) { }   // B62 (Firefox): many, but not nearly all, distinct values: a JS table hashed on every char of a short value
       else if (B59 && n >= 4096 && (sd || (sd = someDistinct(v))) > 128 && (r59 = sdzCol(v, n, cap))) { nD = r59.D; codes = r59.codes; labB = r59.lab; jn = r59.all; }   // B59 (Firefox): the count, codes and bytes from wasm (a Map of strings costs about 5x Chromium's there)
-      else if (B59 && sd > 0 && sd <= 128 && (codes = new Array(n), (nD = hxCount(v, n, cap, labels, codes)) >= 0)) { }   // B60
+      else if (B59 && sd > 0 && sd <= 128 && (codes = hxCodes(n), (nD = hxCount(v, n, cap, labels, codes)) >= 0)) { }   // B60
       else { labels.length = 0; map = new Map(); codes = new Array(n); for (i = 0; i < n; i++) { c = map.get(v[i]); if (c === undefined) { if (labels.length * cap > n) break; c = labels.length; map.set(v[i], c); labels.push(v[i]); } codes[i] = c; } nD = labels.length; }   // past n / 2 distinct values the column is neither a dictionary nor sharing templates cheaply, and the full count is not needed
       // B45: the check (no 0 char, well formed) runs once on one join: of every value when the plain layout is next, or of the distinct values only when the loop above saw them all (a dictionary), which is the same test
       var sOk = !!sj || !!r59; if (!sOk) { if (nD * 4 > n || nD >= 65536) { jn = STR_ASCII ? strAscii(v, n) : null; if (jn === null) { jn = strJoinOk(v, n); if (jn !== null) jn = te.encode(jn); } sOk = jn !== null; } else sOk = strJoinOk(labels, nD) !== null; }
@@ -1239,6 +1319,9 @@
   function someDistinct(v) { var s = new Set(), i; for (i = 0; i < 1024; i++) s.add(v[i]); return s.size; }
   // B60 (Firefox only): first-seen dictionary codes of a column with few distinct values from a small open-addressing table hashed on a value's length and four chars (=== compares the content), instead of a Map of strings; -> the distinct count, or -1 past 2,048 distinct values (the Map path runs). The same labels and codes.
   var HXK = null, HXV = null;
+  // B70 (Firefox): the codes go into one reused Uint16Array view (the Uint8/Uint16 copy and bitpack read it; both copy)
+  var HXC = null;
+  function hxCodes(n) { if (!HXC || HXC.byteLength < 2 * n) HXC = new ArrayBuffer(2 * n); return new Uint16Array(HXC, 0, n); }
   function hxCount(v, n, cap, labels, codes) {
     var M = 4095, x, L, h, k, c, i; if (!HXK) { HXK = new Array(4096); HXV = new Int32Array(4096); } HXK.fill(undefined);
     for (i = 0; i < n; i++) { x = v[i]; L = x.length; h = L; if (L) { h = (h * 31 + x.charCodeAt(0)) | 0; h = (h * 31 + x.charCodeAt(L - 1)) | 0; h = (h * 31 + x.charCodeAt(L >> 1)) | 0; if (L > 2) h = (h * 31 + x.charCodeAt(L - 2)) | 0; } h = (h ^ (h >>> 7)) & M;
@@ -1300,7 +1383,7 @@
   }
   // B40/B41 (research): bdec.wasm, kernels for bit-packed number columns. One small instance with its own memory (grown as needed, dropped by trim()).
   // B41: colB unpacks in wasm in Chrome/Edge and Firefox (1M taxi rows, whole-table unpackRows 0.92 Chromium 156, 0.78 Firefox 158; one column 0.84 / 0.78); WebKitGTK 2.52.6 was 1.19x slower in wasm, so Safari-family engines keep the JS loop
-  var BDX = null, BDB64 = "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", BD_DEC = V8 || GECKO;
+  var BDX = null, BDB64 = "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", BD_DEC = V8 || GECKO;
   function bdx() { if (BDX === null) { try { if (!MODS['BDB64']) MODS['BDB64'] = new WebAssembly.Module(fromB64(BDB64)); BDX = new WebAssembly.Instance(MODS['BDB64'], {}).exports; } catch (e) { BDX = false; } } return BDX; }
   function bdMem(need) { var m = BDX.memory, have = m.buffer.byteLength; if (need > have) m.grow(Math.ceil((need - have) / 65536)); return m.buffer; }
   function bdLay(parts) { var p = (BDX.__heap_base.value + 7) & ~7, at = [], q; for (q = 0; q < parts.length; q++) { at.push(p); p = (p + parts[q] + 8 + 7) & ~7; } return { at: at, end: p }; }   // each part gets 8 zero-filled bytes after it (the kernels read 8 bytes at a time)
@@ -1443,6 +1526,7 @@
       for (i = 0; i < n; i++) { an = al[i]; aa = new Array(an); ac = 0; for (aj = 0; aj < an; aj++) { ac += ar ? av[ap++] : unzz(av[ap++]); aa[aj] = ac; } o[i] = aa; }
       return o;
     }
+    if (t === 'W') return dateCol(decodeColumn({ t: p.t, p: p.p, n: n }, zs, frames), n, p.f);
     if (t === 'L') return untemplate(n, frames);
     if (t === 's') return n ? tdr.decode(frames[0]).split('\0') : [];
     if (t === 'D') return colD(frames, n, p);
@@ -1590,7 +1674,7 @@
     var tm21 = opts.templates === false ? 0 : opts.templates === true ? 2 : 1, es = new Array(cols.length), wait = null, rc = opts._rcol;
     for (j = 0; j < cols.length; j++) {
       if (rc && pre21[j] && pre21[j] !== 3 && (pre21[j] === 1 ? cols[j].length : cols[j].c) >= B28_MIN) {   // B28: a big typed number column is encoded in a helper (its Float64Array moves there)
-        (wait || (wait = [])).push(rc(j, pre21[j], cols[j], keys[j], level, tm21, chk26).then(function (j2) { return function (r) { if (r.bail) throw B26_BAIL; if (r.e.t === 'N') NMARK++; es[j2] = r; }; }(j)));
+        (wait || (wait = [])).push(rc(j, pre21[j], cols[j], keys[j], level, tm21, chk26).then(function (j2) { return function (r) { if (r.bail) throw B26_BAIL; if (r.e.t === 'N') NMARK++; if (r.e.t === 'W') WMARK++; es[j2] = r; }; }(j)));
         cols[j] = []; continue; }
       es[j] = b28Col(pre21[j], cols[j], keys[j], zs, level, tm21, chk26);
     }
@@ -1666,6 +1750,7 @@
     var bk = n >= 16 ? bkLoad() : null, KL = null, fl = 0, HB = 1 << Math.max(10, Math.min(20, 32 - Math.clz32(n * 2)));
     if (bk) { KL = bkPrep(bk, B, S, E, a, n, HB); if (KL) { fl = bk.x.bcscan(KL.B, BL, KL.S, KL.E, n); if (fl & 3) KL = null; else { hi = fl & 4 ? 128 : 0; tot = bk.x.bctot(); } } }
     if (!KL) { for (i = 0; i < n; i++) { s = S[a + i]; e = E[a + i]; if (!(s >= 0 && e >= s && e <= BL)) throw new Error('LfcPack: text column "' + key + '": value ' + (a + i) + ' has offsets outside its bytes'); for (k = s; k < e; k++) { if (B[k] === 0) return encodeColumn(byteColStrings(bc, a, n), zs, level, tmode, undefined, key); hi |= B[k]; } tot += e - s; } }
+    if (n >= 2 && DATE_MODE) { var dnC = dateNumsBC(B, S, E, a, n), wC = dnC && dateWrap(dnC, zs, level, key); if (wC) return wC; }
     if (!n || tmode === 2) return encodeColumn(byteColStrings(bc, a, n), zs, level, tmode, undefined, key);
     s = S[a]; e = E[a]; var L0 = e - s, ip = L0 >= 7 && L0 <= 15, dots = 0;
     for (k = s; k < e && ip; k++) { if (B[k] === 46) dots++; else if (B[k] < 48 || B[k] > 57) ip = false; }
@@ -1886,7 +1971,7 @@
       var pv7 = JSON.parse(FSTD.decode(new Uint8Array(mem.buffer, P.sout, W.x.litjoin(P['in'], P.cval, P.clen, P.cfd, P.kix + 4 * kixo[j], count[j], P.sout)))), b7 = pre7[j], q7;
       if (b7 === 0) colv[j] = pv7; else for (q7 = 0; q7 < pv7.length; q7++) colv[j][b7 + q7] = pv7[q7];
     }
-    var frames = [], meta = { keys: keys, cols: [] }, zone = [], best, cd, z, k2, t;
+    var frames = [], meta = { keys: keys, cols: [] }, zone = [], best, cd, z, k2, t, dnB, wB;
     var ENCS = [];
     function cand(tn, p, fr, n) { best = addCand(zs, clv ? FLT : level, best, tn, p, fr, n); }   // fast: text columns at the fast level
     function numCands(base, c, scale, key, zc) {   // the candidates of a number column held as scaled whole numbers (mantissas), as the general writer would try them
@@ -1921,6 +2006,7 @@
       if (hexL[j] === 3600) cand('U', {}, [colv[j]], c);   // as encodeColumn writes a UUID column
       else if (hexL[j] > 0) cand('H', { L: hexL[j] }, [colv[j]], c);   // as encodeColumn writes a hex column
       else if (ipK[j]) cand('I', {}, [sdOut[j]], c);   // as encodeColumn writes an IPv4 column
+      else if (sOnly[j] && DATE_MODE && (dnB = dateNumsB(sdMany[j], c)) && (wB = dateWrap(dnB, zs, level, keys[j]))) best = wB;   // a date column read from its bytes: no strings, stored as epoch milliseconds
       else if (sOnly[j]) cand('s', {}, dlOf([sdMany[j]], (c >> 1) + 1), c);   // as encodeColumn writes a many-value string column without templates
       else if (sdD[j]) {   // as encodeColumn writes a string column of at most n / 2 distinct values
         var D3 = sdD[j], cds = sdCodes[j];
@@ -2544,7 +2630,7 @@
   }
   function packManyNow(inputs, opts) {
     opts = opts || {}; need(true);
-    var ti, b, bb = opts.blockBytes || BLOCK_BYTES, p, blocks = [], parts = [], zone = [], eqf = [], eqAny = false, off = 0, rows = 0, tail = true, nm0 = NMARK;
+    var ti, b, bb = opts.blockBytes || BLOCK_BYTES, p, blocks = [], parts = [], zone = [], eqf = [], eqAny = false, off = 0, rows = 0, tail = true, nm0 = NMARK, wm0 = WMARK;
     var exact = !!opts.exact, st = opts.share && !exact ? (opts._st || sharedState()) : null, ctx = { zs: S.zfull, sh: S.sh, st: st, paths: opts.paths === 'only' ? 'only' : opts.paths !== false, pick: opts._pick }, exc = {}, spl = {}, fatal = new TextDecoder('utf-8', { fatal: true });
     var retry = [], s0, e, chunk, kind, blk, ex, fb, r0, mid;
     // paths: 'auto' (opt-in): an input of PATHS_TRY blocks or more picks the string layout of its big nested blocks from a 128 KB sample (samplePick)
@@ -2557,7 +2643,7 @@
     if (inputs[ti].rowsArr) {   // B18b: row objects, in slices of about one block of text
       var RA = inputs[ti].rowsArr, est = JSON.stringify(RA.slice(0, 1024)).length / Math.min(1024, RA.length) + 1, stp = Math.max(1024, Math.floor(bb / est)), ra, sl, cnt;
       var hb0 = opts._hb && headOn(est * RA.length, bb) ? Math.max(1, Math.ceil(HEAD_BYTES / est)) : 0;   // P13i: the B22 head block for tables that took the text path before
-      for (ra = 0, cnt = hb0 || stp;   /* B22 is for the text path: a head block on row saves made the first saves 1.2x slower (10 MB table, Chromium) */ ra < RA.length; ra += cnt, cnt = stp) { sl = RA.slice(ra, ra + cnt); blk = writeFlatBlock(ctx, { rowsIn: sl }, opts); if (!blk) return packManyNow([{ name: inputs[ti].name, bytes: rowsBytes(RA) }], opts); if (blk.rows <= B39_ROWS && ra === 0 && sl.length === RA.length && inputs.length === 1) { blk = b39Small(ctx, blk, sl, opts, st); if (blk.kind === 'r') NMARK = nm0; }
+      for (ra = 0, cnt = hb0 || stp;   /* B22 is for the text path: a head block on row saves made the first saves 1.2x slower (10 MB table, Chromium) */ ra < RA.length; ra += cnt, cnt = stp) { sl = RA.slice(ra, ra + cnt); blk = writeFlatBlock(ctx, { rowsIn: sl }, opts); if (!blk) return packManyNow([{ name: inputs[ti].name, bytes: rowsBytes(RA) }], opts); if (blk.rows <= B39_ROWS && ra === 0 && sl.length === RA.length && inputs.length === 1) { blk = b39Small(ctx, blk, sl, opts, st); if (blk.kind === 'r') { NMARK = nm0; WMARK = wm0; } }
         blocks.push(blockEntry(opts, off, blk.bytes, blk.rows, blk.kind || 'n', ti, blk.kind === 'f' ? blk.prefix : undefined)); zone.push(blk.zone);   // B55: row saves record the prefix size too, so their files get per-column checks as text saves do (B44)
  var eqb = blk.kind === 'f' ? eqOf(blk) : 0; eqf.push(eqb); if (eqb) eqAny = true; parts.push(blk.bytes); off += blk.bytes.length; rows += blk.rows; }
       tail = true; continue;
@@ -2584,7 +2670,7 @@
         if (mid < 0 || mid + 1 >= e) throw err;
         retry.push([mid + 1, e], [s0, mid + 1]); continue;
       }
-      if (!exact && s0 === 0 && e === b.length && inputs.length === 1 && !retry.length) { blk = b39Small(ctx, blk, chunk, opts, st); if (blk.kind === 'r') NMARK = nm0; }
+      if (!exact && s0 === 0 && e === b.length && inputs.length === 1 && !retry.length) { blk = b39Small(ctx, blk, chunk, opts, st); if (blk.kind === 'r') { NMARK = nm0; WMARK = wm0; } }
       if (exact) { ex = exceptionsOf(blk, chunk, blk.kind || 'n'); if (ex) { if (ex.raw.length) exc[blocks.length] = ex.raw; if (ex.spell.length) spl[blocks.length] = ex.spell; } }
       blocks.push(blockEntry(opts, off, blk.bytes, blk.rows, blk.kind || 'n', ti, blk.kind === 'f' ? blk.prefix : undefined)); zone.push(blk.zone); var eqb = blk.kind === 'f' ? eqOf(blk) : 0; eqf.push(eqb); if (eqb) eqAny = true; parts.push(blk.bytes);
       off += blk.bytes.length; rows += blk.rows;
@@ -2604,7 +2690,7 @@
     if (st && !opts._st && st.used) secs.push(sharedSection(st));
     if (exact && Object.keys(exc).length) secs.push(excSection(exc));
     if (exact && Object.keys(spl).length) secs.push(spellSection(spl));
-    parts.push(writeFooter(S.zfull, secs, true, NMARK > nm0 ? 1 : 0));
+    parts.push(writeFooter(S.zfull, secs, true, WMARK > wm0 ? 2 : NMARK > nm0 ? 1 : 0));
     if (opts._tryFirst) opts._picked = ctx.pick;
     return concat(parts);
   }
@@ -3320,7 +3406,7 @@
       .then(function (ok) { return ok === true; }, function () { return false; });
     return warmP;
   }
-  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, aggregate: auto(aggregate, false), unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.10.42', apiVersion: 0 };
+  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, aggregate: auto(aggregate, false), unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.11.1', apiVersion: 0 };
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
   // ================================================================ delta saves v2 (prototype, off by default): packTables(x, { base }) / unpackTables(file, { base })
@@ -3781,7 +3867,7 @@
   }
   function packRowsBlocks(RA, opts) {   // packManyNow's row path, with blocks that may wait on helpers -> Promise of bytes, or null when a block cannot take the row path
     need(true);
-    var bb = opts.blockBytes || BLOCK_BYTES, nm0 = NMARK, ctx = { zs: S.zfull, sh: S.sh, st: null, paths: opts.paths === 'only' ? 'only' : opts.paths !== false, pick: opts._pick }, waits = [], ra, sl, blk;
+    var bb = opts.blockBytes || BLOCK_BYTES, nm0 = NMARK, wm0 = WMARK, ctx = { zs: S.zfull, sh: S.sh, st: null, paths: opts.paths === 'only' ? 'only' : opts.paths !== false, pick: opts._pick }, waits = [], ra, sl, blk;
     if (ctx.pick == null && opts.paths !== 'auto' && !PATHS_RULE) ctx.pick = 1;
     if (ctx.pick == null && opts.paths !== false && opts.paths !== 'only' && PATHS_RULE) ctx.pick = 2;
     if (ctx.pick == null && !opts._tryFirst) ctx.pick = 1;   // no input text: as packManyNow decides for a row input
@@ -3805,7 +3891,7 @@
         { id: SEC_ZONE, flags: 0, payload: te.encode(JSON.stringify(zone)) },
         { id: SEC_FLAGS, flags: 1, payload: te.encode(JSON.stringify({ exact: false, tail: true })) }
       ].concat(eqs ? [eqs] : [], metaSecs(opts));
-      parts.push(writeFooter(S.zfull, secs, true, NMARK > nm0 ? 1 : 0));
+      parts.push(writeFooter(S.zfull, secs, true, WMARK > wm0 ? 2 : NMARK > nm0 ? 1 : 0));
       return concat(parts);
     }); }
   }
