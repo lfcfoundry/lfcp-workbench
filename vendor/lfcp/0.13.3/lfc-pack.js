@@ -2,7 +2,7 @@
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
  * Part of JS-modules, https://github.com/lfcfoundry/JS-modules
  * Copyright (c) 2026 LFC Foundry. MIT License (see LICENSE at the repository root).
- * Version 0.13.2 (API 0)
+ * Version 0.13.3 (API 0)
  *
  * Needs WebAssembly (zstd, the tokenizer and the string deduplicator are compiled from C; page policy 'wasm-unsafe-eval' and nothing else). No other dependency, one file.
  * Contains zstd 1.5.7 (BSD-3-Clause, Meta Platforms), compiled to wasm32; see NOTICE-zstd.txt next to this file.
@@ -3342,6 +3342,7 @@
     return packMany([{ name: null, bytes: bytesOf(chunk) }], o);
   }
   function packBlockColumns(obj, o) {
+    if (!o._nolabels && obj && typeof obj === 'object') obj = dictifyColumns(obj, o.blockBytes || BLOCK_BYTES);
     var t = colTable(obj, 'packBlock'), fb = function () { return packMany([{ name: null, bytes: rowsBytes(t.rowsOf(0, t.n)) }], o); };
     if (t instanceof Error) return Promise.reject(t);
     if (t.empty) return Promise.resolve().then(fb);
@@ -3500,7 +3501,7 @@
       .then(function (ok) { return ok === true; }, function () { return false; });
     return warmP;
   }
-  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, aggregate: auto(aggregate, false), unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.13.2', apiVersion: 0 };
+  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, aggregate: auto(aggregate, false), unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.13.3', apiVersion: 0 };
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
   // ================================================================ delta saves v2 (prototype, off by default): packTables(x, { base }) / unpackTables(file, { base })
@@ -3920,6 +3921,29 @@
     var CT = { __ct: { keys: keys, A: A }, length: n, slice: function (s0, s1) { if (s0 < 0) s0 = Math.max(0, n + s0); if (s1 == null || s1 > n) s1 = n; return rowsOf(s0, s1); } }, z;
     for (z = 0; z < Math.min(256, n); z++) CT[z] = rowsOf(z, z + 1)[0];
     return { CT: CT, empty: !keys.length || n === 0, rowsOf: rowsOf, n: n };
+  }
+  // Save path (since 0.13.3): a piece of plain string arrays that is cut into several blocks gets its low-variety text columns turned into { kind: 'dict' } inputs first, so the blocks share one
+  // label table per column (the same as when the caller hands dictionaries over). A column is left alone when it has a non-string, a 0 byte, an unpaired surrogate, or many different values.
+  var DICTIFY_MIN = 4096;
+  function dictifyColumns(obj, bb) {
+    var keys = Object.keys(obj), n = -1, est = 0, j, k, a, i, m, v, any = false, out = null;
+    for (j = 0; j < keys.length; j++) { a = obj[keys[j]]; if (!a || typeof a.length !== 'number') return obj; if (n < 0) n = a.length; else if (a.length !== n) return obj;
+      if (Array.isArray(a)) { m = Math.min(64, a.length); k = 0; for (i = 0; i < m; i++) k += typeof a[i] === 'string' ? a[i].length + 3 : 8; est += m ? k / m : 8; } else est += isDictCol(a) ? 4 : isByteCol(a) ? 12 : 8; }
+    if (n < DICTIFY_MIN || est * n < bb * 1.5) return obj;
+    var te = new TextEncoder(), cap = n >> 2, SURR = /[\uD800-\uDFFF\0]/;
+    for (j = 0; j < keys.length; j++) { a = obj[keys[j]]; if (!Array.isArray(a) || typeof a[0] !== 'string') continue;
+      var map = new Map(), lab = [], ids = new Int32Array(n), c, ok = true;
+      for (i = 0; i < n; i++) { v = a[i]; if (typeof v !== 'string') { ok = false; break; } c = map.get(v);
+        if (c === undefined) { c = lab.length; if (c >= cap || c >= 65535 || (i === 1023 && c > 768)) { ok = false; break; } map.set(v, c); lab.push(v); }
+        ids[i] = c; }
+      if (!ok || lab.length < 2) continue;
+      if (SURR.test(lab.join(''))) continue;
+      var bs = te.encode(lab.join('\0')), st = new Int32Array(lab.length), en = new Int32Array(lab.length), q = 0, z;   // one encode, the labels are split at their 0 bytes
+      for (z = 0; z < bs.length; z++) if (bs[z] === 0) { en[q++] = z; st[q] = z + 1; }
+      en[q] = bs.length; if (q !== lab.length - 1) continue;
+      if (!out) { out = {}; for (k in obj) out[k] = obj[k]; }
+      out[keys[j]] = { kind: 'dict', labels: { bytes: bs, start: st, end: en }, ids: ids }; any = true; }
+    return any ? out : obj;
   }
   function packColumnsParallel(obj, opts) {
     var t = colTable(obj, 'packColumnsParallel');
