@@ -2,6 +2,11 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const worker = new Worker(window.__WORKER_URL || './worker.js');
+  if (window.__WORKER_URL) {   // a page opened from a file has an opaque origin, where a worker cannot start its own helpers: the worker asks, the page starts them and hands over ports (see mkWorker in worker.js)
+    const hs = new Map(); let hid = 0;
+    const spawn = (k) => { const ids = [], ports = []; for (let i = 0; i < k; i++) { const h = new Worker(window.__WORKER_URL), ch = new MessageChannel(), id = ++hid; h.postMessage({ type: 'attachPort', port: ch.port1 }, [ch.port1]); hs.set(id, h); ids.push(id); ports.push(ch.port2); } worker.postMessage({ type: 'ports', ids, ports }, ports); };
+    worker.addEventListener('message', (e) => { const m = e.data || {}; if (m.type === 'helperKill') { const h = hs.get(m.id); if (h) { h.terminate(); hs.delete(m.id); } } else if (m.type === 'helperPool') spawn(m.n); });
+  }
   let seq = 0, active = null, last = null; const waiters = new Map();
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const fmt = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB';
@@ -374,7 +379,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.2351 (LFC-pack 0.10.42)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.15.0011 (LFC-pack 0.10.42)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
