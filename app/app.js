@@ -57,16 +57,21 @@
     if (!scaled()) return Math.floor(sc.scrollTop / ROW);
     return Math.max(0, Math.round(sc.scrollTop / (MAXH - sc.clientHeight) * (G.count - vis)));
   }
+  const colWidth = () => 11 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);   // the .gc width in css is 11rem
   function renderRows() {
     const sc = $('gridscroll'), first = topIndex(), host = $('gridrows');
     host.style.top = (scaled() ? sc.scrollTop - (first - G.start) * ROW : Math.max(0, G.start) * ROW) + 'px';
-    host.innerHTML = G.rows.map((r) => '<div class="gr">' + r.map((v, i) => '<div class="gc' + (G.cols[i].type === 'integer' || G.cols[i].type === 'number' ? ' num' : '') + '" title="' + esc(v) + '">' + esc(v) + '</div>').join('') + '</div>').join('');
+    // Only the columns in view (and one more each side) are drawn; the space element keeps the full width so the scroll bar and the header stay right. Wide data (50 columns) used to rebuild every cell on each jump.
+    const CW = colWidth(), nc = G.cols.length, c0 = Math.max(0, Math.floor(sc.scrollLeft / CW) - 1), c1 = Math.min(nc, Math.ceil((sc.scrollLeft + sc.clientWidth) / CW) + 1); G.c0 = c0; G.c1 = c1;
+    $('gridspace').style.width = (nc * CW) + 'px';
+    host.style.setProperty('--pad', (c0 * CW) + 'px'); const pad = '', cls = G.cols.map((c) => (c.type === 'integer' || c.type === 'number' ? 'gc num' : 'gc'));
+    let h = ''; for (const r of G.rows) { h += '<div class="gr">' + pad; for (let i = c0; i < c1; i++) h += '<div class="' + cls[i] + '">' + esc(r[i]) + '</div>'; h += '</div>'; } host.innerHTML = h;
     return first;
   }
   let winSeq = 0;   // the newest request wins: a slower, older reply (scrolling fast, or the worker busy) must not replace the rows for the place the person is now at
   async function loadWindow() {
     const sc = $('gridscroll'), first = Math.max(0, topIndex() - 10), mine = ++winSeq;
-    if (G.start >= 0 && Math.abs(first - G.start) < 10 && G.rows.length) { $('gridhead').scrollLeft = sc.scrollLeft; return; }
+    if (G.start >= 0 && Math.abs(first - G.start) < 10 && G.rows.length) { const c0 = Math.max(0, Math.floor(sc.scrollLeft / colWidth()) - 1); if (c0 !== G.c0) renderRows(); $('gridhead').scrollLeft = sc.scrollLeft; return; }
     const r = await call({ type: 'page', start: first, count: WINDOW }); if (mine !== winSeq) return;
     G.start = r.start; G.rows = r.rows; G.numbers = r.numbers; renderRows(); $('gridhead').scrollLeft = sc.scrollLeft;
   }
@@ -98,6 +103,8 @@
     return r;
   }
   $('gridscroll').addEventListener('scroll', () => { if (!G.busy) { G.busy = true; requestAnimationFrame(async () => { G.busy = false; await loadWindow(); }); } });
+  $('gridrows').addEventListener('mouseover', (e) => { const t = e.target; if (t.classList && t.classList.contains('gc') && !t.title) t.title = t.textContent; });   // the full text of a cut-off cell shows on hover (made then, not for every cell)
+  window.addEventListener('resize', () => { if (typeof G !== 'undefined' && G.rows && G.rows.length) renderRows(); });
   // Export the rows now shown (filter and sort applied) as CSV. Returns the worker's reply; with download=true also saves the file.
   async function exportCsv(download, bom) {
     status('Preparing CSV…');
@@ -367,7 +374,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.1108 (LFC-pack 0.10.40)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.14.2332 (LFC-pack 0.10.40)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
