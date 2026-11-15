@@ -589,6 +589,7 @@ async function toUtf8File(file) {
   return new File(parts, file.name);
 }
 async function importWithEncoding(m) {
+  const early = { cancelled: false, pre: true }; jobs.set(m.id, early);   // a cancel that arrives while the file is checked still counts
   try { if (m.file && m.file.size && await notUtf8(m.file)) { m = Object.assign({}, m, { file: await toUtf8File(m.file) }); send('notice', m.id, { text: 'This file is not UTF-8, so it was read as Windows-1252.' }); } }
   catch { /* the normal import reports any real problem */ }
   return importFile(m);
@@ -605,7 +606,7 @@ async function importFile(m) {
 const columnsOk = (m) => !m.noColumns && typeof WebAssembly !== 'undefined' && (m.columns === true || (!((self.navigator && self.navigator.deviceMemory) < 8) && (!/Android|iPhone|iPad|iPod|Mobile/i.test((self.navigator && self.navigator.userAgent) || '') || (self.navigator && self.navigator.deviceMemory) >= 8)))   // phones too when the browser reports 8 GB or more (Chrome caps the report at 8): measured on an 8 GB Android phone, first rows 1.0 s instead of 1.8-2.0 s, save 16-24% later;
 async function importOnce(m) {
   let restart = false;
-  const job = { cancelled: false }; jobs.set(m.id, job);
+  const prev = jobs.get(m.id), job = { cancelled: !!(prev && prev.pre && prev.cancelled) }; jobs.set(m.id, job);
   let name = null, writable = null, closed = false, helper = null;
   const t0 = performance.now(), t = { readMs: 0, parseMs: 0, packMs: 0, writeMs: 0 };
   try {
