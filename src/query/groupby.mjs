@@ -33,13 +33,40 @@ function aggregate(cols, rows, m, gid, G, counts, aggs, codeCols) {
   return values;
 }
 
+
+// One pass, no group-number array: slot s = key - lo (R = empty key); count, sum and seen counts per slot for one or two number columns. Groups come out in order of first appearance.
+function fusedDense(cols, kc, rows, m, lo, R, aggs) {
+  const need = []; for (const a of aggs) { if (a.fn === 'count') continue; if (a.fn !== 'sum' && a.fn !== 'avg') return null; const c = cols[a.col]; if (!ArrayBuffer.isView(c)) return null; if (!need.includes(a.col)) need.push(a.col); }
+  if (need.length > 2) return null;
+  const cnt = new Float64Array(R + 1), order = [], c1 = need.length ? cols[need[0]] : null, c2 = need.length > 1 ? cols[need[1]] : null;
+  const s1 = c1 ? new Float64Array(R + 1) : null, n1 = c1 ? new Float64Array(R + 1) : null, s2 = c2 ? new Float64Array(R + 1) : null, n2 = c2 ? new Float64Array(R + 1) : null;
+  if (!c1) { for (let i = 0; i < m; i++) { const k = kc[rows ? rows[i] : i], t = k !== k ? R : k - lo; if (cnt[t] === 0) order.push(t); cnt[t]++; } }
+  else if (!c2) {
+    if (rows) for (let i = 0; i < m; i++) { const r = rows[i], k = kc[r], t = k !== k ? R : k - lo; if (cnt[t] === 0) order.push(t); cnt[t]++; const v = c1[r]; if (v === v) { n1[t]++; s1[t] += v; } }
+    else for (let i = 0; i < m; i++) { const k = kc[i], t = k !== k ? R : k - lo; if (cnt[t] === 0) order.push(t); cnt[t]++; const v = c1[i]; if (v === v) { n1[t]++; s1[t] += v; } }
+  } else {
+    for (let i = 0; i < m; i++) { const r = rows ? rows[i] : i, k = kc[r], t = k !== k ? R : k - lo; if (cnt[t] === 0) order.push(t); cnt[t]++; const v = c1[r], w = c2[r]; if (v === v) { n1[t]++; s1[t] += v; } if (w === w) { n2[t]++; s2[t] += w; } }
+  }
+  const G = order.length, keys = new Array(G), counts = new Float64Array(G), values = [];
+  for (let g = 0; g < G; g++) { const t = order[g]; keys[g] = t === R ? '' : String(t + lo); counts[g] = cnt[t]; }
+  for (const a of aggs) {
+    if (a.fn === 'count') continue;
+    const j = need.indexOf(a.col), S = j ? s2 : s1, N = j ? n2 : n1, out = new Float64Array(G);
+    for (let g = 0; g < G; g++) { const t = order[g]; out[g] = N[t] === 0 ? NaN : a.fn === 'avg' ? S[t] / N[t] : S[t]; }
+    values.push(out);
+  }
+  return { keys, counts, values };
+}
 export function groupBy(cols, n, rows, { key, aggs }) {
   const kc = cols[key], m = rows ? rows.length : n, gid = new Uint32Array(m), names = [], map = new Map(), numKey = ArrayBuffer.isView(kc);
   if (numKey) {   // whole-number keys in a small range (ids, years, codes): a table slot per value, no Map; groups numbered by first appearance as before
     let lo = Infinity, hi = -Infinity, ok = true;
     for (let i = 0; i < m; i++) { const k = kc[rows ? rows[i] : i]; if (k !== k) continue; if (k < lo) lo = k; if (k > hi) hi = k; if (k !== Math.floor(k)) { ok = false; break; } }
     if (ok && hi - lo < 1048576) {
-      const R = lo === Infinity ? 1 : hi - lo + 1, slot = new Int32Array(R + 1).fill(-1), counts0 = [];
+      const R = lo === Infinity ? 1 : hi - lo + 1;
+      const fused = fusedDense(cols, kc, rows, m, lo, R, aggs);   // count, sum and avg of up to two number columns in one pass over the rows
+      if (fused) return fused;
+      const slot = new Int32Array(R + 1).fill(-1), counts0 = [];
       for (let i = 0; i < m; i++) {
         const k = kc[rows ? rows[i] : i], s = k !== k ? R : k - lo; let g = slot[s];
         if (g < 0) { g = names.length; slot[s] = g; names.push(k !== k ? '' : String(k)); counts0.push(0); }
