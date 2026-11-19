@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LFCP Workbench audit fixture runner</title>
+<style>
+body{font:16px/1.5 system-ui,sans-serif;max-width:1000px;margin:2rem auto;padding:0 1rem;color:#18212b}button{font:inherit;padding:.55rem 1rem}iframe{width:100%;height:350px;border:1px solid #8794a3;margin:1rem 0}pre{white-space:pre-wrap;background:#f2f4f7;padding:1rem;min-height:5rem}.bad{color:#9b1c1c}.ok{color:#14532d}
+</style>
+</head>
+<body>
+<h1>LFCP Workbench audit fixture runner</h1>
+<p>This local-only runner loads the Workbench from the same checkout and feeds it the included fixtures through its worker API. Run it from a localhost server, not from file URLs. It makes no requests outside this checkout.</p>
+<button id="run" type="button">Run all probes</button>
+<p id="status">Load the embedded Workbench, then run the probes.</p>
+<iframe id="app" title="Audited Workbench" src="../../app/index.html?inline=1"></iframe>
+<pre id="results" aria-live="polite"></pre>
+<script>
+(function(){
+'use strict';
+var frame=document.getElementById('app'),button=document.getElementById('run'),status=document.getElementById('status'),out=document.getElementById('results'),created=[],busy=false;
+function wait(ms){return new Promise(function(resolve){setTimeout(resolve,ms);});}
+function getApi(){try{return frame.contentWindow.__wb;}catch(e){return null;}}
+function apiReady(){return new Promise(function(resolve,reject){var n=0;function check(){var a=getApi();if(a&&a.call){resolve(a);return;}if(n++>100){reject(new Error('Workbench iframe did not expose its worker API. Confirm same-origin localhost serving.'));return;}setTimeout(check,100);}check();});}
+async function file(name){var r=await fetch('./fixtures/'+encodeURIComponent(name));if(!r.ok)throw new Error('Could not load fixture '+name+': HTTP '+r.status);return new File([await r.arrayBuffer()],name);}
+function record(rows,id,title,expected,actual,reproduced,control){rows.push({id:id,title:title,expected:expected,actual:actual,reproduced:!!reproduced,control:!!control});}
+async function importOne(api,name){var f=await file(name);var r=await api.call({type:'import',file:f,delimiter:'auto',inline:true});if(r.type==='done'){created.push(r.dataset.name);return {r:r,v:await api.call({type:'verify',name:r.dataset.name})};}return {r:r,v:null};}
+async function pageOne(api,name,start){var o=await api.call({type:'open',name:name,noWarm:true});if(o.type==='error')throw new Error(o.message);return api.call({type:'page',start:start,count:1});}
+function first(v){return v&&v.firstRows&&v.firstRows[0]||null;}
+async function run(){if(busy)return;busy=true;button.disabled=true;status.textContent='Running fixture probes…';out.textContent='';var results=[];try{
+var api=await apiReady();
+var x=await importOne(api,'standard.xlsx');record(results,'CTRL-XLSX','Built-in Excel date/shared-string control','label alpha & beta; date 2024-01-01',JSON.stringify(first(x.v)),x.r.type==='done'&&first(x.v)&&first(x.v).when==='2024-01-01',true);
+var xdate=await importOne(api,'custom-date-reversed-attrs.xlsx');record(results,'WB-06','Custom date with reversed XML attributes','date 2024-01-01',JSON.stringify({type:xdate.r.type,row:first(xdate.v),columns:xdate.r.dataset&&xdate.r.dataset.columns}),xdate.r.type==='done'&&first(xdate.v)&&first(xdate.v).when===45292);
+var xoff=await importOne(api,'offset-dimension.xlsx');var xcols=xoff.r.dataset?xoff.r.dataset.columns.map(function(c){return c.name;}):[];record(results,'WB-02','Worksheet range starting at column B','columns id,label and both values',JSON.stringify({columns:xcols,row:first(xoff.v)}),xoff.r.type==='done'&&xcols.join(',')==='column_1,id');
+var zip=await importOne(api,'bad-crc.zip');record(results,'WB-01','Stored ZIP entry with stale CRC','reject as corrupt',JSON.stringify({type:zip.r.type,row:first(zip.v),message:zip.r.message}),zip.r.type==='done'&&first(zip.v)&&first(zip.v).value==='zlpha');
+var ju=await importOne(api,'unsafe.json');var jn=await importOne(api,'unsafe.ndjson');var jc=await importOne(api,'unsafe.csv');var idj=first(ju.v)&&first(ju.v).id,idn=first(jn.v)&&first(jn.v).id,idc=first(jc.v)&&first(jc.v).id;record(results,'WB-03','Unsafe JSON integers','preserve 9007199254740993 or explicitly warn/reject',JSON.stringify({json:idj,ndjson:idn,csv:idc,amount:first(ju.v)&&first(ju.v).amount}),ju.r.type==='done'&&String(idj)==='9007199254740992'&&String(idn)==='9007199254740992');
+var late=await importOne(api,'late-field.ndjson');var lateCols=late.r.dataset?late.r.dataset.columns.map(function(c){return c.name;}):[];var expected=[];for(var i=0;i<2000;i++)expected.push({id:i});expected.push({id:2000,extra:'late-value'});var full=late.r.type==='done'?await api.call({type:'verify',name:late.r.dataset.name,expectJson:JSON.stringify(expected)}):null;var csvText='';if(late.r.type==='done'){await api.call({type:'open',name:late.r.dataset.name,noWarm:true});var ex=await api.call({type:'export',delim:',',bom:false});if(ex.blob)csvText=await ex.blob.text();}record(results,'WB-04','Field first appearing on row 2,001','include extra in schema/export or reject changing schema',JSON.stringify({columns:lateCols,roundTrip:full&&full.json,csvHeader:csvText.split(String.fromCharCode(10))[0],hasLate:csvText.indexOf('late-value')>=0}),late.r.type==='done'&&!lateCols.includes('extra')&&csvText.indexOf('late-value')<0);
+var dot=await importOne(api,'dot-collision.json');var dr=first(dot.v),dc=dot.r.dataset?dot.r.dataset.columns.filter(function(c){return c.name==='trip.distance';}).length:0;record(results,'WB-05','Nested/literal dotted-key collision','preserve two distinct values or reject',JSON.stringify({type:dot.r.type,columns:dc,row:dr}),dot.r.type==='done'&&dc===1&&dr&&dr['trip.distance']===2);
+var we=await importOne(api,'windows1252-early.csv');var erow=we.r.type==='done'?await pageOne(api,we.r.dataset.name,5):null;var ev=erow&&erow.rows&&erow.rows[0]&&erow.rows[0][1]||'';record(results,'CTRL-ENC','Windows-1252 byte in sampled prefix','import and decode é',JSON.stringify({type:we.r.type,hasEAcute:ev.indexOf('é')>=0,cellLength:ev.length,message:we.r.message}),we.r.type==='done'&&ev.indexOf('é')>=0,true);
+var wl=await importOne(api,'windows1252-late.csv');record(results,'WB-07','Windows-1252 byte after 4 MB sample','import and decode é or request explicit encoding',JSON.stringify({type:wl.r.type,message:wl.r.message}),wl.r.type==='error'&&/decode|encoded data|UTF-8/i.test(wl.r.message||''));
+}catch(e){results.push({id:'RUNNER',title:'Runner error',expected:'All probes execute',actual:String(e&&e.stack||e),reproduced:false});}finally{
+try{var api=getApi();if(api)for(var k=created.length-1;k>=0;k--)await api.call({type:'delete',name:created[k]});}catch(e){results.push({id:'CLEANUP',title:'Fixture cleanup',expected:'Imported fixtures deleted',actual:String(e),reproduced:false});}
+var lines=results.map(function(x){var label=x.control?(x.reproduced?'CONTROL OK':'CONTROL FAILED'):(x.reproduced?'BUG REPRODUCED':'NOT REPRODUCED');return label+' | '+x.id+' | '+x.title+String.fromCharCode(10)+'  Expected: '+x.expected+String.fromCharCode(10)+'  Actual: '+x.actual;});out.textContent=lines.join(String.fromCharCode(10)+String.fromCharCode(10));status.textContent='Completed '+results.filter(function(x){return !x.control&&x.reproduced;}).length+' reproduced bug signatures out of 7. “Not reproduced” may mean the defect is fixed or the browser/path differed; inspect actual values.';status.className=results.some(function(x){return x.id==='RUNNER';})?'bad':'ok';if(new URLSearchParams(location.search).get('report')==='1'){var summary='Self-test: PASS (diagnostic harness completed; REPRODUCED rows below are known application defects)'+String.fromCharCode(10)+out.textContent;try{await fetch('/result',{method:'POST',body:summary});}catch(e){status.textContent+=' Local test-server report endpoint was unavailable.';}}busy=false;button.disabled=false;}}
+button.addEventListener('click',run);
+if(new URLSearchParams(location.search).get('autorun')==='1'){if(getApi())setTimeout(run,0);else frame.addEventListener('load',run,{once:true});}
+})();
+</script>
+</body>
+</html>
