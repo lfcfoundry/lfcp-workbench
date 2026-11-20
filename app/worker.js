@@ -867,7 +867,7 @@ async function fixedWidthStage(m) {
   const typed = m.widths && String(m.widths).trim() ? parseWidths(m.widths) : null;
   if (m.widths && String(m.widths).trim() && !typed) throw new Error('Column widths must be whole numbers such as 5,12,10,9 (the last column takes the rest of each line).');
   const forced = m.delimiter === 'fixed'; let lay, text, guessed = null;
-  const sample = new TextDecoder().decode(new Uint8Array(await m.file.slice(0, 1 << 20).arrayBuffer())).replace(/^﻿/, '');
+  const sample = new TextDecoder().decode(new Uint8Array(await m.file.slice(0, 1 << 20).arrayBuffer())).replace(/^\ufeff/, '');
   if (typed) { lay = layoutFromWidths(typed); text = 'Read as fixed-width text with the column widths you typed (the last column takes the rest of each line).'; }
   else {
     if (m.delimiter && m.delimiter !== 'auto' && !forced) return null;
@@ -880,7 +880,7 @@ async function fixedWidthStage(m) {
   const conv = makeConverter(lay.starts, lay.ends), dec = new TextDecoder('utf-8'), enc = new TextEncoder(), parts = []; let acc = [], accN = 0, carry = '', rows = 0;
   const put = (s) => { if (!s) return; const e = enc.encode(s); acc.push(e); accN += e.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
   const rd = m.file.stream().getReader(); let first = true;
-  const doText = (t, last) => { t = carry + t; const ls = t.split(/\r?\n|\r(?!$)/); carry = last ? '' : ls.pop(); if (last && ls.length && ls[ls.length - 1] === '') ls.pop(); let out = ''; for (let l of ls) { if (first) { l = l.replace(/^﻿/, ''); } const r = conv(l); if (r) { out += r; rows++; first = false; } } put(out); };
+  const doText = (t, last) => { t = carry + t; const ls = t.split(/\r?\n|\r(?!$)/); carry = last ? '' : ls.pop(); if (last && ls.length && ls[ls.length - 1] === '') ls.pop(); let out = ''; for (let l of ls) { if (first) { l = l.replace(/^\ufeff/, ''); } const r = conv(l); if (r) { out += r; rows++; first = false; } } put(out); };
   for (;;) { const { done, value } = await rd.read(); if (done) break; doText(dec.decode(value, { stream: true }), false); }
   doText(dec.decode(), true); if (acc.length) parts.push(new Blob(acc));
   if (!rows) throw new Error('No rows could be read as fixed-width text.');
