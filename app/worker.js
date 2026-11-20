@@ -848,12 +848,112 @@ async function importFile0(m) {
   const demote = new Set(); let mm = m;
   for (let tries = 0; tries < 4; tries++) {
     const r = await importOnce(mm); if (!r) return; if (r.enc) return r;
+    if (r === 'normalize') {   // tidy the file once, then import it the normal way; if it cannot be tidied the first error is reported
+      let nz = null; try { nz = await normalizeFile(m.file, m.delimiter); } catch { nz = null; }
+      if (!nz) { send('error', m.id, { message: mm.firstError, line: mm.firstLine }); return; }
+      send('notice', m.id, { text: nz.text }); m = Object.assign({}, m, { file: nz.file, delimiter: nz.delimiter, normalized: true }); mm = Object.assign({}, m, { demote: [...demote] }); tries--; continue;
+    }
     if (r === 'mixed' || tries === 3) break;
     demote.add(r.col); mm = Object.assign({}, m, { demote: [...demote] });
   }
   const r2 = await importOnce(Object.assign({}, m, { noColumns: true })); if (r2 && r2.enc) return r2;
 }
 const columnsOk = (m) => !m.noColumns && typeof WebAssembly !== 'undefined' && (m.columns === true || (!((self.navigator && self.navigator.deviceMemory) < 8) && (!/Android|iPhone|iPad|iPod|Mobile/i.test((self.navigator && self.navigator.userAgent) || '') || (self.navigator && self.navigator.deviceMemory) >= 8)))   // phones too when the browser reports 8 GB or more (Chrome caps the report at 8): measured on an 8 GB Android phone, first rows 1.0 s instead of 1.8-2.0 s, save 16-24% later;
+// ---- Tidy stage: a delimited file that the strict reader rejects (comment lines, short or long rows, backslash escapes, stray quotes) is rewritten as clean CSV once, then imported normally. Files the strict reader accepts never pay for it.
+// Tidy a delimited text file that the strict reader rejected: comment lines, ragged rows, backslash escapes, stray quotes.
+// makeNormalizer(o) -> { feed(bytes) -> Uint8Array|null, end() -> Uint8Array|null, stats }
+// o: delim (byte), comments (bool), backslash (bool), width (0 = take it from the first row)
+function makeNormalizer(o) {
+  const D = o.delim, Q = 34, BS = 92, NL = 10, CR = 13;
+  const st = { comments: 0, headerPad: 0, padded: 0, truncated: 0, escapes: 0, blank: 0, rows: 0, maxFields: 0, width: o.width || 0 };
+  let fb = new Uint8Array(1 << 16), fn = 0, ob = new Uint8Array(1 << 20), on = 0, doneEnd = 0;
+  let needQ = false, fields = 0, rowStart = true, inQ = false, justClosed = false, quoted = false, pendBS = false, bomChecked = false, sawCR = false, skipLine = false, firstRow = true, cutPos = -1;
+  const growF = () => { const n = new Uint8Array(fb.length * 2); n.set(fb); fb = n; };
+  const need = (n) => { if (on + n > ob.length) { const m = new Uint8Array(Math.max(ob.length * 2, on + n)); m.set(ob.subarray(0, on)); ob = m; } };
+  const pushF = (c) => { if (fn >= fb.length) growF(); fb[fn++] = c; if (c === D || c === Q || c === NL || c === CR) needQ = true; };
+  const pushRun = (b, i, j) => { const k = j - i; while (fn + k > fb.length) growF(); if (k < 48) { for (let x = 0; x < k; x++) fb[fn + x] = b[i + x]; } else fb.set(b.subarray(i, j), fn); fn += k; };
+  const spPlain = new Uint8Array(256), spQ = new Uint8Array(256); spPlain[D] = spPlain[Q] = spPlain[NL] = spPlain[CR] = 1; spQ[Q] = 1; if (o.backslash) { spPlain[BS] = 1; spQ[BS] = 1; }
+  const emit = () => {   // write the logical field fb[0..fn) with CSV quoting
+    if (st.width && fields === st.width && !firstRow && cutPos < 0) cutPos = on;   // the delimiter before the first extra field goes here
+    const q = needQ; needQ = false;
+    need(fn * 2 + 4);
+    if (fields > 0) ob[on++] = D;
+    if (q) { ob[on++] = Q; for (let i = 0; i < fn; i++) { const c = fb[i]; if (c === Q) ob[on++] = Q; ob[on++] = c; } ob[on++] = Q; }
+    else if (fn < 48) { for (let x = 0; x < fn; x++) ob[on + x] = fb[x]; on += fn; } else { ob.set(fb.subarray(0, fn), on); on += fn; }
+    fields++; fn = 0; quoted = false; justClosed = false;
+  };
+  const colName = (i) => { const s = 'column_' + (i + 1); for (let k = 0; k < s.length; k++) ob[on++] = s.charCodeAt(k); };
+  const finishRow = () => {
+    if (fields === 0 && fn === 0 && !quoted) { st.blank++; rowStart = true; return; }
+    emit();
+    if (firstRow) {
+      if (!st.width) st.width = fields;
+      if (fields < st.width) { for (let i = fields; i < st.width; i++) { need(24); ob[on++] = D; colName(i); } st.headerPad = st.width - fields; }
+      firstRow = false;
+    } else if (st.width) {
+      if (fields < st.width) { need(st.width - fields + 2); for (let i = fields; i < st.width; i++) ob[on++] = D; st.padded++; }
+      else if (fields > st.width) { on = cutPos; st.truncated++; }
+    }
+    if (fields > st.maxFields) st.maxFields = fields;
+    need(2); ob[on++] = NL; doneEnd = on; st.rows++; fields = 0; rowStart = true; cutPos = -1;
+  };
+  function feed(b) {
+    let i = 0; const n = b.length;
+    if (!bomChecked && n >= 3) { bomChecked = true; if (b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF) { need(3); ob[on++] = 0xEF; ob[on++] = 0xBB; ob[on++] = 0xBF; doneEnd = on; i = 3; } }
+    for (; i < n; i++) {
+      const c = b[i];
+      if (skipLine) { if (c === NL || c === CR) { skipLine = false; sawCR = c === CR; } continue; }
+      if (pendBS) {
+        pendBS = false;
+        if (c === Q || c === D || c === BS) { pushF(c); st.escapes++; continue; }
+        if (c === 78 && fn === 0 && !inQ && !quoted) { st.escapes++; continue; }   // \N is a null: the field stays empty
+        pushF(BS);   // not an escape: keep the backslash and treat c normally
+      }
+      if (inQ) {
+        if (o.backslash && c === BS) { pendBS = true; continue; }
+        if (c === Q) { inQ = false; justClosed = true; continue; }
+        needQ = true; let j = i + 1; while (j < n && !spQ[b[j]]) j++; pushRun(b, i, j); i = j - 1; continue;
+      }
+      if (justClosed) { if (c === Q) { inQ = true; justClosed = false; pushF(Q); continue; } justClosed = false; }
+      if (c === NL || c === CR) { if (c === NL && sawCR) { sawCR = false; continue; } sawCR = c === CR; finishRow(); continue; }
+      sawCR = false;
+      if (rowStart) { rowStart = false; if (o.comments && c === 35) { st.comments++; skipLine = true; rowStart = true; continue; } }
+      if (c === D) { emit(); continue; }
+      if (c === Q && fn === 0 && !quoted) { inQ = true; quoted = true; continue; }
+      if (o.backslash && c === BS) { pendBS = true; continue; }
+      { let j = i + 1; while (j < n && !spPlain[b[j]]) j++; pushRun(b, i, j); i = j - 1; }
+    }
+    return take(false);
+  }
+  function take(final) {
+    if (final && (fn || fields || inQ || quoted)) { if (pendBS) { pushF(BS); pendBS = false; } finishRow(); }
+    if (!doneEnd) return null;
+    const out = ob.slice(0, doneEnd); const rest = on - doneEnd; if (rest) ob.copyWithin(0, doneEnd, on); on = rest; if (cutPos >= 0) cutPos -= doneEnd; doneEnd = 0; return out;
+  }
+  return { feed, end: () => take(true), stats: st };
+}
+const NORMALIZE_ERR = /^(Line \d+: )?(Row has \d+ fields|Unexpected text after a closing quote|A quote may only start|The header has more)/;
+async function normalizeFile(file, delimiter) {
+  const sample = new Uint8Array(await file.slice(0, 4 << 20).arrayBuffer()); let s0 = 0; if (sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF) s0 = 3;
+  const comments = sample[s0] === 35, text = new TextDecoder().decode(sample);
+  const bs = /\\["\\,;\t|]/.test(text.slice(0, 4 << 20));
+  let dch = delimiter && delimiter !== 'auto' ? delimiter : null;
+  if (!dch) { await loadCore(); dch = core.detectDelimiter(comments ? text.split(/\r?\n/).filter((l) => l && l[0] !== '#').join('\n') : text); }
+  const D = dch.charCodeAt(0), dry = makeNormalizer({ delim: D, comments, backslash: bs }); dry.feed(sample.subarray(0, sample.length)); dry.end();
+  const ds = dry.stats; if (!ds.rows || (!comments && !bs && ds.rows >= 20 && ds.padded + ds.truncated > 0.3 * ds.rows)) return null;   // too irregular to be a tidy-able table: report the original error
+  const nz = makeNormalizer({ delim: D, comments, backslash: bs, width: ds.maxFields }), parts = []; let acc = [], accN = 0;
+  const put = (b) => { if (!b) return; acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
+  const rd = file.stream().getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; put(nz.feed(value)); }
+  put(nz.end()); if (acc.length) parts.push(new Blob(acc));
+  const st = nz.stats, bits = [];
+  if (st.comments) bits.push(st.comments + ' comment line' + (st.comments === 1 ? '' : 's') + ' starting with # skipped');
+  if (st.padded) bits.push(st.padded + ' short row' + (st.padded === 1 ? '' : 's') + ' filled with empty cells');
+  if (st.truncated) bits.push(st.truncated + ' row' + (st.truncated === 1 ? ' had' : 's had') + ' more cells than the widest rows seen early in the file, and the extra cells were left out');
+  if (st.headerPad) bits.push(st.headerPad + ' extra column' + (st.headerPad === 1 ? '' : 's') + ' named column_N for rows wider than the header');
+  if (st.escapes) bits.push('backslash escapes read');
+  if (st.maxFields > 0 && ds.maxFields > 0 && st.width > 0) { /* header widened by column_N names when rows were wider */ }
+  return { file: new File(parts, String(file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), delimiter: dch, text: 'This file had irregular rows, so it was tidied first: ' + (bits.join(', ') || 'blank lines removed') + '.' };
+}
 async function importOnce(m) {
   let restart = false;
   const prev = jobs.get(m.id), job = { cancelled: !!(prev && prev.pre && prev.cancelled) }; jobs.set(m.id, job);
@@ -991,6 +1091,7 @@ async function importOnce(m) {
     if (err && err.pqExact != null && m.parquet) restart = { pqExact: err.pqExact };   // an INT64 column holds a value beyond 2^53: read that column as exact digit text and start again
     else if (err && err.mixed && !m.noColumns) restart = err.col != null && err.col >= 0 ? { col: err.col } : true;
     else if (!m.reencoded && !m.ndjson && /TextDecoder/.test(String(err && err.message)) && /not valid|decoding failed/i.test(String(err && err.message))) restart = { enc: true };   // a Windows-1252 byte past the sampled start: read the file again as Windows-1252 (valid UTF-8 files never pay for a whole-file check)
+    else if (!m.normalized && !m.strict && !m.ndjson && NORMALIZE_ERR.test(String(err && err.message || ''))) { restart = 'normalize'; m.firstError = String(err.message); m.firstLine = err.line || null; }
     else send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
   } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => { if (!(self.__keep && self.__keep.includes(w))) w.terminate(); }); jobs.delete(m.id); }
   return restart ? (restart === true ? 'mixed' : restart) : null;
