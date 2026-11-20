@@ -1,7 +1,7 @@
 Third-party notice for lfc-pack.js
 
 The WebAssembly inside lfc-pack.js (zstd-dec and zstd-full) is built from Zstandard 1.5.7, copyright (c) Meta Platforms, Inc. and affiliates, https://github.com/facebook/zstd,
-used under its BSD 3-Clause license (full text below; zstd is dual-licensed BSD-3-Clause or GPL-2.0, this module uses the BSD terms). wasm/build.sh downloads the pinned release tarball
+used under its BSD 3-Clause license (full text below; zstd is dual-licensed BSD-3-Clause or GPL-2.0, this module uses the BSD terms). ../zstd-kit/wasm/build.sh downloads the pinned release tarball
 (SHA-256 eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3), checks the hash, and compiles the library sources with clang for wasm32. No change was made to zstd; the small
 layer around it (wasm/zstd-glue.c, wasm/zstd-freestanding.h, wasm/stubs) is part of JS-modules, MIT License, Copyright (c) 2026 LFC Foundry.
 
