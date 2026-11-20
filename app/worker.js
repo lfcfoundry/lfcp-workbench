@@ -264,6 +264,58 @@ async function packPlainJob(m) {
   try { await LfcPack.init(); const r = await LfcPack.packBlock(m.cols, m.o); self.postMessage({ type: 'packed', rid: m.rid, r }, [r.buffer]); }
   catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
 }
+// A text column whose cells are all "YYYY-MM-DD HH:MM:SS" (or empty) is packed as typed seconds, which LFC-pack stores in fewer bytes and packs faster, and gives back as the same text. Any other cell (wrong shape, impossible date or time) returns null and the column stays text.
+function tsFromText(bytes, start, end, n) {   // 'YYYY-MM-DD HH:MM:SS' with no, 3 or 6 fraction digits, the same in every cell; epoch values in s, ms or us (exact in a double), or null
+  const out = new Float64Array(n); let lastKey = -1, lastBase = 0, L = 0;
+  for (let i = 0; i < n; i++) if (end[i] > start[i]) { L = end[i] - start[i]; break; }
+  if (L !== 19 && L !== 23 && L !== 26) return null;
+  const fd = L === 19 ? 0 : L - 20, mul = L === 19 ? 1 : L === 23 ? 1000 : 1e6;
+  for (let i = 0; i < n; i++) {
+    const s = start[i], len = end[i] - s;
+    if (len === 0) { out[i] = NaN; continue; }
+    if (len !== L || (fd && bytes[s + 19] !== 46) || bytes[s + 4] !== 45 || bytes[s + 7] !== 45 || bytes[s + 10] !== 32 || bytes[s + 13] !== 58 || bytes[s + 16] !== 58) return null;
+    const a = bytes[s] - 48, b = bytes[s + 1] - 48, c = bytes[s + 2] - 48, d = bytes[s + 3] - 48, e = bytes[s + 5] - 48, f = bytes[s + 6] - 48, g = bytes[s + 8] - 48, h = bytes[s + 9] - 48;
+    const H1 = bytes[s + 11] - 48, H2 = bytes[s + 12] - 48, M1 = bytes[s + 14] - 48, M2 = bytes[s + 15] - 48, S1 = bytes[s + 17] - 48, S2 = bytes[s + 18] - 48;
+    if ((a >>> 0) > 9 || (b >>> 0) > 9 || (c >>> 0) > 9 || (d >>> 0) > 9 || (e >>> 0) > 9 || (f >>> 0) > 9 || (g >>> 0) > 9 || (h >>> 0) > 9 || (H1 >>> 0) > 9 || (H2 >>> 0) > 9 || (M1 >>> 0) > 9 || (M2 >>> 0) > 9 || (S1 >>> 0) > 9 || (S2 >>> 0) > 9) return null;
+    const hh = H1 * 10 + H2, mi = M1 * 10 + M2, sc = S1 * 10 + S2; if (hh > 23 || mi > 59 || sc > 59) return null;
+    const y = a * 1000 + b * 100 + c * 10 + d, mo = e * 10 + f, dd = g * 10 + h, key = y * 10000 + mo * 100 + dd;
+    if (key !== lastKey) {
+      if (y < 1000 || mo < 1 || mo > 12 || dd < 1) return null;
+      const dim = mo === 2 ? ((y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)) ? 29 : 28) : (mo === 4 || mo === 6 || mo === 9 || mo === 11) ? 30 : 31; if (dd > dim) return null;
+      const yy = mo <= 2 ? y - 1 : y, era = (yy / 400) | 0, yoe = yy - era * 400, doy = ((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 | 0) + dd - 1, doe = yoe * 365 + ((yoe / 4) | 0) - ((yoe / 100) | 0) + doy;
+      lastBase = (era * 146097 + doe - 719468) * 86400; lastKey = key;
+    }
+    let fr = 0; for (let j = 0; j < fd; j++) { const q = bytes[s + 20 + j] - 48; if ((q >>> 0) > 9) return null; fr = fr * 10 + q; }
+    out[i] = (lastBase + hh * 3600 + mi * 60 + sc) * mul + fr;
+  }
+  return { values: out, unit: L === 19 ? 's' : L === 23 ? 'ms' : 'us', fmt: L === 19 ? 'YYYY-MM-DD HH:MM:SS' : L === 23 ? 'YYYY-MM-DD HH:MM:SS.fff' : 'YYYY-MM-DD HH:MM:SS.ffffff' };
+}
+// Decimal text to doubles for a column of plain numbers whose digits print back exactly (no fixed scale, so the sample plan left it as text). Every cell must be
+// -?digits[.digits] in its shortest form (no leading zero, no trailing zero after the point, no '+', no '-0', at most 15 digits, nothing under 1e-6), so String(value) is the cell text.
+// Empty cells are NaN. Returns null at the first cell that fails; the column then stays text, so the grid and the export keep the same digits.
+const P10 = [1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15];
+function numFromText(bytes, start, end, n) {
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let p = start[i]; const e = end[i];
+    if (p === e) { out[i] = NaN; continue; }
+    const neg = bytes[p] === 45; if (neg) p++;
+    if (p >= e) return null;
+    const first = bytes[p]; let digs = 0, v = 0, dot = -1, last = 0;
+    if (first === 48 && p + 1 < e && bytes[p + 1] !== 46) return null;   // leading zero
+    for (let q = p; q < e; q++) {
+      const c = bytes[q];
+      if (c === 46) { if (dot >= 0 || q === p || q === e - 1) return null; dot = digs; continue; }
+      const d = c - 48; if ((d >>> 0) > 9) return null;
+      v = v * 10 + d; digs++; last = d;
+    }
+    if (digs > 15) return null;
+    if (dot >= 0) { if (last === 0) return null; v /= P10[digs - dot]; if (v !== 0 && v < 1e-6) return null; }
+    if (neg) { if (v === 0) return null; v = -v; }
+    out[i] = v;
+  }
+  return out;
+}
 async function packColsJob(m) {
   try {
     await LfcPack.init();
@@ -295,7 +347,8 @@ async function packColsJob(m) {
         let tb = 0; for (const c of ch) tb += c.cols[k].bytes.length;
         const bytes = new Uint8Array(tb), start = new Int32Array(rows), end = new Int32Array(rows); let bo = 0, ro = 0;
         for (const c of ch) { const x = c.cols[k]; bytes.set(x.bytes, bo); for (let r = 0; r < c.n; r++) { start[ro + r] = x.start[r] + bo; end[ro + r] = x.end[r] + bo; } bo += x.bytes.length; ro += c.n; }
-        cols[m.headers[k]] = { bytes, start, end };
+        const nv = m.num && m.num[k] ? numFromText(bytes, start, end, rows) : null, tv = nv || m.noTs ? null : tsFromText(bytes, start, end, rows);
+        cols[m.headers[k]] = nv ? nv : tv ? { kind: 'ts', unit: tv.unit, values: tv.values, fmt: tv.fmt } : { bytes, start, end };
       } else {   // a number column with empty cells goes to LFC-pack as an array with nulls: its Float64Array form with NaN is 4-5 times slower to pack
         const a = new Float64Array(rows); let ro = 0, nan = false; for (const c of ch) { a.set(c.cols[k], ro); ro += c.n; }
         for (let r = 0; r < rows; r++) if (a[r] !== a[r]) { nan = true; break; }
@@ -554,7 +607,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
 // Which columns are stored as numbers: those whose first 2,000 rows (from the first MB) are all plain whole numbers or empty, with at least one number.
 // Decided once from the sample so every piece and helper agrees; a later value that is not a plain whole number stays text in its cell.
 async function samplePlan(file, delimiter) {
-  samplePlan.dict = null;
+  samplePlan.dict = null; samplePlan.num = null;
   try {
     await loadCore(); const { DelimitedParser, TypeTracker } = core;
     let text = new TextDecoder().decode(new Uint8Array(await file.slice(0, 4194304).arrayBuffer())); let cutAll = file.size <= 4194304;
@@ -584,6 +637,7 @@ async function samplePlan(file, delimiter) {
     });
     // low-variety text columns (at most 5% of the sample's rows distinct, and 200+ sample rows) are built as dictionary columns: a code per row and the distinct values
     const nr = rows.length - 1; samplePlan.dict = nr >= 200 ? tr.map((x, c) => { if (plan[c] || x.type === 'empty') return false; const seen = new Set(); for (let r = 1; r < rows.length; r++) { seen.add(rows[r][c]); if (seen.size > nr * 0.05) return false; } return true; }) : null;
+    samplePlan.num = tr.map((x, c) => x.type === 'number' && x.n > x.empty && !plan[c] && !(samplePlan.dict && samplePlan.dict[c]));
     return plan.some(Boolean) ? plan : null;
   } catch { return null; }
 }
@@ -2070,8 +2124,8 @@ async function importOnce(m) {
         // Live columns (desktop, file up to LIVE_MAX): the chunks are kept so the grid can read them as soon as parsing ends, while the pack workers still work through their queue.
         // Blocks wait in blockQ and go to the pack workers as copies (the kept chunks are not transferred), so parsing never waits for packing.
         liveChunks = m.live === true && file.size <= LIVE_MAX ? [] : null; let blockQ = [], pumping = null, pumpErr = null;
-        const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b = blockQ.shift(); await send1({ type: 'packCols', chunks: b, headers: colHeaders, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
-        const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; if (liveChunks) { blockQ.push(list); pump(); } else await send1({ type: 'packCols', chunks: list, headers: colHeaders, o: popts }, [].concat(...list.map(chunkBuffers))); };
+        const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b = blockQ.shift(); await send1({ type: 'packCols', chunks: b, headers: colHeaders, num: numPlan, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
+        const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; if (liveChunks) { blockQ.push(list); pump(); } else await send1({ type: 'packCols', chunks: list, headers: colHeaders, num: numPlan, o: popts }, [].concat(...list.map(chunkBuffers))); };
         colFlush = async () => { if (cq.length) await sendCols(); while (pumping) await pumping; if (pumpErr) throw pumpErr; };
         // Early view: the grid opens on the first parsed chunks and the row count grows while the file is still being read (a preview: no sort or filter until the end).
         const pvStarts = [0], pvDec = new TextDecoder(); let pvSent = 0, pvKind = null, pvOn = liveChunks !== null && m.preview !== false;
@@ -2107,7 +2161,7 @@ async function importOnce(m) {
       };
       var packWorkersToStop = ws;
     }
-    let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null;
+    let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
     let res = null;
     if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
     if (!res && !m.ndjson && !m.parquet) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
