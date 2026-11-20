@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="light dark">
+<title>LFCP Workbench (import)</title>
+<link rel="stylesheet" href="app.css">
+<script defer src="app.js"></script>
+</head>
+<body>
+<header><h1>LFCP Workbench <small id="ver">2026.11.19.0801</small></h1><p>Import CSV, TSV, Excel (.xlsx), JSON or NDJSON (plain, .gz or .zip) into a local LFCP dataset. Nothing leaves this browser.</p></header>
+<main>
+  <section>
+    <h2>Import</h2>
+    <input id="file" type="file" accept=".csv,.tsv,.txt,.json,.ndjson,.jsonl,.xlsx,.xlsm,.gz,.zip,text/csv,text/tab-separated-values,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip,application/gzip">
+    <label id="zipbox" hidden><span id="zipboxlabel">File in the zip</span> <select id="zipentry"></select></label>
+    <label>Delimiter <select id="delim"><option value="auto">Detect</option><option value=",">Comma</option><option value="&#9;">Tab</option><option value=";">Semicolon</option><option value="|">Bar</option></select></label>
+    <button id="go" disabled>Import</button> <button id="cancel" hidden>Cancel</button> <button id="selftest">Run self-test</button>
+    <progress id="prog" max="1" value="0" hidden></progress>
+    <p id="status" role="status">Choose a file, or run the self-test.</p>
+  </section>
+  <section id="result" hidden>
+    <h2>Result</h2>
+    <p id="summary"></p>
+    <h3>Columns</h3><div id="cols"></div>
+    <h3>First rows</h3><div id="preview"></div>
+    <button id="copy">Copy results</button> <span id="copied" role="status"></span>
+  </section>
+  <section id="gridbox" hidden>
+    <h2 id="gridtitle">Data</h2>
+    <p id="gridinfo"></p>
+    <div id="gridwrap"><div id="gridhead"></div><div id="gridscroll" tabindex="0"><div id="gridspace"></div><div id="gridrows"></div></div></div>
+    <p class="hint">Filter boxes: text finds matches anywhere; use &gt;5, &lt;=10, =exact, !=exact, = for empty cells, ! for filled cells. Click a column name to sort.</p>
+    <div id="tools">
+      <div><b>Add column</b> <label>from <select id="dsrc"></select></label> <label>work out <select id="dfn"></select></label> <label>named <input id="dname" size="10" placeholder="hour"></label> <button id="dgo">Add column</button></div>
+      <div><b>Summarize</b> <label>group by <select id="gkey"></select></label> <label>then by <select id="gkey2"></select></label> <label>also <select id="gfn"><option value="">count only</option><option value="rate">share equal to</option><option value="sum">sum</option><option value="avg">average</option><option value="min">smallest</option><option value="max">largest</option></select></label> <select id="gcol"></select> <input id="geq" size="8" placeholder="true"> <button id="ggo">Summarize</button> <button id="gsave" disabled>Save summary as LFCP</button> <span id="gmsg" role="status"></span></div>
+      <div id="gres"></div>
+    </div>
+    <button id="exportcsv">Export CSV</button> <button id="exportlfcp">Save as LFCP</button> <label><input type="checkbox" id="excelbom"> Excel-friendly (adds a byte-order mark)</label> <button id="closegrid">Close data view</button>
+  </section>
+  <section>
+    <h2>Saved in this browser</h2><div id="saved">Loading…</div>
+  </section>
+</main>
+</body>
+</html>
