@@ -15,3 +15,4 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 #gridscroll{position:relative;height:24rem;overflow:auto}#gridspace{width:1px}#gridrows{position:absolute;left:0;top:0}
 .gr{display:flex;height:28px;line-height:28px;padding-left:var(--pad,0)}.gc{flex:0 0 11rem;padding:0 .5rem;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:1px solid var(--line);font-size:.9rem}
 .gc.num{color:var(--mut);text-align:right}.hint{color:var(--mut);font-size:.85rem}
+.nowrap{white-space:nowrap}#fmts{color:var(--mut);font-size:.9rem}#fmts summary{cursor:pointer}#fmts p{margin:.3rem 0 0}

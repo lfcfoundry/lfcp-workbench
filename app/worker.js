@@ -680,7 +680,7 @@ async function unzipFile(file, want, listOnly, asStream) {
   return { file: new File(parts, base, { type: 'text/csv' }), entries: files.map((x) => x.name), picked: pick.name };
 }
 // The page lists the files in a zip so the person can pick one (m.zipEntry); the default is the largest .csv, .tsv or .txt.
-async function zipList(m) { try { if (isXlsx(m.file)) { const x = await xlsxMeta(m.file); send('zipList', m.id, { entries: x.sheets.filter((s) => !s.hidden || s === x.pick).map((s) => ({ name: s.name, size: -1 })), picked: x.pick.name, sheets: true }); return; } const r = await unzipFile(m.file, null, true); send('zipList', m.id, r); } catch (err) { send('zipList', m.id, { error: String(err && err.message || err) }); } }
+async function zipList(m) { try { if (isOds(m.file)) { send('zipList', m.id, await odsList(m.file)); return; } if (!isXlsx(m.file) && !isZip(m.file) && !isGz(m.file) && await isSqliteFile(m.file)) { const r = await sqliteList(m.file); send('zipList', m.id, Object.assign({ kind: 'Table' }, r)); return; } if (isXlsx(m.file)) { const x = await xlsxMeta(m.file); send('zipList', m.id, { entries: x.sheets.filter((s) => !s.hidden || s === x.pick).map((s) => ({ name: s.name, size: -1 })), picked: x.pick.name, sheets: true, kind: 'Sheet' }); return; } const r = await unzipFile(m.file, null, true); send('zipList', m.id, r); } catch (err) { send('zipList', m.id, { error: String(err && err.message || err) }); } }
 // ---- xlsx: sheet XML streams through a small wasm parser (sheet.c) that writes CSV bytes (dates from date-formatted cells become ISO text); then the normal CSV import runs on that file.
 // xlsx -> CSV text core (shared by Node tests and the worker). Pure functions, no I/O.
 function xlUnescape(s) {
@@ -763,22 +763,603 @@ async function xlsxToCsvFile(file, wantSheet) {
   const rows = X.get_rows(); if (!rows) throw new Error('The sheet "' + pick.name + '" has no data.');
   return { file: new File(parts, String(file.name).replace(/\.(xlsx|xlsm)$/i, '') + '.csv', { type: 'text/csv' }), sheet: pick.name, sheets: sheets.length, rows, width, dropped: X.get_dropped() };
 }
+// ---- Fixed-width text: columns are found from the first lines (every line has a space in the gap) or taken from the widths the person typed; the text is rewritten as CSV, then imported normally.
+// Fixed-width text: guess the column breaks from the first lines, or take widths typed by the person; convert to CSV text.
+function guessWidths(lines) {
+  lines = lines.filter((l) => l.trim().length); if (lines.length < 5) return null; if (lines.length > 300) lines = lines.slice(0, 300);
+  let max = 0; for (const l of lines) if (l.length > max) max = l.length; if (max < 4 || max > 4000) return null;
+  const sep = new Uint8Array(max).fill(1);   // 1 = every sampled line has a space (or ends) here
+  for (const l of lines) for (let i = 0; i < l.length; i++) if (l.charCodeAt(i) !== 32) sep[i] = 0;
+  const starts = []; for (let i = 0; i < max; i++) if (!sep[i] && (i === 0 || sep[i - 1])) starts.push(i);
+  // a header word that starts where no data word crosses (right-aligned numbers touching text) also starts a column
+  const head = lines[0], set = new Set(starts);
+  for (let i = 1; i < head.length; i++) if (head.charCodeAt(i) !== 32 && head.charCodeAt(i - 1) === 32 && !set.has(i)) { let cut = true; for (let k = 1; k < lines.length; k++) { const l = lines[k]; if (i < l.length && l.charCodeAt(i) !== 32 && l.charCodeAt(i - 1) !== 32) { cut = false; break; } } if (cut) { set.add(i); } }
+  if (set.size !== starts.length) { starts.length = 0; for (const x of [...set].sort((a, b) => a - b)) starts.push(x); }
+  if (starts.length < 2 || starts.length > 1000) return null;
+  // every field start must be a real boundary: most lines are non-space at the start and have space just before it
+  const ok = starts.every((s) => s === 0 || lines.filter((l) => l.charCodeAt(s - 1) === 32 || s - 1 >= l.length).length >= lines.length * 0.95);
+  if (!ok) return null;
+  // prose guard: lines should have similar lengths or a table-like layout; reject if fewer than 3 fields have content in most rows
+  let filled = 0; for (let k = 0; k < starts.length; k++) { const a = starts[k], b = k + 1 < starts.length ? starts[k + 1] : max; let c = 0; for (const l of lines) if (l.slice(a, b).trim()) c++; if (c >= lines.length * 0.5) filled++; }
+  if (filled < 2) return null;
+  const w = []; for (let k = 0; k < starts.length; k++) w.push((k + 1 < starts.length ? starts[k + 1] : max) - starts[k]);
+  if (starts[0] > 0) w.unshift(starts[0]);   // leading blank margin becomes its own (dropped) piece: handled by caller via offset
+  return { starts, widths: w.slice(starts[0] > 0 ? 1 : 0), offset: 0 };
+}
+function parseWidths(s) {   // "5,12,10,9" or "5 12 10 9": field widths, the last may be omitted (rest of the line)
+  const parts = String(s).split(/[\s,;]+/).filter(Boolean).map(Number); if (!parts.length || parts.some((n) => !(n >= 1 && n === Math.floor(n)))) return null; return parts;
+}
+const fwQuote = (s) => (/[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
+function makeConverter(starts, ends) {   // starts/ends: character positions per field; ends[last] may be Infinity
+  const n = starts.length; let first = true;
+  return (line) => {
+    if (!line.trim()) return '';
+    let o = ''; for (let k = 0; k < n; k++) { let v = line.slice(starts[k], ends[k] === Infinity ? undefined : ends[k]).trim(); if (first && !v) v = 'column_' + (k + 1); o += (k ? ',' : '') + fwQuote(v); }
+    first = false; return o + '\n';
+  };
+}
+function layoutFromWidths(w) { const starts = [], ends = []; let p = 0; for (const x of w) { starts.push(p); p += x; ends.push(p); } ends[ends.length - 1] = Infinity; return { starts, ends }; }
+function layoutFromGuess(g) { const ends = g.starts.map((s, k) => k + 1 < g.starts.length ? g.starts[k + 1] : Infinity); return { starts: g.starts, ends }; }
+
+async function fixedWidthStage(m) {
+  if (!m.file || isNdjson(m.file) || isXlsx(m.file)) return null;
+  const typed = m.widths && String(m.widths).trim() ? parseWidths(m.widths) : null;
+  if (m.widths && String(m.widths).trim() && !typed) throw new Error('Column widths must be whole numbers such as 5,12,10,9 (the last column takes the rest of each line).');
+  const forced = m.delimiter === 'fixed'; let lay, text, guessed = null;
+  const sample = new TextDecoder().decode(new Uint8Array(await m.file.slice(0, 1 << 20).arrayBuffer())).replace(/^﻿/, '');
+  if (typed) { lay = layoutFromWidths(typed); text = 'Read as fixed-width text with the column widths you typed (the last column takes the rest of each line).'; }
+  else {
+    if (m.delimiter && m.delimiter !== 'auto' && !forced) return null;
+    const ls = sample.split(/\r?\n/); ls.pop(); const probe = ls.filter((l) => l.trim()).slice(0, 12);
+    if (probe.length < 5) { if (forced) throw new Error('Could not find fixed-width columns in this file. Type the column widths, such as 5,12,10,9.'); return null; }
+    if (!forced) for (const d of [',', '\t', ';', '|']) { let tot = 0; for (const l of probe) { let q = false, k = 1; for (const c of l) { if (c === '"') q = !q; else if (c === d && !q) k++; } tot += k; } if (tot / probe.length >= 1.5) return null; }
+    const g = guessWidths(ls); if (!g) { if (forced) throw new Error('Could not find fixed-width columns in this file. Type the column widths, such as 5,12,10,9.'); return null; } lay = layoutFromGuess(g); guessed = g.starts.slice(1).map((x, i) => x - (i ? g.starts[i] : 0)).join(',');
+    text = 'This looks like fixed-width text, so it was split into columns of width ' + g.starts.map((s, k) => k + 1 < g.starts.length ? g.starts[k + 1] - s : 'rest').join(', ') + '. Type your own widths in "Column widths" to change this.';
+  }
+  const conv = makeConverter(lay.starts, lay.ends), dec = new TextDecoder('utf-8'), enc = new TextEncoder(), parts = []; let acc = [], accN = 0, carry = '', rows = 0;
+  const put = (s) => { if (!s) return; const e = enc.encode(s); acc.push(e); accN += e.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
+  const rd = m.file.stream().getReader(); let first = true;
+  const doText = (t, last) => { t = carry + t; const ls = t.split(/\r?\n|\r(?!$)/); carry = last ? '' : ls.pop(); if (last && ls.length && ls[ls.length - 1] === '') ls.pop(); let out = ''; for (let l of ls) { if (first) { l = l.replace(/^﻿/, ''); } const r = conv(l); if (r) { out += r; rows++; first = false; } } put(out); };
+  for (;;) { const { done, value } = await rd.read(); if (done) break; doText(dec.decode(value, { stream: true }), false); }
+  doText(dec.decode(), true); if (acc.length) parts.push(new Blob(acc));
+  if (!rows) throw new Error('No rows could be read as fixed-width text.');
+  return { file: new File(parts, String(m.file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), text, widths: guessed };
+}
+// ---- SQLite: a small read-only reader (table b-trees, overflow pages, rowid and WITHOUT ROWID tables). Table-leaf pages are decoded in wasm (sq.c) and written as CSV; then the normal CSV import runs.
+// Minimal read-only SQLite file reader: table b-trees (rowid and WITHOUT ROWID), overflow pages, UTF-8/16 text. Writes rows as CSV text.
+// Reads through readBlock(offset, length) -> Promise<Uint8Array>.
+function makeSqlite(readBlock) {
+  const BLK = 1 << 22; let blkNo = -1, blk = null, ps = 0, U = 0, enc = 1, walMode = false, npages = 0, fileSize = 0;
+  async function page(n) {   // Uint8Array view of page n (1-based); cached 4 MB block
+    const off = (n - 1) * ps, b = Math.floor(off / BLK), e = Math.floor((off + ps - 1) / BLK);
+    if (b === e) { if (b !== blkNo) { blk = await readBlock(b * BLK, BLK); blkNo = b; } const sub = blk.subarray(off - b * BLK, off - b * BLK + ps); if (sub.length < ps) throw new Error('page ' + n + ' is past the end of the file'); return sub; }
+    const r = await readBlock(off, ps); if (r.length < ps) throw new Error('page ' + n + ' is past the end of the file'); return r;
+  }
+  const u16 = (p, o) => (p[o] << 8) | p[o + 1], u32 = (p, o) => ((p[o] << 24) | (p[o + 1] << 16) | (p[o + 2] << 8) | p[o + 3]) >>> 0;
+  function varint(p, o) { let v = 0; for (let i = 0; i < 8; i++) { const c = p[o + i]; v = v * 128 + (c & 127); if (c < 128) return [v, i + 1]; } return [v * 256 + p[o + 8], 9]; }   // 9th byte uses all 8 bits (exact up to 2^53)
+  async function open() {
+    const h = await readBlock(0, 100); if (h.length < 100 || String.fromCharCode(...h.subarray(0, 15)) !== 'SQLite format 3') throw new Error('This is not an SQLite database file.');
+    ps = u16(h, 16); if (ps === 1) ps = 65536; if (ps < 512 || (ps & (ps - 1))) throw new Error('This SQLite file has an invalid page size.');
+    U = ps - h[20]; enc = u32(h, 56) || 1; walMode = h[18] === 2 && h[19] === 2; npages = u32(h, 28);
+    return { pageSize: ps, encoding: enc, wal: walMode, pages: npages, reserved: h[20] };
+  }
+  const dec8 = new TextDecoder('utf-8'), dec16 = (le) => new TextDecoder(le ? 'utf-16le' : 'utf-16be');
+  async function payloadOf(p, o, plen, isIndex, tableLeafOnly) {   // returns the whole payload bytes, following overflow pages
+    const maxLocal = isIndex ? ((U - 12) * 64 / 255 | 0) - 23 : U - 35, minLocal = ((U - 12) * 32 / 255 | 0) - 23;
+    if (plen <= maxLocal) return p.subarray(o, o + plen);
+    let local = minLocal + ((plen - minLocal) % (U - 4)); if (local > maxLocal) local = minLocal;
+    const out = new Uint8Array(plen); out.set(p.subarray(o, o + local), 0); let got = local, next = u32(p, o + local);
+    while (got < plen && next) { const op = await page(next); const take = Math.min(U - 4, plen - got); out.set(op.subarray(4, 4 + take), got); got += take; next = u32(op, 0); }
+    return out;
+  }
+  function decodeRecord(b, ncol, rowid, aliasIdx, st) {   // -> array of JS values (null, number, bigint, string, Uint8Array length marker)
+    const [hlen, hn] = varint(b, 0); const types = []; let o = hn; while (o < hlen) { const [t, n] = varint(b, o); types.push(t); o += n; }
+    let d = hlen; const out = new Array(ncol).fill(null);
+    for (let i = 0; i < types.length; i++) {
+      const t = types[i]; let v = null, len = 0;
+      if (t === 0) v = null; else if (t >= 1 && t <= 6) { len = t === 5 ? 6 : t === 6 ? 8 : t; if (len <= 6) { let x = b[d] & 128 ? -1 : 0; for (let k = 0; k < len; k++) x = x * 256 + b[d + k]; if (b[d] & 128) { x = 0; for (let k = 0; k < len; k++) x = x * 256 + b[d + k]; x -= Math.pow(2, 8 * len); } v = x; } else { let x = 0n; for (let k = 0; k < 8; k++) x = (x << 8n) | BigInt(b[d + k]); if (x >= (1n << 63n)) x -= (1n << 64n); v = (x >= -9007199254740991n && x <= 9007199254740991n) ? Number(x) : x; } }
+      else if (t === 7) { len = 8; v = new DataView(b.buffer, b.byteOffset + d, 8).getFloat64(0, false); }
+      else if (t === 8) v = 0; else if (t === 9) v = 1;
+      else if (t >= 12) { if (t & 1) { len = (t - 13) >> 1; const sl = b.subarray(d, d + len); v = enc === 1 ? dec8.decode(sl) : dec16(enc === 2).decode(sl); } else { len = (t - 12) >> 1; v = null; st.blobs++; } }
+      d += len; if (i < ncol) out[i] = v;
+    }
+    if (aliasIdx >= 0 && out[aliasIdx] === null) out[aliasIdx] = rowid;
+    return out;
+  }
+  async function walkTable(root, onRecord, cols, aliasIdx, st, withoutRowid) {
+    const stack = [root];
+    const visit = async (n) => {
+      const p = await page(n), hb = n === 1 ? 100 : 0, type = p[hb], nc = u16(p, hb + 3);
+      if (type === 0x0d) { const base = hb + 8; for (let i = 0; i < nc; i++) { let o = u16(p, base + 2 * i); const [pl, a] = varint(p, o); o += a; const [rid, b2] = varint(p, o); o += b2; onRecord(decodeRecord(await payloadOf(p, o, pl, false), cols, rid, aliasIdx, st)); } }
+      else if (type === 0x05) { const base = hb + 12; for (let i = 0; i < nc; i++) { const o = u16(p, base + 2 * i); await visit(u32(p, o)); } await visit(u32(p, hb + 8)); }
+      else if (type === 0x0a) { const base = hb + 8; for (let i = 0; i < nc; i++) { let o = u16(p, base + 2 * i); const [pl, a] = varint(p, o); o += a; onRecord(decodeRecord(await payloadOf(p, o, pl, true), cols, 0, -1, st)); } }
+      else if (type === 0x02) { const base = hb + 12; for (let i = 0; i < nc; i++) { let o = u16(p, base + 2 * i); const child = u32(p, o); o += 4; const [pl, a] = varint(p, o); o += a; await visit(child); onRecord(decodeRecord(await payloadOf(p, o, pl, true), cols, 0, -1, st)); } await visit(u32(p, hb + 8)); }
+      else throw new Error('Unexpected SQLite page type ' + type + ' on page ' + n + '.');
+    };
+    await visit(root);
+  }
+  function parseCreate(sql) {   // column names and the rowid-alias column index from CREATE TABLE text
+    const open = sql.indexOf('('); if (open < 0) return null; let depth = 0, close = -1, q = null;
+    for (let i = open; i < sql.length; i++) { const c = sql[i]; if (q) { if (c === q) q = null; continue; } if (c === '"' || c === "'" || c === '`') q = c; else if (c === '[') q = ']'; else if (c === '(') depth++; else if (c === ')') { depth--; if (depth === 0) { close = i; break; } } }
+    if (close < 0) return null; const body = sql.slice(open + 1, close), segs = []; let cur = '', d2 = 0, q2 = null;
+    for (const c of body) { if (q2) { cur += c; if (c === q2) q2 = null; continue; } if (c === '"' || c === "'" || c === '`') { q2 = c; cur += c; continue; } if (c === '[') { q2 = ']'; cur += c; continue; } if (c === '(') d2++; if (c === ')') d2--; if (c === ',' && d2 === 0) { segs.push(cur); cur = ''; } else cur += c; }
+    segs.push(cur); const names = []; let alias = -1; const tail = sql.slice(close + 1);
+    for (const sraw of segs) { const s = sraw.trim(); if (/^(constraint|primary\s+key|unique|check|foreign\s+key)\b/i.test(s)) continue;
+      const m = /^(?:"((?:[^"]|"")*)"|`([^`]*)`|\[([^\]]*)\]|'([^']*)'|([^\s(]+))\s*([\s\S]*)$/.exec(s); if (!m) continue; const nm = (m[1] !== undefined ? m[1].replace(/""/g, '"') : m[2] ?? m[3] ?? m[4] ?? m[5]); const rest = m[6] || '';
+      if (/^integer\s+primary\s+key\b(?!\s+desc)/i.test(rest) || /^integer\s+(?:constraint\s+\S+\s+)?primary\s+key\b/i.test(rest)) alias = names.length; names.push(nm); }
+    return { names, alias, withoutRowid: /without\s+rowid/i.test(tail) };
+  }
+  async function tables() {   // sqlite_master rows -> [{name, root, sql}] for real tables
+    const out = [], st = { blobs: 0 };
+    await walkTable(1, (r) => { if (r[0] === 'table' && r[3] > 0 && typeof r[4] === 'string' && !/^sqlite_/i.test(r[1]) && !/^\s*create\s+virtual/i.test(r[4])) out.push({ name: r[1], root: Number(r[3]), sql: r[4] }); }, 5, -1, st);
+    for (const t of out) { const c = parseCreate(t.sql); if (c) Object.assign(t, c); }
+    return out.filter((t) => t.names && t.names.length);
+  }
+  async function leafPages(root) {   // number of leaf pages (walks interior pages only), a size estimate
+    let level = [root], depth = 0;
+    for (;;) { const p0 = await page(level[0]), hb = level[0] === 1 ? 100 : 0, t = p0[hb]; if (t === 0x0d || t === 0x0a) return level.length; const next = [];
+      for (const n of level) { const p = await page(n), h = n === 1 ? 100 : 0, nc = u16(p, h + 3), base = h + 12; for (let i = 0; i < nc; i++) next.push(u32(p, u16(p, base + 2 * i))); next.push(u32(p, h + 8)); } level = next; if (++depth > 12) return level.length; }
+  }
+  const csvq = (s) => (/[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
+  async function exportCsv(t, put) {
+    const st = { blobs: 0, rows: 0 }; let buf = 'name'.length ? t.names.map(csvq).join(',') + '\n' : '';
+    const nc = t.names.length;
+    await walkTable(t.root, (r) => { let line = ''; for (let i = 0; i < nc; i++) { const v = r[i]; if (i) line += ','; if (v === null || v === undefined) continue; line += typeof v === 'string' ? csvq(v) : String(v); } buf += line + '\n'; st.rows++; if (buf.length > (1 << 20)) { put(buf); buf = ''; } }, nc, t.alias, st, t.withoutRowid);
+    put(buf); return st;
+  }
+  return { open, tables, leafPages, exportCsv, page, get info() { return { pageSize: ps, encoding: enc, reserved: ps - U }; } };
+}
+// Fast path: table-leaf pages are decoded in wasm (sq.c). wasmBytes: the compiled module bytes.
+async function exportCsvFast(S, t, wasmBytes, putBytes) {
+  const { page, info } = S; let X; const ps = info.pageSize, U = ps - info.reserved;
+  const inst = new WebAssembly.Instance(new WebAssembly.Module(wasmBytes), { env: { fmt_double: (x, dst) => { const s = String(x); const m = new Uint8Array(X.memory.buffer, dst, s.length + 1); for (let i = 0; i < s.length; i++) m[i] = s.charCodeAt(i); return s.length; } } }); X = inst.exports;
+  const OUTCAP = 16 << 20, budget = 8 << 20, bp = Math.max(1, Math.floor(budget / ps)); const pg = X.alloc(bp * ps), out = X.alloc(OUTCAP);
+  const nc = t.names.length; X.setup(pg, out, OUTCAP, ps, U, nc, t.alias >= 0 ? t.alias : 0xFFFFFFF, info.encoding);
+  const flush = () => { const n = X.out_len(); if (n) { putBytes(new Uint8Array(X.memory.buffer, out, n).slice()); X.out_reset(); } };
+  const enc = new TextEncoder(); putBytes(enc.encode(t.names.map((n) => (/[",\r\n]/.test(n) ? '"' + n.replace(/"/g, '""') + '"' : n)).join(',') + '\n'));
+  // leaf pages in order (interior pages only are read here)
+  let level = [t.root]; for (let d = 0; ; d++) { const p0 = await page(level[0]), hb = level[0] === 1 ? 100 : 0; if (p0[hb] === 0x0d) break; if (p0[hb] !== 0x05 || d > 12) throw new Error('Unexpected SQLite page type ' + p0[hb] + '.'); const next = []; for (const n of level) { const p = await page(n), h = n === 1 ? 100 : 0, c = (p[h + 3] << 8) | p[h + 4]; for (let i = 0; i < c; i++) { const o = (p[h + 12 + 2 * i] << 8) | p[h + 13 + 2 * i]; next.push(((p[o] << 24) | (p[o + 1] << 16) | (p[o + 2] << 8) | p[o + 3]) >>> 0); } next.push(((p[h + 8] << 24) | (p[h + 9] << 16) | (p[h + 10] << 8) | p[h + 11]) >>> 0); } level = next; }
+  let ovPtr = 0, ovCap = 0;
+  for (let at = 0; at < level.length; at += bp) {
+    const n = Math.min(bp, level.length - at); for (let i = 0; i < n; i++) new Uint8Array(X.memory.buffer, pg + i * ps, ps).set(await page(level[at + i]));
+    let pi = 0, cell = 0;
+    for (;;) {
+      X.run(pi, n, cell); flush(); const s = X.get_status(); if (s === 0) break;
+      if (s === 1) { pi = X.get_ov_page(); cell = X.get_ov_cell(); continue; }
+      if (s === 3) {
+        pi = X.get_ov_page(); cell = X.get_ov_cell(); const plen = X.get_ov_plen(), off = X.get_ov_off(), maxL = U - 35, minL = (((U - 12) * 32 / 255) | 0) - 23; let local = minL + ((plen - minL) % (U - 4)); if (local > maxL) local = minL;
+        if (plen > ovCap) { ovCap = Math.max(plen, ovCap * 2, 1 << 16); ovPtr = X.alloc(ovCap); }
+        const src = new Uint8Array(X.memory.buffer, pg + pi * ps + off, local).slice(); let got = local; const dstOv = () => new Uint8Array(X.memory.buffer, ovPtr, plen); dstOv().set(src, 0);
+        const u32 = (p, o) => ((p[o] << 24) | (p[o + 1] << 16) | (p[o + 2] << 8) | p[o + 3]) >>> 0; let nx = u32(new Uint8Array(X.memory.buffer, pg + pi * ps + off + local, 4), 0);
+        while (got < plen && nx) { const op = await page(nx), take = Math.min(U - 4, plen - got); dstOv().set(op.subarray(4, 4 + take), got); got += take; nx = u32(op, 0); }
+        let r = X.emit_payload(ovPtr, plen, X.get_ov_rowid_lo(), X.get_ov_rowid_hi()); if (r === 1) { flush(); r = X.emit_payload(ovPtr, plen, X.get_ov_rowid_lo(), X.get_ov_rowid_hi()); } if (r) throw new Error('A row in this SQLite table could not be read.');
+        cell++; continue;
+      }
+      throw new Error('This SQLite table has pages that could not be read (page type or size).');
+    }
+  }
+  flush(); return { rows: X.get_rows(), blobs: X.get_blobs() };
+}
+
+const SQ_WASM = Uint8Array.from(atob('AGFzbQEAAAABNAhgAnx/AX9gAX8Bf2AIf39/f39/f38AYAABf2AAAGADf39/AX9gA39/fgF/YAR/f39/AX8CEgEDZW52CmZtdF9kb3VibGUAAAMREAECAwQDAwMDAwMDAwMFBgcEBQFwAQEBBQQBAIACBg8CfwFBgIoEC38AQYCKBAsH0gERBm1lbW9yeQIABWFsbG9jAAELX19oZWFwX2Jhc2UDAQVzZXR1cAACB291dF9sZW4AAwlvdXRfcmVzZXQABAlnZXRfYmxvYnMABQhnZXRfcm93cwAGCmdldF9zdGF0dXMABwtnZXRfb3ZfcGFnZQAIC2dldF9vdl9jZWxsAAkLZ2V0X292X3BsZW4ACgpnZXRfb3Zfb2ZmAAsPZ2V0X292X3Jvd2lkX2xvAAwPZ2V0X292X3Jvd2lkX2hpAA0DcnVuAA4MZW1pdF9wYXlsb2FkABAK3iwQXQEDf0EAIQFBAEEAKAK4iYCAACICQYCKhIAAIAIbQQ9qQXBxIgIgAGoiADYCuImAgAACQAJAIABB//8DakEQdiIAPwAiA00NACAAIANrQABBf0YNAQsgAiEBCyABC3AAQQAgATYCwImAgABBACAANgK8iYCAAEEAIAI2AsSJgIAAQQAgAzYCyImAgABBACAENgLMiYCAAEEAIAU2AtCJgIAAQQAgBjYC1ImAgABBAEEANgLYiYCAAEEAQQA2AtyJgIAAQQBBADYC4ImAgAALCwBBACgC2ImAgAALDQBBAEEANgLYiYCAAAsLAEEAKALciYCAAAsLAEEAKALgiYCAAAsLAEEAKALkiYCAAAsLAEEAKALoiYCAAAsLAEEAKALsiYCAAAsLAEEAKALwiYCAAAsLAEEAKAL0iYCAAAsLAEEAKAL4iYCAAAsLAEEAKAL8iYCAAAvlBwQHfwF+AX8BfkEAQQA2AuSJgIAAAkAgACABTw0AA0ACQEEAKAK8iYCAACIDQQAoAsiJgIAAIABsIgRqIgUtAABBDUYNAEEAIAA2AuiJgIAAQQBBAjYC5ImAgAAMAgsCQCACIAUtAANBCHQgBUEEai0AAHIiBk8NACADIAQgAkEBdGpqQQlqIQMDQCAFIANBf2otAABBCHQgAy0AAHIiB2oiCCwAACIJQf8Aca0hCkEBIQQCQAJAIAlBf0wNAEEBIQkMAQsgCkIHhiAILAABIgtB/wBxrYQhCkECIQkgC0F/Sg0AIApCB4YgCCwAAiILQf8Aca2EIQpBAyEJIAtBf0oNACAKQgeGIAgsAAMiC0H/AHGthCEKQQQhCSALQX9KDQAgCkIHhiAILAAEIgtB/wBxrYQhCkEFIQkgC0F/Sg0AIApCB4YgCCwABSILQf8Aca2EIQpBBiEJIAtBf0oNACAKQgeGIAgsAAYiC0H/AHGthCEKQQchCSALQX9KDQAgCkIHhiAILAAHIgtB/wBxrYQhCkEIIQkgC0F/Sg0AIApCCIYgCDEACIQhCkEJIQkLIAUgCSAHaiIJaiIILAAAIgdB/wBxrSEMAkAgB0F/Sg0AIAxCB4YgCCwAASIHQf8Aca2EIQxBAiEEIAdBf0oNACAMQgeGIAgsAAIiB0H/AHGthCEMQQMhBCAHQX9KDQAgDEIHhiAILAADIgdB/wBxrYQhDEEEIQQgB0F/Sg0AIAxCB4YgCCwABCIHQf8Aca2EIQxBBSEEIAdBf0oNACAMQgeGIAgsAAUiB0H/AHGthCEMQQYhBCAHQX9KDQAgDEIHhiAILAAGIgdB/wBxrYQhDEEHIQQgB0F/Sg0AIAxCB4YgCCwAByIHQf8Aca2EIQxBCCEEIAdBf0oNACAMQgiGIAgxAAiEIQxBCSEECyAEIAlqIQQCQCAKQQAoAsyJgIAAQV1qrVgNAEEAIAA2AuiJgIAAQQBBAzYC5ImAgABBACACNgLsiYCAAEEAIAo+AvCJgIAAQQAgBDYC9ImAgABBACAMNwP4iYCAAAwECwJAIAogBK18QQA1AsiJgIAAWA0AQQAgADYC6ImAgABBAEECNgLkiYCAAAwECwJAAkACQCAFIARqIAqnIAwQj4CAgABBf2oOAgABAgtBACAANgLoiYCAAEEAQQE2AuSJgIAAQQAgAjYC7ImAgAAMBQtBACAANgLoiYCAAEEAQQI2AuSJgIAAQQAgAjYC7ImAgAAMBAsgA0ECaiEDIAYgAkEBaiICRw0ACwtBACECIABBAWoiACABRw0ACyABIQALIAAgASAAIAFJGwuIIggEfwF+A38Bfgh/AX4EfAN/I4CAgIAAQSBrIgMkgICAgABBASEEAkAgAUEBdEEAKALYiYCAACIFakEAKALQiYCAACIGQQV0akHAAGpBACgCxImAgABLDQAgACwAACIEQf8Aca0hB0EBIQgCQCAEQX9KDQAgB0IHhiAALAABIgRB/wBxrYQhB0ECIQggBEF/Sg0AIAdCB4YgACwAAiIEQf8Aca2EIQdBAyEIIARBf0oNACAHQgeGIAAsAAMiBEH/AHGthCEHQQQhCCAEQX9KDQAgB0IHhiAALAAEIgRB/wBxrYQhB0EFIQggBEF/Sg0AIAdCB4YgACwABSIEQf8Aca2EIQdBBiEIIARBf0oNACAHQgeGIAAsAAYiBEH/AHGthCEHQQchCCAEQX9KDQAgB0IHhiAALAAHIgRB/wBxrYQhB0EIIQggBEF/Sg0AIAdCCIYgADEACIQhB0EJIQgLQQIhBCAHIAGtVg0AIAcgCK1UDQACQAJAAkAgCCAHpyIJTw0AIAYNAQtBACEKDAELIAIgAkI/hyIHhSAHfSELIANBfGohDCADQX9qIQ1BACEKIAkhDgNAIAAgCGoiBiwAACIEQf8Aca0hBwJAAkAgBEF/TA0AQQEhDwwBCyAHQgeGIAYsAAEiBEH/AHGthCEHQQIhDyAEQX9KDQAgB0IHhiAGLAACIgRB/wBxrYQhB0EDIQ8gBEF/Sg0AIAdCB4YgBiwAAyIEQf8Aca2EIQdBBCEPIARBf0oNACAHQgeGIAYsAAQiBEH/AHGthCEHQQUhDyAEQX9KDQAgB0IHhiAGLAAFIgRB/wBxrYQhB0EGIQ8gBEF/Sg0AIAdCB4YgBiwABiIEQf8Aca2EIQdBByEPIARBf0oNACAHQgeGIAYsAAciBEH/AHGthCEHQQghDyAEQX9KDQAgB0IIhiAGMQAIhCEHQQkhDwsCQAJAIAoNACAFIRAMAQtBACAFQQFqIhA2AtiJgIAAQQAoAsCJgIAAIAVqQSw6AAALAkACQAJAAkAgB0IAUg0AAkAgCkEAKALUiYCAAEYNACAQIQUgDiERDAQLAkAgAkJ/VQ0AQQAoAsCJgIAAIBBqQS06AAAgEEEBaiEQDAILIAJCAFINASADQTA6AABBASEEDAILAkACQAJAIAdCBlYNAAJAQQZBCCAHpyAHQgZRGyAHQgVRGyIFIA5qIhEgAU0NAEECIQQMCQsgBUEDcSEGIAAgDmoiEiwAAEEHdawhB0EAIQQCQCAFQX9qQQNJDQAgBUEMcSETQQAhBANAIAdCEIYgEiAEaiIFMQAAQgiGhCAFQQFqMQAAhEIQhiAFQQJqMQAAQgiGhCAFQQNqMQAAhCEHIBMgBEEEaiIERw0ACwsCQCAGRQ0AIAAgDiAEamohBQNAIAdCCIYgBTEAAIQhByAFQQFqIQUgBkF/aiIGDQALCwJAIAdCf1UNAEEAKALAiYCAACAQakEtOgAAIBBBAWohEAwCCyAHQgBSDQEgA0EwOgAAQQEhBAwCCwJAAkACQAJAAkACQAJAIAdCeXwiFEICVg0AAkACQAJAIBSnDgMAAQIACwJAIA5BCGoiESABTQ0AQQIhBAwRCwJAAkAgACAOaiIFMQAAQhCGIAVBAWoxAABCCIaEIAVBAmoxAACEQhCGIAVBA2oxAABCCIaEIAVBBGoxAACEQhCGIAVBBWoxAABCCIaEIAVBBmoxAACEQgiGIAVBB2oxAACEvyIVIBViDQAgFZogFSAVRAAAAAAAAAAAYyIOGyIWRAAAAAAAAPB/Yg0BC0EAIBVBACgCwImAgAAgEGoQgICAgABBACgC2ImAgABqIgU2AtiJgIAADA4LAkAgFkQAAAAAAAAAAGINAEEAIBBBAWoiBTYC2ImAgABBACgCwImAgAAgEGpBMDoAAAwOCyAWRAAANCb1awxDZg0DIBZE8WjjiLX45D5jDQNBACESQYCIgIAAIQVBASEEQQAhBgJAA0AgFiAFKwMAIheiIhhEAAA0JvVrDENmDQECQAJAIBhEAAAAAAAA4D+gIhiZRAAAAAAAAOBDY0UNACAYsCEHDAELQoCAgICAgICAgH8hBwsCQCAHuSAXoyAWYg0AQQAhEwJAIAdQDQADQCADIBNqIAcgB0IKgCIUQgp+fadBMHI6AAAgE0EBaiETIAdCCVYhBSAUIQcgBQ0ACwsCQAJAIA4NACAQIQUMAQtBACAQQQFqIgU2AtiJgIAAQQAoAsCJgIAAIBBqQS06AAALAkAgBg0AIBNBAUgNEUEAKALAiYCAACEQAkACQCATQQNxIgYNACATIQQMAQsgEyEEA0AgECAFaiANIARqLQAAOgAAIAVBAWohBSAEQX9qIQQgBkF/aiIGDQALCyATQQRJDQwDQCAQIAVqIgZBA2ogDCAEaiISLQAAOgAAIAYgEkEDai0AADoAACAGQQFqIBJBAmotAAA6AAAgBkECaiASQQFqLQAAOgAAIAVBBGohBSAEQX1qIQYgBEF8aiEEIAZBAUsNAAwNCwsCQAJAIBMgBmsiDkEBSA0AQQAoAsCJgIAAIRAgEyAGTA0KAkACQCAOQQNxDQAgEyESDAELIBMgEmpBA3EhDiATIRIDQCAQIAVqIA0gEmotAAA6AAAgBUEBaiEFIBJBf2ohEiAOQX9qIg4NAAsLIAYgE2tBfE0NAQwKC0EAKALAiYCAACIQIAVqIgRBMDoAAEEAIAVBAmoiBTYC2ImAgAAgBEEBakEuOgAAAkAgDkF/Sg0AIBAgBWpBMCAGIBNrIgRBASAEQQFKGyIE/AsAQQAgBSAEaiIFNgLYiYCAAAsgE0EBSA0LAkACQCATQQNxIgYNACATIQQMAQsgEyEEA0AgECAFaiANIARqLQAAOgAAIAVBAWohBSAEQX9qIQQgBkF/aiIGDQALCyATQQRJDQoDQCAQIAVqIgZBA2ogDCAEaiISLQAAOgAAIAYgEkEDai0AADoAACAGQQFqIBJBAmotAAA6AAAgBkECaiASQQFqLQAAOgAAIAVBBGohBSAEQX1qIQYgBEF8aiEEIAZBAUsNAAwLCwsDQCAQIAVqIhNBA2ogDCASaiIOLQAAOgAAIBMgDkEDai0AADoAACATQQFqIA5BAmotAAA6AAAgE0ECaiAOQQFqLQAAOgAAIAVBBGohBSASQXxqIhIgBkoNAAwJCwsgBEEBaiEEIBJBA2ohEiAFQQhqIQUgBkEBaiIGQRdHDQALC0EAIBVBACgCwImAgAAgEGoQgICAgABBACgC2ImAgABqIgU2AtiJgIAADA0LQQAgEEEBaiIFNgLYiYCAAEEAKALAiYCAACAQakEwOgAAIA4hEQwMC0EAIBBBAWoiBTYC2ImAgABBACgCwImAgAAgEGpBMToAACAOIREMCwtBAiEEIAdCDFQNDSAOIAdC9P///x98QgGIpyIZaiIRIAFLDQ0CQAJAIAdCAYNQDQAgGUUNAUEAIRMgACAOaiIaIQUgGSESA0BBASEEAkACQCAFLQAAQXZqIgYOIwEAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAABAAsgEyEECwJAAkAgBg4jAQAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAEACyAFQQFqIQUgBCETIBJBf2oiEg0BCwtBACgCwImAgAAhBgJAIAQNACAZQQNxIRNBACEEAkACQCAZQQRPDQAgECEFDAELIAYgEGohGyAZQXxxIRlBACEEA0AgGyAEaiIFIBogBGoiEi0AADoAACAFQQFqIBJBAWotAAA6AAAgBUECaiASQQJqLQAAOgAAIAVBA2ogEkEDai0AADoAACAZIARBBGoiBEcNAAsgECAEaiEFCwJAIBNFDQAgACAOIARqaiEEA0AgBiAFaiAELQAAOgAAIARBAWohBCAFQQFqIQUgE0F/aiITDQALC0EAIAU2AtiJgIAADA0LIAYgEGpBIjoAACAZQQFxIRsgEEEBaiEEQQAhEgJAIBlBAUcNAAwECyAZQX5xIQ5BACESA0ACQCAaIBJqIhMtAAAiBUEiRw0AIAYgBGpBIjoAACAEQQFqIQQgEy0AACEFCyAGIARqIAU6AAAgBEEBaiEFAkAgE0EBaiIQLQAAIhNBIkcNACAGIAVqQSI6AAAgBEECaiEFIBAtAAAhEwsgBiAFaiATOgAAIAVBAWohBCAOIBJBAmoiEkYNBAwACwtBAEEAKALciYCAAEEBajYC3ImAgAALIBAhBQwKC0EAIBVBACgCwImAgAAgEGoQgICAgABBACgC2ImAgABqIgU2AtiJgIAADAkLAkAgG0UNAAJAAkAgGiASaiITLQAAIhJBIkYNACAEIQUMAQsgBiAEakEiOgAAIARBAWohBSATLQAAIRILIAYgBWogEjoAACAFQQFqIQQLQQAgBUECaiIFNgLYiYCAACAGIARqQSI6AAAMCAsgECAFakEuOgAAIAVBAWohBQNAIBAgBWogAyAEakF+ai0AADoAACAFQQFqIQUgBEF/aiIEQQFKDQALC0EAIAU2AtiJgIAACyAQQX9qIQQCQANAIAQgBWotAAAiBkEwRw0BQQAgBUF/aiIFNgLYiYCAAAwACwsgBkEuRw0FIAVBf2ohBQtBACAFNgLYiYCAAAwECyAHIAdCP4ciFIUgFH0hB0EAIQQDQCADIARqIAcgB0IKgCIUQgp+fadBMHI6AAAgBEEBaiEEIAdCClQhBSAUIQcgBUUNAAsLQQAoAsCJgIAAIRMCQAJAIARBA3EiEg0AIAQhBiAQIQUMAQsgBCEGIBAhBQNAIBMgBWogDSAGai0AADoAACAFQQFqIQUgBkF/aiEGIBJBf2oiEg0ACwsCQCAEQQRJDQAgEyAFaiETIAwgBmohBEEAIRJBACAGayEQA0AgEyASaiIGIARBA2otAAA6AAAgBkEBaiAEQQJqLQAAOgAAIAZBAmogBEEBai0AADoAACAGQQNqIAQtAAA6AAAgBEF8aiEEIBAgEkEEaiISag0ACyAFIBJqIQULQQAgBTYC2ImAgAAMAgtBACEEIAshBwNAIAMgBGogByAHQgqAIhRCCn59p0EwcjoAACAEQQFqIQQgB0IKVCEFIBQhByAFRQ0ACwtBACgCwImAgAAhEwJAAkAgBEEDcSISDQAgBCEGIBAhBQwBCyAEIQYgECEFA0AgEyAFaiANIAZqLQAAOgAAIAVBAWohBSAGQX9qIQYgEkF/aiISDQALCwJAIARBBEkNACATIAVqIRMgDCAGaiEEQQAhEkEAIAZrIRADQCATIBJqIgYgBEEDai0AADoAACAGQQFqIARBAmotAAA6AAAgBkECaiAEQQFqLQAAOgAAIAZBA2ogBC0AADoAACAEQXxqIQQgECASQQRqIhJqDQALIAUgEmohBQtBACAFNgLYiYCAACAOIRELIApBAWohCkEAKALQiYCAACEGIA8gCGoiCCAJTw0BIBEhDiAKIAZJDQALC0EAKALAiYCAACESAkAgCiAGTw0AAkACQCAGIAprQQNxIg0NACAKIQQMAQsgCiEEA0ACQCAERQ0AIBIgBWpBLDoAACAFQQFqIQULIARBAWohBCANQX9qIg0NAAsLIAogBmtBfEsNAANAAkAgBEUNACASIAVqQSw6AAAgBUEBaiEFCyASIAVqIg1BrNgAOwAAIA1BAmpBLDoAACAFQQNqIQUgBiAEQQRqIgRHDQALC0EAIQRBACAFQQFqNgLYiYCAACASIAVqQQo6AABBAEEAKALgiYCAAEEBajYC4ImAgAALIANBIGokgICAgAAgBAsWACAAIAEgA61CIIYgAq2EEI+AgIAACwvAAQEAQYAIC7gBAAAAAAAA8D8AAAAAAAAkQAAAAAAAAFlAAAAAAABAj0AAAAAAAIjDQAAAAAAAavhAAAAAAICELkEAAAAA0BJjQQAAAACE15dBAAAAAGXNzUEAAAAgX6ACQgAAAOh2SDdCAAAAopQabUIAAEDlnDCiQgAAkB7EvNZCAAA0JvVrDEMAgOA3ecNBQwCg2IVXNHZDAMhOZ23Bq0MAPZFg5FjhQ0CMtXgdrxVEUO/i1uQaS0SS1U0Gz/CARAD3AQRuYW1lAAgHc3Eud2FzbQHFAREACmZtdF9kb3VibGUBBWFsbG9jAgVzZXR1cAMHb3V0X2xlbgQJb3V0X3Jlc2V0BQlnZXRfYmxvYnMGCGdldF9yb3dzBwpnZXRfc3RhdHVzCAtnZXRfb3ZfcGFnZQkLZ2V0X292X2NlbGwKC2dldF9vdl9wbGVuCwpnZXRfb3Zfb2ZmDA9nZXRfb3Zfcm93aWRfbG8ND2dldF9vdl9yb3dpZF9oaQ4DcnVuDwtlbWl0X3JlY29yZBAMZW1pdF9wYXlsb2FkBxIBAA9fX3N0YWNrX3BvaW50ZXIJCgEABy5yb2RhdGEAOAlwcm9kdWNlcnMBDHByb2Nlc3NlZC1ieQEMVWJ1bnR1IGNsYW5nETE4LjEuMyAoMXVidW50dTEpADkPdGFyZ2V0X2ZlYXR1cmVzAysLYnVsay1tZW1vcnkrD211dGFibGUtZ2xvYmFscysIc2lnbi1leHQ='), (c) => c.charCodeAt(0));
+async function isSqliteFile(f) { if (!f || f.size < 512) return false; const h = new Uint8Array(await f.slice(0, 16).arrayBuffer()); return String.fromCharCode(...h.subarray(0, 15)) === 'SQLite format 3'; }
+async function sqliteOpen(file) {
+  const S = makeSqlite(async (o, l) => new Uint8Array(await file.slice(o, o + l).arrayBuffer())); const info = await S.open();
+  let tables; try { tables = await S.tables(); } catch (e) { throw new Error('This SQLite file could not be read: ' + (e && e.message || e)); }
+  if (!tables.length) throw new Error('This SQLite database has no tables with data to read.');
+  return { S, info, tables };
+}
+async function sqliteList(file) {
+  const { S, tables } = await sqliteOpen(file); const out = [];
+  for (const t of tables) { let size = 0; try { size = (await S.leafPages(t.root)) * S.info.pageSize; } catch { size = 0; } out.push({ name: t.name, size }); }
+  const best = out.reduce((a, b) => (b.size > a.size ? b : a), out[0]); return { entries: out, picked: best.name };
+}
+async function sqliteToCsvFile(file, wantTable) {
+  const { S, info, tables } = await sqliteOpen(file); let pick = wantTable ? tables.find((t) => t.name === wantTable) : null;
+  if (!pick) { let best = -1; for (const t of tables) { let n = 0; try { n = await S.leafPages(t.root); } catch { n = 0; } if (n > best) { best = n; pick = t; } } }
+  const parts = []; let acc = [], accN = 0; const put = (b) => { acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
+  let st; const enc = new TextEncoder();
+  try {
+    if (!pick.withoutRowid && info.encoding === 1) st = await exportCsvFast(S, pick, SQ_WASM, put);
+    else st = await S.exportCsv(pick, (s) => put(enc.encode(s)));
+  } catch (e) { throw new Error('The SQLite file could not be read to the end (it may be damaged or cut short): ' + (e && e.message || e)); }
+  if (acc.length) parts.push(new Blob(acc));
+  if (!st.rows) throw new Error('The table "' + pick.name + '" has no rows.');
+  return { file: new File(parts, String(file.name).replace(/\.[^.]*$/, '') + '-' + pick.name.replace(/[^A-Za-z0-9_-]+/g, '_') + '.csv', { type: 'text/csv' }), table: pick.name, tables: tables.length, rows: st.rows, blobs: st.blobs, wal: info.wal };
+}
+// ---- ODS (OpenDocument spreadsheet): content.xml streams through a wasm parser (ods.c) that writes one table as CSV (dates and times as ISO text, repeated rows and cells expanded, empty rows skipped); then the normal CSV import runs.
+const isOds = (f) => /\.ods$/i.test(f.name || '');
+const ODS_WASM = Uint8Array.from(atob('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AAVBOkcNASAFLQAGQewARw0BIAUtAAdB6QBHDQEgBS0ACEHuAEcNASAFLQAJQeUARw0BIAUtAApBLUcNASAFLQALQeIARw0BIAUtAAxB8gBHDQEgBS0ADUHlAEcNASAFLQAOQeEARw0BQQohAyAFLQAPQesARw0BCyACIAIoAgAiAEEBajYCACAAQdCRgIAAaiADOgAAC0EBIQMgBSAGakEBaiIAIAFJDQALCyADC5oFAQ5/I4CAgIAAQRBrIQECQEEAKAKoiYCAACICIABBACgC0JGIgAAiA2tBBHRqQTBqQQAoAoyJgIAATQ0AQQBBAjYCwImAgABBAA8LAkAgACADSQ0AQQAoAoiJgIAAIQQCQAJAQQAtALyJgIAARQ0AIARBB2ohBSABQXxqIQYgAUF/aiEHA0ACQAJAIAMNACACIQgMAQtBACACQQFqIgg2AqiJgIAAIAQgAmpBLDoAAAsCQAJAIAMgAEkNACADQQFqIQMgCCECDAELQQEhCUEAIQogA0EBaiIDIQsDQCABIApqIAsgC0EKbiIMQQpsa0EwcjoAACAJIg1BAWohCSAKQQFqIQogC0EKSSEOIAwhCyAORQ0ACyAEIAhqIgtB496xqwc2AAAgC0EGakHfADoAACALQQRqQe3cATsAACAIQQdqIQICQAJAIApBA3ENACAKIQ4MAQsgDUEDcSEMIAUgCGohDkEAIQsgByEJA0AgDiALaiAJIApqLQAAOgAAIAlBf2ohCSAMIAtBAWoiC0cNAAsgAiALaiECIAogC2shDgsCQCAKQX9qQQNJDQAgBCACaiEMIAYgDmohC0EAIQlBACAOayEOA0AgDCAJaiIKIAtBA2otAAA6AAAgCkEBaiALQQJqLQAAOgAAIApBAmogC0EBai0AADoAACAKQQNqIAstAAA6AAAgC0F8aiELIA4gCUEEaiIJag0ACyACIAlqIQILQQAgAjYCqImAgAALIAMgAE0NAAwCCwsgAEEBaiEJIAMhCwNAAkAgC0UNAEEAIAJBAWoiCjYCqImAgAAgBCACakEsOgAAIAohAgsgC0EBaiILIABNDQALIANBAWoiCyAJIAsgCUsbIQMLQQAgAzYC0JGIgAALQQELC4YBAQBBgAgLf1RSVUUARkFMU0UAPC90YWJsZTp0YWJsZS1jZWxsPgA8L3RhYmxlOmNvdmVyZWQtdGFibGUtY2VsbD4AIG9mZmljZTpib29sZWFuLXZhbHVlPSIAIG9mZmljZTpzdHJpbmctdmFsdWU9IgAgb2ZmaWNlOnRpbWUtdmFsdWU9IgAA2QEEbmFtZQAJCG9kcy53YXNtAaYBEAAFYWxsb2MBBXNldHVwAg1nZXRfbmFtZXNfbGVuAwlnZXRfdHJvd3MEB291dF9sZW4FCW91dF9yZXNldAYIZ2V0X3Jvd3MHCWdldF93aWR0aAgLZ2V0X2Ryb3BwZWQJCmdldF9zdGF0dXMKCmdldF90YWJsZXMLB3Byb2Nlc3MMCnVuZXNjX2ludG8NBGF0dHIOCWNlbGxfdGV4dA8HZmlsbF90bwcSAQAPX19zdGFja19wb2ludGVyCQoBAAcucm9kYXRhADgJcHJvZHVjZXJzAQxwcm9jZXNzZWQtYnkBDFVidW50dSBjbGFuZxExOC4xLjMgKDF1YnVudHUxKQA5D3RhcmdldF9mZWF0dXJlcwMrC2J1bGstbWVtb3J5Kw9tdXRhYmxlLWdsb2JhbHMrCHNpZ24tZXh0'), (c) => c.charCodeAt(0));
+async function odsStream(file, wantName, listOnly, onChunkOut) {
+  const names0 = (await unzipFile(file, null, true)).entries.map((x) => x.name); if (!names0.some((x) => x.name === 'content.xml' || x === 'content.xml')) throw new Error('This is not an OpenDocument spreadsheet: content.xml is missing.');
+  const z = await unzipFile(file, 'content.xml', false, true), X = new WebAssembly.Instance(new WebAssembly.Module(ODS_WASM), {}).exports, enc = new TextEncoder();
+  const CAP = 12 << 20, OUTCAP = 16 << 20, INCAP = CAP + (6 << 20), inp = X.alloc(INCAP), out = X.alloc(OUTCAP), nm = X.alloc(65536), wb = enc.encode(wantName || ''), wp = X.alloc(wb.length + 1);
+  new Uint8Array(X.memory.buffer).set(wb, wp); X.setup(inp, out, OUTCAP, listOnly ? 0xFFFFFFFF : 0, 0, nm, wp, wb.length);
+  const rd = z.stream.getReader(); let fill = 0;
+  const run = (final) => { let p = 0; for (;;) { p = X.process(p, fill, final ? 1 : 0); const n = X.out_len(); if (n) { if (onChunkOut) onChunkOut(new Uint8Array(X.memory.buffer, out, n).slice()); X.out_reset(); } const s = X.get_status(); if (s === 2) throw new Error('A cell or row in this spreadsheet is too large to read.'); if (s !== 1) break; } if (p < fill) new Uint8Array(X.memory.buffer).copyWithin(inp, inp + p, inp + fill); fill -= p; };
+  for (;;) { const { done, value } = await rd.read(); if (done) break; if (fill + value.length > INCAP) throw new Error('A row in this spreadsheet is larger than ' + (CAP >> 20) + ' MB.'); new Uint8Array(X.memory.buffer).set(value, inp + fill); fill += value.length; if (fill >= (4 << 20)) run(false); }
+  run(true);
+  const raw = new TextDecoder().decode(new Uint8Array(X.memory.buffer, nm, X.get_names_len())).split('\0').filter(Boolean).map(xlUnescape), trows = raw.map((_, i) => X.get_trows(i));
+  return { names: raw, trows, rows: X.get_rows(), width: X.get_width(), dropped: X.get_dropped() };
+}
+async function odsList(file) { const r = await odsStream(file, '', true); let best = 0; r.trows.forEach((n, i) => { if (n > r.trows[best]) best = i; }); return { entries: r.names.map((n) => ({ name: n, size: -1 })), picked: r.names[best], kind: 'Sheet' }; }
+async function odsToCsvFile(file, wantSheet) {
+  const parts = []; let acc = [], accN = 0; const put = (b) => { acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
+  let r = await odsStream(file, wantSheet, false, put);
+  if (!r.rows && !wantSheet && r.names.length > 1) {   // the first table is empty: take the first table that has rows
+    for (let i = 1; i < r.names.length && !r.rows; i++) { parts.length = 0; acc = []; accN = 0; r = await odsStream(file, r.names[i], false, put); if (r.rows) { r.sheet = r.names[i]; break; } }
+  }
+  if (acc.length) parts.push(new Blob(acc));
+  if (!r.rows) throw new Error('The spreadsheet has no data.');
+  return { file: new File(parts, String(file.name).replace(/\.ods$/i, '') + '.csv', { type: 'text/csv' }), sheet: wantSheet || r.sheet || r.names[0], sheets: r.names.length, rows: r.rows, width: r.width, dropped: r.dropped };
+}
+// ---- GeoJSON: a FeatureCollection becomes one row per feature (properties as columns, longitude/latitude for points, other geometry as JSON text), then the NDJSON import runs.
+async function geoStage(m) {
+  if (!m.file || !/\.(geojson|json)$/i.test(m.file.name || '')) return null;
+  const h1 = new Uint8Array(await m.file.slice(0, 1 << 20).arrayBuffer()), lat = new TextDecoder('latin1').decode(h1);
+  if (lat.indexOf('"FeatureCollection"') < 0) return null; const mm = /"features"\s*:\s*\[/.exec(lat); if (!mm) return null;
+  const arrStart = mm.index + mm[0].length - 1, f = flatTransform(), dec = new TextDecoder(), enc = new TextEncoder(), parts = []; let acc = [], accN = 0, off = 0, n = 0, pts = 0, other = 0;
+  const put = (s) => { if (!s) return; const e = enc.encode(s); acc.push(e); accN += e.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
+  const conv = (line) => {
+    if (!line) return ''; const o = JSON.parse(line), r = {};
+    for (const k in o) {
+      const v = o[k];
+      if (k === 'type' || k === 'properties' || k === 'geometry') continue;
+      if (k.startsWith('properties.')) { r[k.slice(11)] = v !== null && typeof v === 'object' ? JSON.stringify(v) : v; }
+      else if (k === 'geometry.type') r.geometry_type = v;
+      else if (k === 'geometry.coordinates') { if (Array.isArray(v) && v.length >= 2 && typeof v[0] === 'number' && typeof v[1] === 'number') { if (!('longitude' in r)) r.longitude = v[0]; if (!('latitude' in r)) r.latitude = v[1]; pts++; } else if (v !== null) { r.geometry = JSON.stringify(v); other++; } }
+      else if (k.startsWith('geometry.')) { r[k] = v !== null && typeof v === 'object' ? JSON.stringify(v) : v; }
+      else r[k] = v !== null && typeof v === 'object' ? JSON.stringify(v) : v;
+    }
+    n++; return JSON.stringify(r) + '\n';
+  };
+  const rd = m.file.stream().getReader();
+  for (;;) {
+    const { done, value } = await rd.read(); if (done) break; let chunk = value;
+    if (off + chunk.length <= arrStart) { off += chunk.length; continue; } if (off < arrStart) chunk = chunk.subarray(arrStart - off); off += value.length;
+    let o = ''; const out = f(chunk); if (out.length) { const lines = dec.decode(out).split('\n'); for (const l of lines) o += conv(l); } put(o); if (f.finished()) break;
+  }
+  if (acc.length) parts.push(new Blob(acc)); if (!n) return null;
+  return { file: new File(parts, String(m.file.name).replace(/\.[^.]*$/, '') + '.ndjson', { type: 'application/x-ndjson' }), text: 'Read ' + n.toLocaleString('en-US') + ' GeoJSON features: properties became columns' + (pts ? ', point coordinates became longitude and latitude' : '') + (other ? ', and other geometry was kept as JSON text in the geometry column' : '') + '.' };
+}
+// ---- XML: the repeating element with the most fields is the record (attributes become @name columns, child elements columns, nested ones dotted); the file becomes CSV, then the normal import runs.
+// XML record-per-element to CSV: the repeating element with the most fields is the record; attributes become @name columns, child elements become columns (nested ones dotted).
+const XTAG = /<(?:(\/)?([^\s>\/!?][^\s>\/]*)((?:"[^"]*"|'[^']*'|[^>"'])*?)(\/)?>|!--[\s\S]*?-->|!\[CDATA\[([\s\S]*?)\]\]>|\?[\s\S]*?\?>|![^>]*>)/g;
+const XATTR = /([^\s=\/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+function xmlUnesc(s) {
+  if (s.indexOf('&') < 0) return s;
+  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (m, g) => g === 'amp' ? '&' : g === 'lt' ? '<' : g === 'gt' ? '>' : g === 'quot' ? '"' : g === 'apos' ? "'" : String.fromCodePoint(g[1] === 'x' ? parseInt(g.slice(2), 16) : parseInt(g.slice(1), 10)));
+}
+const xmlCsvq = (s) => (/[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
+function xmlCut(text, final) {   // end of the part of text that holds only whole tags
+  if (final) return text.length;
+  let cut = text.lastIndexOf('>') + 1; if (cut <= 0) return 0;
+  const c1 = text.lastIndexOf('<!--'); if (c1 >= 0 && text.indexOf('-->', c1) < 0) cut = Math.min(cut, c1);
+  const c2 = text.lastIndexOf('<![CDATA['); if (c2 >= 0 && text.indexOf(']]>', c2) < 0) cut = Math.min(cut, c2);
+  const lt = text.lastIndexOf('<'); if (lt >= cut) { /* an unfinished tag after the last '>' stays in the carry */ }
+  return cut;
+}
+// Pass over text; calls h.open(name, attrsString, selfClosing, depth), h.close(name, depth), h.text(str)
+function xmlScan(text, h) {
+  XTAG.lastIndex = 0; let m, last = 0;
+  while ((m = XTAG.exec(text))) {
+    if (m.index > last) h.text(text.slice(last, m.index)); last = XTAG.lastIndex;
+    if (m[2] !== undefined) { if (m[1]) h.close(m[2]); else { h.open(m[2], m[3], !!m[4]); if (m[4]) h.close(m[2]); } }
+    else if (m[5] !== undefined) h.text(m[5], true);
+  }
+  if (last < text.length) h.text(text.slice(last));
+}
+function xmlPlan(text) {   // -> { path: [names], count, fields } or null
+  const stack = [], info = new Map(); let sawChild = [];
+  const h = {
+    open(name, attrs) {
+      const p = '/' + stack.concat(name).join('/'); let e = info.get(p); if (!e) { e = { count: 0, fields: new Set(), depth: stack.length + 1 }; info.set(p, e); } e.count++;
+      if (stack.length) { const pp = '/' + stack.join('/'); const pe = info.get(pp); if (pe) pe.fields.add(name); }
+      if (attrs && attrs.trim()) { XATTR.lastIndex = 0; let a; while ((a = XATTR.exec(attrs))) e.fields.add('@' + a[1]); }
+      stack.push(name);
+    },
+    close() { stack.pop(); }, text() {},
+  };
+  xmlScan(text, h);
+  let best = null;
+  for (const [p, e] of info) { if (e.count < 2 || e.fields.size < 2 || e.depth < 2 && info.size > 1 && false) continue; if (!best || e.count > best.e.count || (e.count === best.e.count && e.depth < best.e.depth)) best = { p, e }; }
+  if (!best) for (const [p, e] of info) { if (e.count >= 2 && (!best || e.count > best.e.count || (e.count === best.e.count && e.depth < best.e.depth))) best = { p, e }; }
+  if (!best) return null; return { path: best.p.split('/').slice(1), count: best.e.count, fields: best.e.fields.size };
+}
+// Streaming converter: feed(text) -> CSV text; columns are fixed after the first `sampleRecords` records unless cols is given.
+function makeXmlConverter(plan, cols) {
+  const rp = plan.path, rd = rp.length; const stack = []; let inRec = false, rec = null, leafText = '', hasChild = [], names = cols ? cols.slice() : [], idx = new Map(); names.forEach((n, i) => idx.set(n, i));
+  const st = { records: 0, dropped: 0, late: 0 }; const frozen = !!cols; let headerDone = !!cols, buf = [], pending = [];
+  const key = () => stack.slice(rd).join('.');
+  const setv = (k, v) => { let i = idx.get(k); if (i === undefined) { if (frozen) { st.dropped++; return; } if (headerDone) st.late++; i = names.length; names.push(k); idx.set(k, i); } const cur = rec[i]; rec[i] = cur === undefined ? v : cur + ' | ' + v; };
+  const h = {
+    open(name, attrs, selfClosing) {
+      stack.push(name);
+      if (!inRec) { if (stack.length === rd && rp.every((n, i) => stack[i] === n)) { inRec = true; rec = []; hasChild = [false]; leafText = ''; } else return; }
+      else { hasChild[hasChild.length - 1] = true; hasChild.push(false); leafText = ''; }
+      const base = stack.length === rd ? '' : key();
+      if (attrs && attrs.trim()) { XATTR.lastIndex = 0; let a; while ((a = XATTR.exec(attrs))) setv((base ? base : '') + '@' + a[1], xmlUnesc(a[2] !== undefined ? a[2] : a[3])); }
+    },
+    close() {
+      if (inRec) {
+        const depth = stack.length, isLeaf = !hasChild[hasChild.length - 1];
+        if (depth === rd) { if (isLeaf && leafText.trim()) setv('value', leafText.trim()); emitRec(); inRec = false; rec = null; }
+        else { if (isLeaf) { const t = leafText.trim(); if (t) setv(key(), xmlUnesc(t)); } hasChild.pop(); }
+        leafText = '';
+      }
+      stack.pop();
+    },
+    text(s, cdata) { if (inRec) leafText += cdata ? s : (s.indexOf('&') < 0 ? s : xmlUnesc(s)); },
+  };
+  function emitRec() { st.records++; if (!headerDone && st.records >= 2000) { /* freeze columns after the sample */ } pending.push(rec); if (!headerDone && pending.length >= 2000) { headerDone = true; flushPending(); } else if (headerDone) flushPending(); }
+  let headerOut = false;
+  function flushPending() {
+    let out = ''; if (!headerOut) { out += names.map(csvq).join(',') + '\n'; headerOut = true; }
+    const n = names.length; for (const r of pending) { let line = ''; for (let i = 0; i < n; i++) { if (i) line += ','; const v = r[i]; if (v !== undefined) line += xmlCsvq(v); } out += line + '\n'; } pending = []; buf.push(out);
+  }
+  let carry = '';
+  return {
+    feed(text, final) { text = carry + text; const cut = xmlCut(text, final); carry = text.slice(cut); xmlScan(text.slice(0, cut), h); if (final && !headerDone) { headerDone = true; flushPending(); } const o = buf.join(''); buf = []; return o; },
+    stats: st, names: () => names,
+  };
+}
+
+async function xmlStage(m) {
+  if (!m.file || !/\.xml$/i.test(m.file.name || '')) return null;
+  const head = new Uint8Array(await m.file.slice(0, 4 << 20).arrayBuffer()); let label = 'utf-8'; const h0 = new TextDecoder('latin1').decode(head.subarray(0, 200)), em = /encoding\s*=\s*["']([A-Za-z0-9_.:-]+)["']/.exec(h0);
+  if (em) { try { new TextDecoder(em[1]); label = em[1]; } catch { label = 'utf-8'; } }
+  let sample = new TextDecoder(label).decode(head); sample = sample.slice(0, sample.lastIndexOf('>') + 1);
+  const plan = xmlPlan(sample); if (!plan) throw new Error('No repeating element was found in this XML file, so there are no records to read.');
+  const pass = async (cols) => {
+    const c = makeXmlConverter(plan, cols), dec = new TextDecoder(label), enc = new TextEncoder(), parts = []; let acc = [], accN = 0;
+    const put = (s) => { if (!s) return; const e = enc.encode(s); acc.push(e); accN += e.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
+    const rd = m.file.stream().getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; put(c.feed(dec.decode(value, { stream: true }), false)); }
+    put(c.feed(dec.decode(), true)); if (acc.length) parts.push(new Blob(acc)); return { c, parts };
+  };
+  let r = await pass(null); if (r.c.stats.late) r = await pass(r.c.names());   // columns that first appear late in the file: read again with the full list
+  if (!r.c.stats.records) throw new Error('No records could be read from this XML file.');
+  return { file: new File(r.parts, String(m.file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), text: 'Read ' + r.c.stats.records.toLocaleString('en-US') + ' <' + plan.path[plan.path.length - 1] + '> records from the XML file (the repeating element with the most fields). Attributes are columns starting with @, nested elements use dotted names.' };
+}
+// ---- Apache Arrow IPC (Feather 2, .arrow files and streams): flat columns are decoded in wasm (arrow.c) and written as CSV; LZ4-compressed buffers are unpacked there too; then the normal CSV import runs.
+// Arrow IPC (file, Feather v2, stream) -> CSV using arrow.wasm. readBlock(offset, length) -> Promise<Uint8Array>; size = file size.
+function makeFB(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const u8 = (p) => b[p], i16 = (p) => dv.getInt16(p, true), u16 = (p) => dv.getUint16(p, true), i32 = (p) => dv.getInt32(p, true), u32 = (p) => dv.getUint32(p, true), i64 = (p) => Number(dv.getBigInt64(p, true));
+  const root = () => u32(0);
+  const field = (tp, i) => { const vt = tp - i32(tp), vs = u16(vt); const o = 4 + 2 * i; if (o >= vs) return 0; const f = u16(vt + o); return f ? tp + f : 0; };
+  const tbl = (fp) => fp + u32(fp);   // follow an offset field
+  const str = (fp) => { const s = fp + u32(fp), n = u32(s); return new TextDecoder().decode(b.subarray(s + 4, s + 4 + n)); };
+  const vec = (fp) => { const v = fp + u32(fp); return { n: u32(v), at: v + 4 }; };
+  return { u8, i16, u16, i32, u32, i64, root, field, tbl, str, vec };
+}
+function parseSchema(F, st) {
+  const fields = F.field(st, 1); const out = []; if (!fields) return out; const v = F.vec(fields);
+  for (let i = 0; i < v.n; i++) {
+    const fp = F.tbl(v.at + 4 * i), nm = F.field(fp, 0), tt = F.field(fp, 2), ty = F.field(fp, 3), di = F.field(fp, 4), ch = F.field(fp, 5);
+    const f = { name: nm ? F.str(nm) : '', type: tt ? F.u8(tt) : 0, dictId: null, children: ch ? F.vec(ch).n : 0 };
+    if (ty) { const t = F.tbl(ty); f.t = t; }
+    if (di) { const d = F.tbl(di); const idp = F.field(d, 0); f.dictId = idp ? F.i64(idp) : 0; const ip = F.field(d, 1); if (ip) { const it = F.tbl(ip), bw = F.field(it, 0), sg = F.field(it, 1); f.idxBits = bw ? F.i32(bw) : 32; f.idxSigned = sg ? F.u8(sg) !== 0 : false; f.idxSigned = sg ? !!F.u8(sg) : false; } else { f.idxBits = 32; f.idxSigned = true; } }
+    out.push({ f, F });
+  }
+  return out;
+}
+const K = { I8: 1, I16: 2, I32: 3, I64: 4, U8: 5, U16: 6, U32: 7, U64: 8, F32: 9, F64: 10, BOOL: 11, UTF8: 12, LUTF8: 13, D32: 14, D64: 15, TS: 16, T32: 17, T64: 18, DEC: 19, NULL: 20, DICT: 21 };
+function colKind(F, f) {   // -> { kind, aux, flags, nbuf } or throws
+  const T = f.type, t = f.t; let kind, aux = 0, flags = 0, nbuf = 2;
+  if (f.children) throw new Error('Column "' + f.name + '" is a nested type (list, struct or map); only flat columns are supported yet.');
+  const intKind = (bits, signed) => ({ 8: signed ? K.I8 : K.U8, 16: signed ? K.I16 : K.U16, 32: signed ? K.I32 : K.U32, 64: signed ? K.I64 : K.U64 })[bits];
+  if (T === 2) { const bw = F.field(t, 0), sg = F.field(t, 1); kind = intKind(bw ? F.i32(bw) : 32, sg ? !!F.u8(sg) : false); }
+  else if (T === 3) { const p = F.field(t, 0); const pr = p ? F.i16(p) : 0; if (pr === 1) kind = K.F32; else if (pr === 2) kind = K.F64; else throw new Error('Column "' + f.name + '" is a 16-bit float, which is not supported yet.'); }
+  else if (T === 5) { kind = K.UTF8; nbuf = 3; } else if (T === 20) { kind = K.LUTF8; nbuf = 3; }
+  else if (T === 6) kind = K.BOOL;
+  else if (T === 8) { const u = F.field(t, 0); kind = (u ? F.i16(u) : 1) === 0 ? K.D32 : K.D64; }
+  else if (T === 10) { kind = K.TS; const u = F.field(t, 0); aux = u ? F.i16(u) : 0; if (F.field(t, 1)) flags = 1; }
+  else if (T === 9) { const u = F.field(t, 0), bw = F.field(t, 1); aux = u ? F.i16(u) : 1; kind = (bw ? F.i32(bw) : 32) === 32 ? K.T32 : K.T64; }
+  else if (T === 7) { const sc = F.field(t, 1), bw = F.field(t, 2); if ((bw ? F.i32(bw) : 128) !== 128) throw new Error('Column "' + f.name + '" is a 256-bit decimal, which is not supported yet.'); kind = K.DEC; aux = sc ? F.i32(sc) : 0; }
+  else if (T === 1) { kind = K.NULL; nbuf = 0; }
+  else if (T === 4 || T === 19 || T === 15) { kind = K.NULL; nbuf = T === 15 ? 2 : 3; }   // binary: left empty
+  else throw new Error('Column "' + f.name + '" has an Arrow type that is not supported yet (type code ' + T + ').');
+  return { kind, aux, flags, nbuf };
+}
+async function arrowToCsv(readBlock, size, wasmBytes, put) {
+  let X; const inst = new WebAssembly.Instance(new WebAssembly.Module(wasmBytes), { env: {
+    fmt_double: (x, dst) => { const s = String(x); const m = new Uint8Array(X.memory.buffer, dst, s.length + 1); for (let i = 0; i < s.length; i++) m[i] = s.charCodeAt(i); return s.length; },
+    fmt_float: (x, dst) => { let s = String(x); for (let p = 1; p <= 9; p++) { const t = x.toPrecision(p); if (Math.fround(Number(t)) === x) { s = String(Number(t)); break; } } const m = new Uint8Array(X.memory.buffer, dst, s.length + 1); for (let i = 0; i < s.length; i++) m[i] = s.charCodeAt(i); return s.length; },
+  } }); X = inst.exports;
+  const enc = new TextEncoder(); let pos = 0;
+  const head = await readBlock(0, 8); if (String.fromCharCode(...head.subarray(0, 6)) === 'ARROW1') pos = 8; else if (head.length >= 4 && String.fromCharCode(...head.subarray(0, 4)) === 'FEA1') throw new Error('This is a Feather version 1 file; save it as Feather version 2 (Arrow IPC) or CSV.'); else if (!(head[0] === 255 && head[1] === 255 && head[2] === 255 && head[3] === 255)) throw new Error('This is not an Arrow IPC, Feather 2 or Arrow stream file.');
+  let schema = null, cols = null; const dicts = new Map(); let OUTCAP = 16 << 20, out = 0, arenaCap = 0, arena = 0, descPtr = 0; let rowsTotal = 0, headerDone = false;
+  const flush = () => { const n = X.out_len(); if (n) { put(new Uint8Array(X.memory.buffer, out, n).slice()); X.out_reset(); } };
+  const ensureArena = (n) => { if (n > arenaCap) { arenaCap = Math.max(n + (n >> 2), 1 << 20); arena = X.alloc(arenaCap); } };
+  async function readMsg() {
+    if (pos + 8 > size) return null; const h = await readBlock(pos, 8); let ml = new DataView(h.buffer, h.byteOffset).getInt32(0, true), at = pos + 4; if (ml === -1) { ml = new DataView(h.buffer, h.byteOffset).getInt32(4, true); at = pos + 8; } if (ml <= 0) return null;
+    const meta = await readBlock(at, ml), F = makeFB(meta), mp = F.root(), htp = F.field(mp, 1), hp = F.field(mp, 2), bl = F.field(mp, 3);
+    const m = { F, type: htp ? F.u8(htp) : 0, hdr: hp ? F.tbl(hp) : 0, bodyLen: bl ? F.i64(bl) : 0, bodyAt: at + ml };
+    pos = m.bodyAt + m.bodyLen; return m;
+  }
+  function batchInfo(F, rb) {
+    const lp = F.field(rb, 0), np = F.field(rb, 1), bp = F.field(rb, 2), cp = F.field(rb, 3); const nodes = [], bufs = [];
+    if (np) { const v = F.vec(np); for (let i = 0; i < v.n; i++) nodes.push({ len: F.i64(v.at + 16 * i), nulls: F.i64(v.at + 16 * i + 8) }); }
+    if (bp) { const v = F.vec(bp); for (let i = 0; i < v.n; i++) bufs.push({ off: F.i64(v.at + 16 * i), len: F.i64(v.at + 16 * i + 8) }); }
+    let codec = -1; if (cp) { const c = F.tbl(cp), cd = F.field(c, 0); codec = cd ? (F.u8(cd) << 24 >> 24) : 0; }
+    return { len: lp ? F.i64(lp) : 0, nodes, bufs, codec };
+  }
+  async function loadBody(m, info) {   // body bytes of every buffer, decompressed into the wasm arena: returns pointers
+    const body = await readBlock(m.bodyAt, m.bodyLen); const ptrs = [];
+    if (info.codec < 0) { ensureArena(m.bodyLen + 64); new Uint8Array(X.memory.buffer).set(body, arena); for (const b of info.bufs) ptrs.push({ p: arena + b.off, n: b.len }); return ptrs; }
+    if (info.codec !== 0) throw new Error('This file is compressed with ZSTD, which the browser cannot unpack here; save it uncompressed or with LZ4.');
+    // each compressed buffer: int64 uncompressed length, then an LZ4 frame (length -1: stored raw)
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength); let total = 0; const un = info.bufs.map((b) => { if (!b.len) return 0; const u = Number(dv.getBigInt64(b.off, true)); const n = u < 0 ? b.len - 8 : u; total += (n + 15) & ~15; return n; });
+    ensureArena(total + body.length + 64); const bodyPtr = arena + total; new Uint8Array(X.memory.buffer).set(body, bodyPtr); let w = arena;
+    info.bufs.forEach((b, i) => { if (!b.len) { ptrs.push({ p: w, n: 0 }); return; } const u = Number(dv.getBigInt64(b.off, true)); if (u < 0) { new Uint8Array(X.memory.buffer).copyWithin(w, bodyPtr + b.off + 8, bodyPtr + b.off + b.len); } else if (u > 0) { const r = X.lz4f(bodyPtr + b.off + 8, b.len - 8, w, u); if (r !== u) throw new Error('A compressed buffer in this Arrow file could not be unpacked (LZ4).'); } ptrs.push({ p: w, n: un[i] }); w += (un[i] + 15) & ~15; });
+    return ptrs;
+  }
+  for (;;) {
+    const m = await readMsg(); if (!m) break;
+    if (m.type === 1) {   // schema
+      const fl = parseSchema(m.F, m.hdr); cols = fl.map((x) => ({ f: x.f, F: x.F, ck: null })); cols.forEach((c) => { c.ck = colKind(c.F, c.f); });
+      if (!cols.length) throw new Error('This Arrow file has no columns.'); schema = cols;
+      const names = cols.map((c) => (/[",\r\n]/.test(c.f.name) ? '"' + c.f.name.replace(/"/g, '""') + '"' : c.f.name)); put(enc.encode(names.join(',') + '\n')); headerDone = true;
+      out = X.alloc(OUTCAP); descPtr = X.alloc(40 * cols.length + 64); X.setup(out, OUTCAP, descPtr, cols.length);
+    } else if (m.type === 2) {   // dictionary batch: utf8 values only
+      const F = m.F, idp = F.field(m.hdr, 0), dp = F.field(m.hdr, 1), dl = F.field(m.hdr, 2); if (dl && F.u8(dl)) throw new Error('This Arrow file uses delta dictionaries, which are not supported yet.');
+      const id = idp ? F.i64(idp) : 0, info = batchInfo(F, F.tbl(dp)), ptrs = await loadBody(m, info), col = schema.find((c) => c.f.dictId === id);
+      const vt = col && col.f; // value type comes from the dictionary field's own type (the schema field type is the value type)
+      const kind = col ? col.ck : null; if (!col) continue;
+      if (!(col.ck.kind === K.UTF8 || col.ck.kind === K.LUTF8)) throw new Error('Column "' + col.f.name + '" is dictionary-encoded with non-text values, which is not supported yet.');
+      const nb = col.ck.nbuf, p = ptrs; const keep = X.alloc(p[1].n + p[2].n + 64); const offKeep = keep, datKeep = keep + ((p[1].n + 15) & ~15);
+      new Uint8Array(X.memory.buffer).copyWithin(offKeep, p[1].p, p[1].p + p[1].n); new Uint8Array(X.memory.buffer).copyWithin(datKeep, p[2].p, p[2].p + p[2].n);
+      dicts.set(id, { offs: offKeep, data: datKeep, n: info.len, large: col.ck.kind === K.LUTF8 });
+    } else if (m.type === 3) {   // record batch
+      const F = m.F, info = batchInfo(F, m.hdr), ptrs = await loadBody(m, info); let bi = 0; const dv32 = new Uint32Array(X.memory.buffer, descPtr, 10 * cols.length);
+      cols.forEach((c, i) => {
+        const ck = c.ck, node = info.nodes[i] || { len: info.len, nulls: 0 }; const d = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; const take = (n) => { const r = []; for (let k = 0; k < n; k++) r.push(ptrs[bi++]); return r; };
+        let kind = ck.kind, aux = ck.aux, nb = ck.nbuf; if (c.f.dictId !== null) { const dc = dicts.get(c.f.dictId); if (!dc) throw new Error('A dictionary for column "' + c.f.name + '" is missing.'); const ik = ({ 8: c.f.idxSigned ? K.I8 : K.U8, 16: c.f.idxSigned ? K.I16 : K.U16, 32: c.f.idxSigned ? K.I32 : K.U32, 64: c.f.idxSigned ? K.I64 : K.U64 })[c.f.idxBits]; d[6] = dc.offs; d[7] = dc.data; d[8] = dc.n; d[9] = dc.large ? 1 : 0; kind = K.DICT; aux = ik; nb = 2; }
+        const bufs = take(nb); d[0] = kind; d[1] = aux; d[2] = ck.flags; d[3] = node.nulls > 0 && bufs[0] && bufs[0].n ? bufs[0].p : 0;
+        if (kind === K.NULL) { } else if (kind === K.UTF8 || kind === K.LUTF8) { d[5] = bufs[1].p; d[4] = bufs[2].p; } else d[4] = bufs[1] ? bufs[1].p : 0;
+        for (let k = 0; k < 10; k++) dv32[10 * i + k] = d[k];
+      });
+      let r = 0; for (;;) { r = X.rows(r, info.len); flush(); const s = X.get_status(); if (s === 2) throw new Error('A value in this Arrow file is too large to convert.'); if (s !== 1) break; }
+      rowsTotal += info.len;
+    }
+  }
+  if (!headerDone) throw new Error('No schema was found in this Arrow file.'); return { rows: rowsTotal, columns: cols.length };
+}
+
+const ARROW_WASM = Uint8Array.from(atob('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'), (c) => c.charCodeAt(0));
+async function isArrowFile(f) { if (!f || f.size < 16) return false; const h = new Uint8Array(await f.slice(0, 8).arrayBuffer()); return String.fromCharCode(...h.subarray(0, 6)) === 'ARROW1' || (h[0] === 255 && h[1] === 255 && h[2] === 255 && h[3] === 255); }
+async function arrowToCsvFile(file) {
+  const parts = []; let acc = [], accN = 0; const put = (b) => { acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
+  const r = await arrowToCsv(async (o, l) => new Uint8Array(await file.slice(o, o + l).arrayBuffer()), file.size, ARROW_WASM, put);
+  if (acc.length) parts.push(new Blob(acc)); if (!r.rows) throw new Error('This Arrow file has no rows.');
+  return { file: new File(parts, String(file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), rows: r.rows, columns: r.columns };
+}
+const DBF_CP = {"437": "\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00a2\u00a3\u00a5\u20a7\u0192\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u2310\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580\u03b1\u00df\u0393\u03c0\u03a3\u03c3\u00b5\u03c4\u03a6\u0398\u03a9\u03b4\u221e\u03c6\u03b5\u2229\u2261\u00b1\u2265\u2264\u2320\u2321\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0\u00a0", "850": "\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00f8\u00a3\u00d8\u00d7\u0192\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u00ae\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb\u2591\u2592\u2593\u2502\u2524\u00c1\u00c2\u00c0\u00a9\u2563\u2551\u2557\u255d\u00a2\u00a5\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u00e3\u00c3\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u00a4\u00f0\u00d0\u00ca\u00cb\u00c8\u0131\u00cd\u00ce\u00cf\u2518\u250c\u2588\u2584\u00a6\u00cc\u2580\u00d3\u00df\u00d4\u00d2\u00f5\u00d5\u00b5\u00fe\u00de\u00da\u00db\u00d9\u00fd\u00dd\u00af\u00b4\u00ad\u00b1\u2017\u00be\u00b6\u00a7\u00f7\u00b8\u00b0\u00a8\u00b7\u00b9\u00b3\u00b2\u25a0\u00a0", "852": "\u00c7\u00fc\u00e9\u00e2\u00e4\u016f\u0107\u00e7\u0142\u00eb\u0150\u0151\u00ee\u0179\u00c4\u0106\u00c9\u0139\u013a\u00f4\u00f6\u013d\u013e\u015a\u015b\u00d6\u00dc\u0164\u0165\u0141\u00d7\u010d\u00e1\u00ed\u00f3\u00fa\u0104\u0105\u017d\u017e\u0118\u0119\u00ac\u017a\u010c\u015f\u00ab\u00bb\u2591\u2592\u2593\u2502\u2524\u00c1\u00c2\u011a\u015e\u2563\u2551\u2557\u255d\u017b\u017c\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u0102\u0103\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u00a4\u0111\u0110\u010e\u00cb\u010f\u0147\u00cd\u00ce\u011b\u2518\u250c\u2588\u2584\u0162\u016e\u2580\u00d3\u00df\u00d4\u0143\u0144\u0148\u0160\u0161\u0154\u00da\u0155\u0170\u00fd\u00dd\u0163\u00b4\u00ad\u02dd\u02db\u02c7\u02d8\u00a7\u00f7\u00b8\u00b0\u00a8\u02d9\u0171\u0158\u0159\u25a0\u00a0", "857": "\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u0131\u00c4\u00c5\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u0130\u00d6\u00dc\u00f8\u00a3\u00d8\u015e\u015f\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u011e\u011f\u00bf\u00ae\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb\u2591\u2592\u2593\u2502\u2524\u00c1\u00c2\u00c0\u00a9\u2563\u2551\u2557\u255d\u00a2\u00a5\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u00e3\u00c3\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u00a4\u00ba\u00aa\u00ca\u00cb\u00c8\ufffd\u00cd\u00ce\u00cf\u2518\u250c\u2588\u2584\u00a6\u00cc\u2580\u00d3\u00df\u00d4\u00d2\u00f5\u00d5\u00b5\ufffd\u00d7\u00da\u00db\u00d9\u00ec\u00ff\u00af\u00b4\u00ad\u00b1\ufffd\u00be\u00b6\u00a7\u00f7\u00b8\u00b0\u00a8\u00b7\u00b9\u00b3\u00b2\u25a0\u00a0", "860": "\u00c7\u00fc\u00e9\u00e2\u00e3\u00e0\u00c1\u00e7\u00ea\u00ca\u00e8\u00cd\u00d4\u00ec\u00c3\u00c2\u00c9\u00c0\u00c8\u00f4\u00f5\u00f2\u00da\u00f9\u00cc\u00d5\u00dc\u00a2\u00a3\u00d9\u20a7\u00d3\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u00d2\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580\u03b1\u00df\u0393\u03c0\u03a3\u03c3\u00b5\u03c4\u03a6\u0398\u03a9\u03b4\u221e\u03c6\u03b5\u2229\u2261\u00b1\u2265\u2264\u2320\u2321\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0\u00a0", "861": "\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00d0\u00f0\u00de\u00c4\u00c5\u00c9\u00e6\u00c6\u00f4\u00f6\u00fe\u00fb\u00dd\u00fd\u00d6\u00dc\u00f8\u00a3\u00d8\u20a7\u0192\u00e1\u00ed\u00f3\u00fa\u00c1\u00cd\u00d3\u00da\u00bf\u2310\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580\u03b1\u00df\u0393\u03c0\u03a3\u03c3\u00b5\u03c4\u03a6\u0398\u03a9\u03b4\u221e\u03c6\u03b5\u2229\u2261\u00b1\u2265\u2264\u2320\u2321\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0\u00a0", "863": "\u00c7\u00fc\u00e9\u00e2\u00c2\u00e0\u00b6\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u2017\u00c0\u00a7\u00c9\u00c8\u00ca\u00f4\u00cb\u00cf\u00fb\u00f9\u00a4\u00d4\u00dc\u00a2\u00a3\u00d9\u00db\u0192\u00a6\u00b4\u00f3\u00fa\u00a8\u00b8\u00b3\u00af\u00ce\u2310\u00ac\u00bd\u00bc\u00be\u00ab\u00bb\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580\u03b1\u00df\u0393\u03c0\u03a3\u03c3\u00b5\u03c4\u03a6\u0398\u03a9\u03b4\u221e\u03c6\u03b5\u2229\u2261\u00b1\u2265\u2264\u2320\u2321\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0\u00a0", "865": "\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00f8\u00a3\u00d8\u20a7\u0192\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u2310\u00ac\u00bd\u00bc\u00a1\u00ab\u00a4\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580\u03b1\u00df\u0393\u03c0\u03a3\u03c3\u00b5\u03c4\u03a6\u0398\u03a9\u03b4\u221e\u03c6\u03b5\u2229\u2261\u00b1\u2265\u2264\u2320\u2321\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0\u00a0", "737": "\u0391\u0392\u0393\u0394\u0395\u0396\u0397\u0398\u0399\u039a\u039b\u039c\u039d\u039e\u039f\u03a0\u03a1\u03a3\u03a4\u03a5\u03a6\u03a7\u03a8\u03a9\u03b1\u03b2\u03b3\u03b4\u03b5\u03b6\u03b7\u03b8\u03b9\u03ba\u03bb\u03bc\u03bd\u03be\u03bf\u03c0\u03c1\u03c3\u03c2\u03c4\u03c5\u03c6\u03c7\u03c8\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580\u03c9\u03ac\u03ad\u03ae\u03ca\u03af\u03cc\u03cd\u03cb\u03ce\u0386\u0388\u0389\u038a\u038c\u038e\u038f\u00b1\u2265\u2264\u03aa\u03ab\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0\u00a0"};
+// ---- dBase / FoxPro (.dbf): fixed-width records behind a field table. Rows are rewritten as CSV bytes (deleted rows skipped, memo columns left out), then the normal CSV import runs.
+// Reads through readBlock(offset, length) -> Promise<Uint8Array>.
+const DBF_LANG = { 1: '437', 2: '850', 3: '1252', 4: 'macintosh', 8: '865', 9: '437', 10: '850', 11: '437', 13: '437', 14: '850', 15: '437', 16: '850', 17: '437', 18: '850', 19: 'shift_jis', 20: '850', 21: '437', 22: '850', 23: '865', 24: '437', 25: '437', 26: '850', 27: '437', 28: '863', 29: '850', 31: '852', 34: '852', 35: '852', 36: '860', 37: '850', 38: '866', 55: '850', 64: '852', 77: 'gbk', 78: 'euc-kr', 79: 'big5', 80: 'windows-874', 87: '1252', 88: '1252', 89: '1252', 100: '852', 101: '866', 102: '865', 103: '861', 106: '737', 107: '857', 108: '863', 120: 'big5', 121: 'euc-kr', 122: 'gbk', 123: 'shift_jis', 124: 'windows-874', 125: 'windows-1255', 126: 'windows-1256', 150: 'x-mac-cyrillic', 200: 'windows-1250', 201: 'windows-1251', 202: 'windows-1254', 203: 'windows-1253', 204: 'windows-1257' };
+const DBF_VERSIONS = new Set([0x02, 0x03, 0x04, 0x05, 0x30, 0x31, 0x32, 0x43, 0x63, 0x83, 0x8B, 0x8E, 0xCB, 0xF5, 0xFB]);
+async function dbfHeader(readBlock, size) {   // the parsed header, or null when the file is not a dBase table (strict: the field table must add up to the record length)
+  if (size < 34) return null;
+  const h = await readBlock(0, 32), dv = new DataView(h.buffer, h.byteOffset, 32);
+  if (!DBF_VERSIONS.has(h[0]) || h[2] < 1 || h[2] > 12 || h[3] < 1 || h[3] > 31) return null;
+  const hdrLen = dv.getUint16(8, true), recLen = dv.getUint16(10, true), nrec = dv.getUint32(4, true);
+  if (hdrLen < 65 || hdrLen > size || recLen < 2) return null;
+  const head = await readBlock(0, hdrLen), fields = []; let p = 32, off = 1, nullIdx = 0, nullOff = -1, nullBits = 0;
+  while (p + 32 <= hdrLen && head[p] !== 0x0D) {
+    let e = p; while (e < p + 11 && head[e] !== 0) e++;
+    const name = new TextDecoder('latin1').decode(head.subarray(p, e)), t = String.fromCharCode(head[p + 11]);
+    for (let i = p; i < e; i++) if (head[i] < 32 || head[i] > 126) return null;
+    let len = head[p + 16]; const dec = head[p + 17], flags = head[p + 18];
+    if (t === 'C') len += dec * 256;   // long text fields keep the high byte of the length here
+    if (!/[CNFDLMGPWIBOYT0+@]/.test(t) || len < 1) return null;
+    const f = { name, t, len, dec, off, nullable: (flags & 2) !== 0 && t !== '0', bit: -1 };
+    if (f.nullable) f.bit = nullIdx++;
+    if (t === '0') nullOff = off;
+    fields.push(f); off += len; p += 32;
+  }
+  if (head[p] !== 0x0D || off !== recLen || !fields.length) return null;
+  const have = Math.floor((size - hdrLen) / recLen);
+  if (nrec > have + 1 && nrec * recLen + hdrLen > size + 1) return null;   // the header promises more rows than the file holds
+  return { hdrLen, recLen, nrec: Math.min(nrec, have + 1), have, fields, lang: h[29], nullOff, nullBits: nullIdx };
+}
+function dbfCodepage(lang) {
+  const name = DBF_LANG[lang] || null;
+  if (name && DBF_CP[name]) return { table: DBF_CP[name] };
+  if (name === '1252' || (name && /^windows-/.test(name)) || name === 'macintosh' || name === 'x-mac-cyrillic' || name === '866') { const label = name === '1252' ? 'windows-1252' : name === '866' ? 'ibm866' : name; try { const d = new TextDecoder(label); const b = new Uint8Array(128); for (let i = 0; i < 128; i++) b[i] = 128 + i; return { table: d.decode(b) }; } catch { /* fall through */ } }
+  if (name && /^(shift_jis|gbk|big5|euc-kr)$/.test(name)) { try { return { multi: new TextDecoder(name) }; } catch { /* fall through */ } }
+  const b = new Uint8Array(128); for (let i = 0; i < 128; i++) b[i] = 128 + i; return { table: new TextDecoder('windows-1252').decode(b) };
+}
+// Walks the records and calls put(Uint8Array) with CSV bytes. Returns { rows, deleted, left: [names of columns that cannot be read] }.
+async function dbfToCsv(readBlock, size, put) {
+  const H = await dbfHeader(readBlock, size); if (!H) throw new Error('This is not a dBase file.');
+  const cp = dbfCodepage(H.lang), enc = new TextEncoder(), left = [], cols = [];
+  const used = new Set();
+  for (const f of H.fields) {
+    const ok = f.t === 'C' || f.t === 'N' || f.t === 'F' || f.t === 'D' || f.t === 'L' || f.t === 'I' || f.t === '+' || f.t === 'T' || f.t === 'Y' || f.t === 'O' || (f.t === 'B' && f.len === 8);
+    if (!ok) { if (f.t !== '0') left.push(f.name || '?'); continue; }
+    let nm = f.name.trim() || 'column_' + (cols.length + 1), base = nm, k = 2; while (used.has(nm.toLowerCase())) nm = base + '_' + (k++); used.add(nm.toLowerCase()); cols.push(Object.assign({}, f, { out: nm }));
+  }
+  if (!cols.length) throw new Error('This dBase file has no columns that can be read.');
+  const tab = cp.table ? Array.from(cp.table).map((c) => enc.encode(c)) : null, multi = cp.multi || null;
+  const CAP = 4 << 20; let ob = new Uint8Array(CAP + (1 << 20)), op = 0;
+  const flush = () => { if (op) { put(ob.slice(0, op)); op = 0; } };
+  const needMore = H.recLen * 4 + cols.length * 40 + 64; if (needMore > ob.length - CAP) ob = new Uint8Array(CAP + needMore);
+  const quoteNeeded = (b, a, z) => { for (let i = a; i < z; i++) { const c = b[i]; if (c === 44 || c === 34 || c < 32) return true; } return false; };
+  const utf8ok = (b, a, z) => { for (let i = a; i < z;) { const c = b[i]; if (c < 128) { i++; continue; } const n = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC2 ? 2 : 0; if (!n || i + n > z) return false; for (let k = 1; k < n; k++) if ((b[i + k] & 0xC0) !== 0x80) return false; i += n; } return true; };
+  const wr = (s) => { for (let i = 0; i < s.length; i++) ob[op++] = s.charCodeAt(i); };
+  const csvName = (s) => { if (/[",\r\n]/.test(s)) { const q = '"' + s.replace(/"/g, '""') + '"'; const e = enc.encode(q); ob.set(e, op); op += e.length; } else { const e = enc.encode(s); ob.set(e, op); op += e.length; } };
+  const textField = (b, a, z) => {   // right-trimmed text, CSV quoted when needed, converted to UTF-8
+    while (z > a && (b[z - 1] === 32 || b[z - 1] === 0)) z--;
+    if (z === a) return;
+    let hi = false; for (let i = a; i < z; i++) if (b[i] >= 128) { hi = true; break; }
+    const q = quoteNeeded(b, a, z); if (q) ob[op++] = 34;
+    if (!hi) { if (q) { for (let i = a; i < z; i++) { const c = b[i]; ob[op++] = c; if (c === 34) ob[op++] = 34; } } else { for (let i = a; i < z; i++) ob[op++] = b[i]; } }
+    else if (utf8ok(b, a, z)) { for (let i = a; i < z; i++) { const c = b[i]; ob[op++] = c; if (c === 34) ob[op++] = 34; } }
+    else if (multi) { const e = enc.encode(multi.decode(b.subarray(a, z)).replace(/"/g, q ? '""' : '"')); ob.set(e, op); op += e.length; }
+    else { for (let i = a; i < z; i++) { const c = b[i]; if (c < 128) { ob[op++] = c; if (c === 34) ob[op++] = 34; } else { const e = tab[c - 128]; for (let k = 0; k < e.length; k++) ob[op++] = e[k]; } } }
+    if (q) ob[op++] = 34;
+  };
+  const julian = (jd) => { let a = jd + 32044, b = Math.floor((4 * a + 3) / 146097), c = a - Math.floor(146097 * b / 4), d = Math.floor((4 * c + 3) / 1461), e = c - Math.floor(1461 * d / 4), m = Math.floor((5 * e + 2) / 153); const day = e - Math.floor((153 * m + 2) / 5) + 1, mon = m + 3 - 12 * Math.floor(m / 10), yr = 100 * b + d - 4800 + Math.floor(m / 10); return [yr, mon, day]; };
+  const p2 = (n) => (n < 10 ? '0' : '') + n;
+  let header = ''; for (let k = 0; k < cols.length; k++) header += (k ? ',' : '') + (/[",\r\n]/.test(cols[k].out) ? '"' + cols[k].out.replace(/"/g, '""') + '"' : cols[k].out); { const e = enc.encode(header + '\n'); ob.set(e, 0); op = e.length; }
+  let rows = 0, deleted = 0; const per = Math.max(1, Math.floor((4 << 20) / H.recLen)); const total = H.nrec;
+  for (let r0 = 0; r0 < total; r0 += per) {
+    const n = Math.min(per, total - r0), buf = await readBlock(H.hdrLen + r0 * H.recLen, n * H.recLen), dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const got = Math.min(n, Math.floor(buf.length / H.recLen));
+    for (let i = 0; i < got; i++) {
+      const base = i * H.recLen, flag = buf[base]; if (flag === 0x1A) { r0 = total; break; } if (flag === 0x2A) { deleted++; continue; }
+      if (op > CAP) flush();
+      for (let k = 0; k < cols.length; k++) {
+        const f = cols[k], a = base + f.off, z = a + f.len; if (k) ob[op++] = 44;
+        if (f.nullable && H.nullOff >= 0) { const bit = f.bit, byte = buf[base + H.nullOff + (bit >> 3)]; if (byte & (1 << (bit & 7))) continue; }
+        switch (f.t) {
+          case 'C': textField(buf, a, z); break;
+          case 'N': case 'F': { let s = a, e = z; while (s < e && (buf[s] === 32 || buf[s] === 0)) s++; while (e > s && (buf[e - 1] === 32 || buf[e - 1] === 0)) e--; if (e > s && buf[s] !== 42) for (let j = s; j < e; j++) ob[op++] = buf[j]; break; }
+          case 'D': { let allz = true, blank = true; for (let j = a; j < z; j++) { if (buf[j] !== 32) blank = false; if (buf[j] !== 48 && buf[j] !== 32) allz = false; } if (blank || allz || f.len < 8) break; for (let j = 0; j < 4; j++) ob[op++] = buf[a + j]; ob[op++] = 45; ob[op++] = buf[a + 4]; ob[op++] = buf[a + 5]; ob[op++] = 45; ob[op++] = buf[a + 6]; ob[op++] = buf[a + 7]; break; }
+          case 'L': { const c = buf[a] | 32; if (c === 116 || c === 121) wr('true'); else if (c === 102 || c === 110) wr('false'); break; }
+          case 'I': case '+': wr(String(dv.getInt32(a, true))); break;
+          case 'B': case 'O': { const v = dv.getFloat64(a, true); if (Number.isFinite(v)) wr(String(v)); break; }
+          case 'Y': { const v = dv.getBigInt64(a, true); const neg = v < 0n, u = neg ? -v : v, ip = u / 10000n, fp = String(u % 10000n).padStart(4, '0').replace(/0+$/, ''); wr((neg ? '-' : '') + ip + (fp ? '.' + fp : '')); break; }
+          case 'T': { const jd = dv.getInt32(a, true), ms = dv.getInt32(a + 4, true); if (jd <= 0) break; const [y, mo, d] = julian(jd), s = Math.floor(ms / 1000); wr(y + '-' + p2(mo) + '-' + p2(d) + ' ' + p2(Math.floor(s / 3600)) + ':' + p2(Math.floor(s / 60) % 60) + ':' + p2(s % 60)); break; }
+        }
+      }
+      ob[op++] = 10; rows++;
+    }
+  }
+  flush();
+  return { rows, deleted, left, columns: cols.length };
+}
+async function isDbfFile(f) { if (!f || f.size < 66) return false; try { return !!(await dbfHeader(async (o, l) => new Uint8Array(await f.slice(o, o + l).arrayBuffer()), f.size)); } catch { return false; } }
+async function dbfToCsvFile(file) {
+  const parts = []; let acc = [], accN = 0; const put = (b) => { acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
+  const r = await dbfToCsv(async (o, l) => new Uint8Array(await file.slice(o, o + l).arrayBuffer()), file.size, put);
+  if (acc.length) parts.push(new Blob(acc)); if (!r.rows) throw new Error('This dBase file has no rows' + (r.deleted ? ' (all ' + r.deleted + ' are marked deleted).' : '.'));
+  return Object.assign({ file: new File(parts, String(file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }) }, r);
+}
 async function importWithEncoding(m) {
   const early = { cancelled: false, pre: true }; jobs.set(m.id, early);   // a cancel that arrives while the file is checked still counts
   try {
     for (let hop = 0; hop < 2 && m.file; hop++) {   // a .zip or .gz is unpacked first (a .gz inside a .zip too); an unpack error is reported, not imported as text
       if (isXlsx(m.file)) { const x = await xlsxToCsvFile(m.file, m.zipEntry); m = Object.assign({}, m, { file: x.file }); send('notice', m.id, { text: 'Read sheet "' + x.sheet + '" from the Excel workbook' + (x.sheets > 1 ? ' (' + x.sheets + ' sheets).' : '.') + (x.dropped ? ' ' + x.dropped + ' cells to the right of the header were left out.' : '') }); }
+      else if (isOds(m.file)) { const x = await odsToCsvFile(m.file, m.zipEntry); m = Object.assign({}, m, { file: x.file }); send('notice', m.id, { text: 'Read sheet "' + x.sheet + '" from the OpenDocument spreadsheet' + (x.sheets > 1 ? ' (' + x.sheets + ' sheets).' : '.') + (x.dropped ? ' ' + x.dropped + ' cells to the right of the header were left out.' : '') }); }
       else if (isZip(m.file)) { const z = await unzipFile(m.file, m.zipEntry); m = Object.assign({}, m, { file: z.file }); send('notice', m.id, { text: 'Opened ' + z.picked + ' from the zip file' + (z.entries.length > 1 ? ' (' + z.entries.length + ' files inside).' : '.') }); }
       else if (isGz(m.file)) { m = Object.assign({}, m, { file: await gunzipFile(m.file) }); send('notice', m.id, { text: 'This file was gzip-compressed, so it was unpacked first.' }); }
+      else if (await isArrowFile(m.file)) { const x = await arrowToCsvFile(m.file); m = Object.assign({}, m, { file: x.file }); send('notice', m.id, { text: 'Read ' + x.rows.toLocaleString('en-US') + ' rows and ' + x.columns + ' columns from the Arrow file.' }); break; }
+      else if (await isDbfFile(m.file)) { const x = await dbfToCsvFile(m.file); m = Object.assign({}, m, { file: x.file }); send('notice', m.id, { text: 'Read ' + x.rows.toLocaleString('en-US') + ' rows and ' + x.columns + ' columns from the dBase file' + (x.deleted ? ' (' + x.deleted.toLocaleString('en-US') + ' deleted rows skipped)' : '') + '.' + (x.left.length ? ' Left out (they cannot be read): ' + x.left.slice(0, 5).join(', ') + (x.left.length > 5 ? ', and ' + (x.left.length - 5) + ' more' : '') + '.' : '') }); break; }
+      else if (await isSqliteFile(m.file)) { const x = await sqliteToCsvFile(m.file, m.zipEntry); m = Object.assign({}, m, { file: x.file }); send('notice', m.id, { text: 'Read table "' + x.table + '" from the SQLite database' + (x.tables > 1 ? ' (' + x.tables + ' tables).' : '.') + (x.blobs ? ' ' + x.blobs + ' binary (BLOB) cells were left empty.' : '') + (x.wal ? ' The database uses write-ahead logging, so changes still in its -wal file are not included.' : '') }); break; }
       else break;
     }
   } catch (err) { jobs.delete(m.id); return send('error', m.id, { message: String(err && err.message || err) }); }
   if (m.file && await isParquet(m.file)) return importFile(Object.assign({}, m, { parquet: true, untyped: true }));   // binary: no text checks
   try { const u16 = m.file && m.file.size > 1 ? await sniffUtf16(m.file) : null; if (u16) { m = Object.assign({}, m, { file: await utf16ToUtf8File(m.file, u16) }); send('notice', m.id, { text: 'This file was UTF-16, so it was converted to UTF-8.' }); } else if (m.file && m.file.size && await notUtf8(m.file)) { m = Object.assign({}, m, { file: await toUtf8File(m.file) }); send('notice', m.id, { text: 'This file is not UTF-8, so it was read as Windows-1252.' }); } }
   catch { /* the normal import reports any real problem */ }
+  try { const xm = await xmlStage(m); if (xm) { m = Object.assign({}, m, { file: xm.file, delimiter: ',' }); send('notice', m.id, { text: xm.text }); } } catch (err) { jobs.delete(m.id); return send('error', m.id, { message: String(err && err.message || err) }); }
+  try { const gj = await geoStage(m); if (gj) { m = Object.assign({}, m, { file: gj.file }); send('notice', m.id, { text: gj.text }); } } catch (err) { jobs.delete(m.id); return send('error', m.id, { message: String(err && err.message || err) }); }
+  try { const fx = await fixedWidthStage(m); if (fx) { m = Object.assign({}, m, { file: fx.file, delimiter: ',' }); send('notice', m.id, { text: fx.text, widths: fx.widths || undefined }); } else if (m.delimiter === 'fixed') m = Object.assign({}, m, { delimiter: 'auto' }); } catch (err) { jobs.delete(m.id); return send('error', m.id, { message: String(err && err.message || err) }); }
   return importFile(m);
 }
-const isNdjson = (f) => /\.(ndjson|jsonl|json)$/i.test(f.name || '');
+const isNdjson = (f) => /\.(ndjson|jsonl|json|geojson)$/i.test(f.name || '');
 // NDJSON: one JSON object per line is already the JSON-lines form LFC-pack packs, so the bytes go to the pack workers cut at line ends; the first 2000 lines give the column names and types.
 // JSON objects to flat JSON lines (wasm, flat.c). Cuts each top-level object out of an array or a line stream, drops white space outside strings, and writes the members of a one-level nested object as dotted names ("trip":{"distance":1} becomes "trip.distance":1). Deeper nesting, a key over 1000 bytes or an object over 4 MB sets an error bit.
 function flatTransform() {

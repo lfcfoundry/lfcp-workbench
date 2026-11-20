@@ -18,14 +18,14 @@
     const m = e.data || {};
     if (m.type === 'progress') { $('prog').value = m.total ? m.bytes / m.total : 0; status(m.rows.toLocaleString() + ' rows · ' + fmt(m.bytes) + ' of ' + fmt(m.total)); return; }
     if (m.type === 'preview') { if (!liveHook) previewOpen(m); return; }   // the first rows are in: the grid opens now, the row count grows until the file is read
-    if (m.type === 'notice') { encNote = m.text || ''; return; }
+    if (m.type === 'notice') { encNote = m.text || ''; if (m.widths) fwGuess = m.widths; return; }
     if (m.type === 'previewGrow') { if (G.preview) previewGrow(m); return; }
     if (m.type === 'live' && G.preview && !liveHook) { liveSeen = performance.now(); liveDone = finishPreview(m); return; }
     if (m.type === 'live') { liveSeen = performance.now(); liveDone = (liveHook || ((x) => { status('Reading while the file is saved…'); return openGrid(x.name); }))(m); return; }   // the worker has parsed the file and keeps the columns: the grid can open before the save ends
     if (m.type === 'liveclosed') { G.preview = false; $('gridbox').hidden = true; return; }
     const w = waiters.get(m.id); if (w) { waiters.delete(m.id); w(m); }
   };
-  let liveHook = null, liveDone = null, liveSeen = 0, encNote = '';
+  let fwGuess = '', fwAuto = false, liveHook = null, liveDone = null, liveSeen = 0, encNote = '';
   worker.onerror = (e) => status('Worker stopped: ' + (e.message || 'unknown error'), true);
 
   function show(d, extra) {
@@ -49,9 +49,9 @@
   async function runImport(file, inline, opts) {
     $('go').disabled = true; $('selftest').disabled = true; $('cancel').hidden = false; $('prog').hidden = false; $('prog').value = 0;
     const id = 'j' + (++seq); active = id;
-    const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage(Object.assign({ type: 'import', id, file, delimiter: $('delim').value, inline: !!inline || /[?&]inline=1/.test(location.search) }, opts || {})); });
+    const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage(Object.assign({ type: 'import', id, file, delimiter: $('delim').value, widths: ($('fwbox') && !$('fwbox').hidden && $('fwidths').value) || '', inline: !!inline || /[?&]inline=1/.test(location.search) }, opts || {})); });
     active = null; $('cancel').hidden = true; $('prog').hidden = true; $('selftest').disabled = false; $('go').disabled = !$('file').files.length;
-    if (res.type === 'done') { status('Import complete and checked.' + (encNote ? ' ' + encNote : '')); encNote = ''; show(res.dataset); refresh(); }
+    if (res.type === 'done') { status('Import complete and checked.' + (encNote ? ' ' + encNote : '')); encNote = ''; if (fwGuess) { $('delim').value = 'fixed'; $('fwidths').value = fwGuess; fwAuto = true; syncFw(); } fwGuess = ''; show(res.dataset); refresh(); }
     else status((res.type === 'cancelled' ? 'Cancelled. Nothing was kept.' : 'Import failed: ' + res.message), res.type !== 'cancelled');
     return res;
   }
@@ -271,6 +271,15 @@
       }
       const short1 = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'short.csv', { type: 'text/csv' }));
       add('a file with one short row is tidied and imported', short1.type === 'done' && short1.dataset.rows === 2, short1.type === 'done' ? short1.dataset.rows + ' rows' : short1.message);
+      const fwLines = ['id   name        score', '1    Ann Lee     10.5', '2    Bob         7', '3    Cy Young    8.25', '4    Di          9', '5    Ed Norton   6'].join('\n') + '\n';
+      const fwg = await runImport(new File([fwLines], 'fw.txt', { type: 'text/plain' }));
+      add('fixed-width text is guessed, and the Column widths box then shows the widths', fwg.type === 'done' && fwg.dataset.rows === 5 && !$('fwbox').hidden && $('delim').value === 'fixed' && $('fwidths').value === '5,12', fwg.type === 'done' ? fwg.dataset.rows + ' rows, widths ' + $('fwidths').value : fwg.message);
+      $('fwidths').value = '5,12'; const fwt = await runImport(new File([fwLines], 'fw2.txt', { type: 'text/plain' }));
+      add('typed widths with Delimiter set to Fixed width', fwt.type === 'done' && fwt.dataset.rows === 5, fwt.type === 'done' ? fwt.dataset.rows + ' rows' : fwt.message);
+      $('delim').value = 'auto'; $('fwidths').value = ''; fwAuto = false; syncFw(); add('the Column widths box is hidden again for other files', $('fwbox').hidden, '');
+      const dbfBytes = (() => { const hl = 32 + 64 + 1, rl = 1 + 3 + 5, b = new Uint8Array(hl + rl * 3 + 1), dv = new DataView(b.buffer); b[0] = 3; b[1] = 126; b[2] = 11; b[3] = 19; dv.setUint32(4, 3, true); dv.setUint16(8, hl, true); dv.setUint16(10, rl, true); const fld = (i, n, t, l) => { const o = 32 + i * 32; for (let k = 0; k < n.length; k++) b[o + k] = n.charCodeAt(k); b[o + 11] = t.charCodeAt(0); b[o + 16] = l; }; fld(0, 'id', 'N', 3); fld(1, 'name', 'C', 5); b[96] = 13; const rec = (r, t) => { for (let k = 0; k < t.length; k++) b[hl + r * rl + k] = t.charCodeAt(k); }; rec(0, '   1Ann  '); rec(1, '*  2Bob  '); rec(2, '   3Cy   '); b[hl + 3 * rl] = 26; return b; })();
+      const dbr = await runImport(new File([dbfBytes], 'tiny.dbf', { type: 'application/octet-stream' }));
+      add('a dBase file is read, deleted rows skipped', dbr.type === 'done' && dbr.dataset.rows === 2 && dbr.dataset.columns.map((c) => c.name).join() === 'id,name', dbr.type === 'done' ? dbr.dataset.rows + ' rows' : dbr.message);
       const badRows = ['a,b']; for (let i = 0; i < 24; i++) badRows.push(i % 2 ? '3' : '1,2');
       const bad = await runImport(new File([badRows.join('\r\n') + '\r\n'], 'bad.csv', { type: 'text/csv' }));
       add('a file that is mostly bad rows stops the import and names its line', bad.type === 'error' && /Line 3/.test(bad.message), bad.message);
@@ -407,7 +416,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.19.2216 (LFC-pack 0.13.9)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.19.2230 (LFC-pack 0.13.9)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
@@ -415,16 +424,19 @@
   }
   function reportBack() { if (/[?&]report=1/.test(location.search)) { try { const pm = /[?&]port=(\d+)/.exec(location.search); fetch((pm ? 'http://127.0.0.1:' + pm[1] : '') + '/result', { method: 'POST', body: report(), mode: pm ? 'no-cors' : 'same-origin' }); } catch {} } }
 
+  const syncFw = () => { $('fwbox').hidden = $('delim').value !== 'fixed'; };   // the Column widths box shows only for fixed width: chosen in Delimiter, or guessed for the file just read
+  $('delim').addEventListener('change', () => { fwAuto = false; syncFw(); });
   $('file').addEventListener('change', async () => {
+    if (fwAuto) { $('delim').value = 'auto'; $('fwidths').value = ''; fwAuto = false; syncFw(); }
     const f = $('file').files[0]; $('go').disabled = !f; $('zipbox').hidden = true; $('zipentry').innerHTML = '';
     if (f) status(fmt(f.size) + ' selected. No upload happens.');
-    if (f && /\.(zip|xlsx|xlsm)$/i.test(f.name)) {   // list the files inside so one can be chosen (the largest text file is picked by default)
+    if (f && /\.(zip|xlsx|xlsm|ods|sqlite|sqlite3|db|db3|s3db)$/i.test(f.name)) {   // list the files inside so one can be chosen (the largest text file is picked by default)
       const r = await call({ type: 'zipList', file: f });
       if ($('file').files[0] !== f) return;
       if (r.error) { status(r.error.indexOf('Excel') >= 0 ? r.error : 'Cannot read this zip file: ' + r.error, true); return; }
-      $('zipboxlabel').textContent = r.sheets ? 'Sheet' : 'File in the zip';
-      const text = r.entries.filter((x) => r.sheets || /\.(csv|tsv|txt|json|ndjson|jsonl|gz|xlsx|xlsm)$/i.test(x.name));
-      $('zipentry').innerHTML = (text.length ? text : r.entries).map((x) => '<option value="' + esc(x.name) + '"' + (x.name === r.picked ? ' selected' : '') + '>' + esc(x.name) + (x.size >= 0 ? ' (' + fmt(x.size) + ')' : '') + '</option>').join('');
+      $('zipboxlabel').textContent = r.kind || 'File in the zip';
+      const text = r.entries.filter((x) => r.kind || /\.(csv|tsv|txt|json|ndjson|jsonl|gz|xlsx|xlsm|ods)$/i.test(x.name));
+      $('zipentry').innerHTML = (text.length ? text : r.entries).map((x) => '<option value="' + esc(x.name) + '"' + (x.name === r.picked ? ' selected' : '') + '>' + esc(x.name) + (x.size > 0 ? ' (' + (r.kind === 'Table' ? 'about ' : '') + fmt(x.size) + ')' : '') + '</option>').join('');
       $('zipbox').hidden = $('zipentry').options.length < 2;
     }
   });
