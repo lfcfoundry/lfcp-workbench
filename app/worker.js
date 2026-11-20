@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.13.4/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.13.7/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -1147,6 +1147,14 @@ async function warmColumn(n) {
   const got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), num ? { keys: [n], nulls: 'NaN' } : { keys: [n] });
   if (view === v && got[n] && !v.cols.has(n)) { v.cols.set(n, got[n]); if (ArrayBuffer.isView(got[n]) && colMod && colMod.primeTopN) colMod.primeTopN(got[n]); }
 }
+// Date column as epoch numbers (NaN = empty) for sorting: lfc-pack reads it as numbers; a column with an empty cell is stored as text and returns null here (the text sort stays).
+async function dateKeys(n) {
+  const v = view, c = v.columns.find((x) => x.name === n); if (!c || c.type !== 'date' || !LfcPack.unpackColumnsParallel) return null;
+  v.dateKeys ||= new Map(); if (v.dateKeys.has(n)) return v.dateKeys.get(n);
+  let out = null;
+  try { const got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), { keys: [n], dates: 'numbers', nulls: 'NaN' }); if (got[n] instanceof Float64Array) out = got[n]; } catch { out = null; }
+  if (view === v) v.dateKeys.set(n, out); return out;
+}
 async function loadColumns(names, stream, plain) {
   if (view.live) { for (const n of names) if (!view.cols.has(n)) view.cols.set(n, view.live.column(n)); const out = {}; for (const n of names) out[n] = view.cols.get(n); return out; }
   let want = names.filter((n) => !view.cols.has(n));
@@ -1283,7 +1291,9 @@ async function queryView(m) {
       view.indices = out; view.filtered = true;
       return send('queried', m.id, { count: out.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, zoneBlocks: zp.blocks.length, blocks: view.R.blocks.length });
     }
-    const cols = await loadColumns(names, m.stream), tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), r = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
+    const cols = await loadColumns(names, m.stream); let qcols = view.columns;
+    if (m.sort && !m.filters[m.sort.col] && !m.stream) { const dk = await dateKeys(m.sort.col); if (dk && dk.length === view.total) { cols[m.sort.col] = dk; qcols = view.columns.map((c) => (c.name === m.sort.col ? Object.assign({}, c, { type: 'number' }) : c)); } }   // a date column sorts as numbers (epoch values read straight from the file), not as 3 million text values parsed one by one
+    const tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), r = colMod.runColumnQuery(cols, view.total, qcols, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
     if (r.first) {   // first page first: the best rows now, the full order only when a page beyond them (or an export) needs it
       view.indices = new Uint32Array(r.count); view.indices.set(r.first); view.pending = { topN: r.first.length, full: r.full }; view.filtered = true;
       return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad, selMs: Math.round(performance.now() - tq0) });
