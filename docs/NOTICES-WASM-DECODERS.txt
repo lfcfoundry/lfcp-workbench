@@ -1,0 +1,56 @@
+Third-party notices for the WebAssembly decoders inside app/worker.js
+=====================================================================
+LFCP Workbench embeds four small decoders as WebAssembly (base64 strings in app/worker.js) so Parquet and Arrow files that use these compressions can be read offline. Credits and live-checked links are in docs/CREDITS.md. The notices below apply to the code each decoder was built from.
+
+1. zstd (Zstandard 1.5.7), Copyright (c) Meta Platforms, Inc. and affiliates, https://github.com/facebook/zstd, used under its BSD 3-Clause license. Full text: vendor/lfcp/0.10.28/NOTICE-zstd.txt (the same wasm build as zstd-kit).
+
+2. libdeflate (GZIP pages), https://github.com/ebiggers/libdeflate, MIT license:
+
+Copyright 2016 Eric Biggers
+Copyright 2024 Google LLC
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation files
+(the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of the Software,
+and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+3. brotli (BROTLI pages, loaded only when a BROTLI page appears), https://github.com/google/brotli, MIT license; its built-in dictionary data is part of the same code:
+
+Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+4. LZ4 pages: the decoder is our own code (MIT, Copyright 2026 LFC Foundry), written from the public LZ4 block format description by Yann Collet, https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md. No LZ4 library code is included.
