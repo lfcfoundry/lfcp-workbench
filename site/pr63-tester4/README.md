@@ -1,0 +1,2 @@
+# PR 63 JSON overhead tester, three builds (round 4)
+tester.html times before (880d5c6), main (1e8f3f7) and new (c01c497, PR 67: scan jump plus key scan on the reading thread) importing the same synthetic taxi-shaped NDJSON and JSON array (400,000 rows, about 169 MB each, made in the page). Order per format: before main new, new main before, main new before, before new main. Progress panel, Copy results button. Needs http(s). Add ?rows=N for a smaller run.
