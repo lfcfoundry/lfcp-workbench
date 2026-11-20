@@ -455,7 +455,7 @@ async function parseSegment(m) {
 // Pack worker side (LFC-pack 0.7.0): pack one chunk of JSON lines into block bytes; the importer appends the results in order with pushPacked.
 let flatOne = null;
 async function packBlockJob(m) {
-  try { await LfcPack.init(); let bytes = new Uint8Array(m.c); let keys = null, big = 0; if (m.flat) { flatOne ||= flatTransform(); if (m.flat === 2) { const sc = flatOne.scan(bytes); keys = sc.keys; if (sc.maybeBig) { flatOne.reset(0); const tb = flatOne(bytes); big = flatOne.big(); if (big) bytes = tb; } } else { flatOne.reset(1); bytes = flatOne(bytes); keys = flatOne.keys(); big = flatOne.big(); } } const r = LfcPack.packBlock(bytes, m.flat === 1 || big ? Object.assign({}, m.o, { blockBytes: bytes.length + 1024 }) : m.o);
+  try { await LfcPack.init(); let bytes = new Uint8Array(m.c); let keys = null, big = 0; if (m.flat === 1 || m.flat === 2) { flatOne ||= flatTransform(); if (m.flat === 2) { const sc = flatOne.scan(bytes); keys = sc.keys; if (sc.maybeBig) { flatOne.reset(0); const tb = flatOne(bytes); big = flatOne.big(); if (big) bytes = tb; } } else { flatOne.reset(1); bytes = flatOne(bytes); keys = flatOne.keys(); big = flatOne.big(); } } const r = LfcPack.packBlock(bytes, m.flat === 1 || m.flat === 3 || big ? Object.assign({}, m.o, { blockBytes: bytes.length + 1024 }) : m.o);
     // Exact column types: the first 2000 lines can say "whole numbers" or "dates" for a column that later has decimals or other text. Each block is searched for a violation, and the importer combines the answers.
     let chk = null; if (m.chk && (m.chk.ints.length || m.chk.dates.length)) {
       const txt = new TextDecoder('latin1').decode(bytes); chk = { dec: [], bad: [] };
@@ -892,7 +892,11 @@ async function importOnce(m) {
         if (failed) throw failed;
         idle.pop().postMessage(Object.assign({ rid: seq++ }, msg), tr);
       };
-      const dispatch = (chunk) => send1({ type: 'packBlock', c: chunk, o: popts, flat: t.flatPack ? 1 : t.scanPack ? 2 : 0, chk: t.chk }, [chunk.buffer]);
+      const dispatch = (chunk) => {   // plain JSON lines: the key scan runs here, on the reading thread (it waits for a free pack worker anyway), so the pack workers only pack
+        let flat = t.flatPack ? 1 : t.scanPack ? 2 : 0;
+        if (flat === 2) { inlScan ||= flatTransform(); const sc = inlScan.scan(chunk); for (const k of sc.keys) (t.keys ||= new Set()).add(k); flat = 0; if (sc.maybeBig) { inlScan.reset(0); const tb = inlScan(chunk), bg = inlScan.big(); if (bg) { t.big = (t.big || 0) + bg; chunk = tb.slice(); flat = 3; } } }   // 3: whole numbers already quoted, the block needs room for the extra quotes
+        return send1({ type: 'packBlock', c: chunk, o: popts, flat, chk: t.chk }, [chunk.buffer]);
+      };
       if (columnsOk(m)) {   // staged columns: chunks of typed columns are grouped into blocks of about colBlock bytes of CSV and packed by the pack workers
         const colBlock = m.colBlockBytes || 8388608; let cq = [], cqBytes = 0, cqRows = 0, colHeaders = null;
         // Live columns (desktop, file up to LIVE_MAX): the chunks are kept so the grid can read them as soon as parsing ends, while the pack workers still work through their queue.
