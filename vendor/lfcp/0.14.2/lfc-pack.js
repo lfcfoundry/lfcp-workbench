@@ -2,7 +2,7 @@
  * lfc-pack.js: JSON archive format LFC-pack (.json.lfc): blocks of rows, each field stored as columns, zstd inside, a footer with zone maps.
  * Part of JS-modules, https://github.com/lfcfoundry/JS-modules
  * Copyright (c) 2026 LFC Foundry. MIT License (see LICENSE at the repository root).
- * Version 0.13.9 (API 0)
+ * Version 0.14.2 (API 0)
  *
  * Needs WebAssembly (zstd, the tokenizer and the string deduplicator are compiled from C; page policy 'wasm-unsafe-eval' and nothing else). No other dependency, one file.
  * Contains zstd 1.5.7 (BSD-3-Clause, Meta Platforms), compiled to wasm32; see NOTICE-zstd.txt next to this file.
@@ -1106,14 +1106,14 @@
     return y + '-' + p2(mo) + '-' + p2(d) + 'T' + p2(h) + ':' + p2(min) + ':' + p2(sec) + (f ? '' : '.' + (ms < 10 ? '00' : ms < 100 ? '0' : '') + ms);
   }
   var P2 = new Uint8Array(200); for (var pi = 0; pi < 100; pi++) { P2[pi * 2] = 48 + ((pi / 10) | 0); P2[pi * 2 + 1] = 48 + (pi % 10); }
-  function dateCol(nums, n, f) {   // the text of n epoch-millisecond values: the digits go into one byte buffer (the calendar day is worked out once per day), decoded and cut once
+  function dateCol(nums, n, f, raw) {   // the text of n epoch-millisecond values: the digits go into one byte buffer (the calendar day is worked out once per day), decoded and cut once
     var sc = f & 8 ? (f & 4 ? 1e6 : 1000) : 1; f &= 7;   // form bit 8 (since 0.12.3): the stored numbers are whole seconds, the text needs them times 1,000 (times 1,000,000 for the six-digit forms)
     if (f !== 0 && f !== 1 && f !== 2 && f !== 3 && f !== 4 && f !== 6) throw new Error('damaged block: unknown date form');
     var X = BD_DEC && n >= 512 ? bdx() : null;
     if (X && X.datefmt) {   // the digits are written in WebAssembly (bdec.wasm, datefmt); a value outside the date range makes it stop and the JavaScript loop below refuses the block
       var ww = dateW(f) + 1, L = bdLay([n * 8, n * ww]), mem = bdMem(L.end), put = new Float64Array(mem, L.at[0], n), ii;
       for (ii = 0; ii < n; ii++) put[ii] = nums[ii] * sc;
-      if (X.datefmt(L.at[0], n, f, L.at[1]) === 0) return tdr.decode(new Uint8Array(X.memory.buffer, L.at[1], n * ww - 1)).split('\0');
+      if (X.datefmt(L.at[0], n, f, L.at[1]) === 0) return raw ? { b: new Uint8Array(X.memory.buffer, L.at[1], n * ww - 1).slice(), w: ww } : tdr.decode(new Uint8Array(X.memory.buffer, L.at[1], n * ww - 1)).split('\0');
     }
     var w = dateW(f), u = f & 4, us = 0, buf = new Uint8Array(n * (w + 1)), o = 0, i, t, day, lastDay = -1, rem, ms, sod, hh, mm, ss, x, y = 0, mo = 0, d = 0, ymd0 = 0, ymd1 = 0, ymd2 = 0, ymd3 = 0, ymd5 = 0, ymd6 = 0, ymd8 = 0, ymd9 = 0;
     for (i = 0; i < n; i++, o += w + 1) {
@@ -1128,10 +1128,26 @@
       if (!(f & 1)) { x = (ms / 100) | 0; ms -= x * 100; buf[o + 19] = 46; buf[o + 20] = 48 + x; buf[o + 21] = P2[ms * 2]; buf[o + 22] = P2[ms * 2 + 1]; if (u) { x = (us / 100) | 0; us -= x * 100; buf[o + 23] = 48 + x; buf[o + 24] = P2[us * 2]; buf[o + 25] = P2[us * 2 + 1]; } }
       buf[o + w] = 0;
     }
-    return n ? tdr.decode(buf.subarray(0, o - 1)).split('\0') : [];
+    return raw ? { b: buf.slice(0, o - 1), w: w + 1 } : n ? tdr.decode(buf.subarray(0, o - 1)).split('\0') : [];
   }
   var DATES_LOG = null;   // while a read asks for dates: 'numbers', the date columns it decoded as { a: Float64Array, f: form }
   function setDatesLog(l) { var o = DATES_LOG; DATES_LOG = l; return o; }
+  // text: 'bytes' (since 0.14.0): plain text columns come back as { bytes, start, end } and dictionary columns as { kind: 'dict', labels: { bytes, start, end }, ids }, the shapes packBlock takes, with no JavaScript string built per value; other text layouts (templates, hex, dates as text, columns with empty cells stored as nulls) still come back as strings; dictionary columns that use a shared label table share one read-only labels object
+  var TEXT_BYTES = false;
+  function setTextBytes(v) { var o = TEXT_BYTES; TEXT_BYTES = v; return o; }
+  function cutNul(u, n) {   // u: n values joined by 0 bytes -> { bytes (a copy), start, end }
+    var b = u.slice(), start = new Int32Array(n), end = new Int32Array(n), pos = 0, i, k;
+    for (i = 0; i < n; i++) { k = i === n - 1 ? b.length : b.indexOf(0, pos); if (k < 0) throw new Error('damaged block: text column cut off'); start[i] = pos; end[i] = k; pos = k + 1; }
+    return { bytes: b, start: start, end: end };
+  }
+  function dictBytes(frames, n, p) {
+    var u = frames[0], nl = 1, k, ids, lb;
+    if (p.sh) { lb = labBytesOf(p.sh); nl = lb.start.length; } else { k = u.indexOf(0); while (k >= 0) { nl++; k = u.indexOf(0, k + 1); } lb = cutNul(u, nl); }
+    ids = p.w ? bitunpack(frames[1], n, p.w) : p.wide ? new Uint16Array(frames[1].buffer.slice(frames[1].byteOffset, frames[1].byteOffset + n * 2)) : frames[1].slice(0, n);
+    if (ids instanceof Uint32Array) ids = new Int32Array(ids.buffer);
+    for (k = 0; k < n; k++) if (ids[k] >= nl) throw new Error('damaged block: dictionary code out of range');
+    return { kind: 'dict', labels: lb, ids: ids };
+  }
   function dateFmt(f) { return 'YYYY-MM-DD' + (f & 2 ? ' ' : 'T') + 'HH:MM:SS' + (f & 1 ? '' : f & 4 ? '.ffffff' : '.fff'); }
   function dateNums(v, n) {   // -> { f, a } or null
     if (n < 2 || typeof v[0] !== 'string') return null;
@@ -1553,7 +1569,7 @@
   }
   function decodeColumn(c, zs, frames, nan, tgt) {   // -> array-like of n values (nan: B42, a null-plane number column comes back as a Float64Array with NaN for null)
     var n = c.n, i, u, o, t = c.t, p = c.p;
-    if (t === 'N') { var iv = CP2_1 && nan && p.t === 'B' && BD_DEC && p.m >= 256 && p.p.w <= 24 ? colBw(frames[1], p.m, p.p, 1) : null; if (!iv) iv = decodeColumn({ t: p.t, p: p.p, n: p.m }, zs, frames.slice(1)); var pn = frames[0], q = 0; if (nan && !Array.isArray(iv)) { if (pn.length < (n + 7) >> 3) throw new Error('damaged block: N plane cut off'); o = tgt || new Float64Array(n); for (i = 0; i < n; i++) o[i] = (pn[i >> 3] >> (i & 7)) & 1 ? NaN : iv[q++]; if (q !== p.m) throw new Error('damaged block: N count'); return o; } o = new Array(n); if (pn.length < (n + 7) >> 3) throw new Error('damaged block: N plane cut off'); for (i = 0; i < n; i++) o[i] = (pn[i >> 3] >> (i & 7)) & 1 ? null : iv[q++]; if (q !== p.m) throw new Error('damaged block: N count'); return o; }
+    if (t === 'N') { var iv = CP2_1 && nan && p.t === 'B' && BD_DEC && p.m >= 256 && p.p.w <= 24 ? colBw(frames[1], p.m, p.p, 1) : null; if (!iv) { var tbN = TEXT_BYTES; TEXT_BYTES = false; try { iv = decodeColumn({ t: p.t, p: p.p, n: p.m }, zs, frames.slice(1)); } finally { TEXT_BYTES = tbN; } } var pn = frames[0], q = 0; if (nan && !Array.isArray(iv)) { if (pn.length < (n + 7) >> 3) throw new Error('damaged block: N plane cut off'); o = tgt || new Float64Array(n); for (i = 0; i < n; i++) o[i] = (pn[i >> 3] >> (i & 7)) & 1 ? NaN : iv[q++]; if (q !== p.m) throw new Error('damaged block: N count'); return o; } o = new Array(n); if (pn.length < (n + 7) >> 3) throw new Error('damaged block: N plane cut off'); for (i = 0; i < n; i++) o[i] = (pn[i >> 3] >> (i & 7)) & 1 ? null : iv[q++]; if (q !== p.m) throw new Error('damaged block: N count'); return o; }
     if (t === 'V') return colV(frames, n, p);
     if (t === 'B') return colB(frames, n, p, tgt);
     if (t === 'F') { return new Float64Array(frames[0].buffer.slice(frames[0].byteOffset, frames[0].byteOffset + n * 8)); }
@@ -1575,11 +1591,16 @@
         var dv = decodeColumn({ t: p.t, p: p.p, n: n }, zs, frames), dsc = p.f & 8 ? (p.f & 4 ? 1e6 : 1000) : 1, dout = new Float64Array(n), dk; for (dk = 0; dk < n; dk++) dout[dk] = dv[dk] * dsc;
         DATES_LOG.push({ a: dout, f: p.f & 7 }); return dout;
       }
+      if (TEXT_BYTES) {   // text: 'bytes': the formatted dates as { bytes, start, end } (fixed width), no strings
+        if (!n) return { bytes: new Uint8Array(0), start: new Int32Array(0), end: new Int32Array(0) };
+        var dr = dateCol(decodeColumn({ t: p.t, p: p.p, n: n }, zs, frames), n, p.f, true), dst = new Int32Array(n), den = new Int32Array(n), dq; for (dq = 0; dq < n; dq++) { dst[dq] = dq * dr.w; den[dq] = dq * dr.w + dr.w - 1; }
+        return { bytes: dr.b, start: dst, end: den };
+      }
       return dateCol(decodeColumn({ t: p.t, p: p.p, n: n }, zs, frames), n, p.f);
     }
     if (t === 'L') return untemplate(n, frames);
-    if (t === 's') return n ? tdr.decode(frames[0]).split('\0') : [];
-    if (t === 'D') return colD(frames, n, p);
+    if (t === 's') return n ? (TEXT_BYTES ? cutNul(frames[0], n) : tdr.decode(frames[0]).split('\0')) : [];
+    if (t === 'D') return TEXT_BYTES ? dictBytes(frames, n, p) : colD(frames, n, p);
     if (n && jnulls(frames[0], n)) { o = new Array(n); for (i = 0; i < n; i++) o[i] = null; return o; } var js = n ? tdr.decode(frames[0]).split('\n') : []; o = new Array(n); if (V8 || GECKO) { for (i = 0; i < n; i++) o[i] = jcell(js[i]); return o; } for (i = 0; i < n; i++) o[i] = JSON.parse(js[i]); return o;
   }
   // 'j' cells: most are null, true, false or whole numbers; JSON.parse per cell costs about 80 ns, so read those by hand (whole numbers of up to 15 characters, digits only, no leading zero, are exact in a double); anything else goes to JSON.parse. Chromium and Firefox only: in WebKitGTK the per-cell reader was slower than JSON.parse (cloud WebKitGTK 2.52.6, 100,000 orders: unpackColumns 1.08 to 1.20 of the time), so it keeps JSON.parse there; the all-null check runs in every engine
@@ -1858,7 +1879,7 @@
   function byteCol(bc, a, n, zs, level, tmode, key) {
     var B = bc.bytes, S = bc.start, E = bc.end, BL = B.length, i, k, s, e, tot = 0, hi = 0, best = null;
     var bk = n >= 16 ? bkLoad() : null, KL = null, wide = false, fl = 0, HB = 1 << Math.max(10, Math.min(20, 32 - Math.clz32(n * 2)));
-    if (bk) { for (i = 0, k = n < 64 ? n : 64, s = 0; i < k; i++) s += E[a + i] - S[a + i]; wide = s >= k * 24;   // values of 24 bytes or more on average (first 64 sampled): the 16-byte-at-a-time scan, 8-byte hash and memory.copy join; short values keep the byte loops, which are faster for them
+    if (bk) { for (i = 0, k = n < 64 ? n : 64, s = 0; i < k; i++) s += E[a + i] - S[a + i]; wide = s >= k * 16;   // values of 16 bytes or more on average (first 64 sampled): the 16-byte-at-a-time scan, 8-byte hash and memory.copy join; short values keep the byte loops, which are faster for them
       KL = bkPrep(bk, B, S, E, a, n, HB); if (KL) { KL.w = wide; fl = (wide ? bk.x.bcscanw : bk.x.bcscan)(KL.B, BL, KL.S, KL.E, n); if (fl & 3) KL = null; else { hi = fl & 4 ? 128 : 0; tot = bk.x.bctot(); } } }
     if (!KL) { for (i = 0; i < n; i++) { s = S[a + i]; e = E[a + i]; if (!(s >= 0 && e >= s && e <= BL)) throw new Error('LfcPack: text column "' + key + '": value ' + (a + i) + ' has offsets outside its bytes'); for (k = s; k < e; k++) { if (B[k] === 0) return encodeColumn(byteColStrings(bc, a, n), zs, level, tmode, undefined, key); hi |= B[k]; } tot += e - s; } }
     if (n >= 2 && DATE_MODE) { var dnC = dateNumsBC(B, S, E, a, n), wC = dnC && dateWrap(dnC, zs, level, key); if (wC) return wC; }
@@ -2625,6 +2646,11 @@
     if (!r.labs) { r.labs = r.n === 1 && !r.j.length ? [''] : tdr.decode(r.j).split('\0'); if (r.labs.length !== r.n) { r.labs = null; throw new Error('damaged file: label table count'); } }
     return r.labs;
   }
+  function labBytesOf(id) {   // a shared table as { bytes, start, end }, made once and shared by every block that names it (read-only)
+    var r = SHREG[id]; if (!r) throw new Error('damaged file: label table ' + id + ' is missing');
+    if (!r.lb) { r.lb = cutNul(r.j, r.n); }
+    return r.lb;
+  }
   function parseLabels(b, into) {   // a section's tables merged into { name: { j, n } }
     var hl = rd32(b, 0), t = JSON.parse(tdr.decode(b.subarray(4, 4 + hl))), id, e, base = 4 + hl, c = 0;
     for (id in t) { e = t[id]; if (!into[id]) { into[id] = { j: b.slice(base + e[0], base + e[0] + e[1]), n: e[2] }; c++; } }
@@ -3280,7 +3306,12 @@
   function nullsOpt(o) { var v = o && o.nulls; if (v === undefined || v === null) return false; if (v === 'NaN') return true; throw new Error("LfcPack: nulls must be 'NaN'"); }
   function datesOpt(o) { var v = o && o.dates; if (v === undefined || v === null) return false; if (v === 'numbers') return true; throw new Error("LfcPack: dates must be 'numbers'"); }
   function datesOf(block, log) { var d = {}, k, j, any = false; for (j = 0; j < log.length; j++) for (k in block.cols) if (block.cols[k] === log[j].a) { d[k] = { unit: log[j].f & 4 ? 'us' : 'ms', fmt: dateFmt(log[j].f) }; any = true; } log.length = 0; block.dates = d; return any; }
+  function textOpt(o) { var v = o && o.text; if (v === undefined || v === null) return false; if (v === 'bytes') return true; throw new Error("LfcPack: text must be 'bytes'"); }
   function unpackColumns(bytes, opts) {
+    if (!textOpt(opts)) return unpackColumnsI(bytes, opts);
+    var tprev = setTextBytes(true); try { return unpackColumnsI(bytes, opts); } finally { setTextBytes(tprev); }
+  }
+  function unpackColumnsI(bytes, opts) {
     var file = openFile(bytes), rf = makeFlatReader(S.zdec), out = [], i, want = null, k, nan = nullsOpt(opts), off = 0, dt = datesOpt(opts), dl = null;
     if (dt) { dl = []; var dprev = setDatesLog(dl); try { return unpackColumns0(file, rf, out, want, nan, off, opts, dl); } finally { setDatesLog(dprev); } }
     return unpackColumns0(file, rf, out, want, nan, off, opts, null);
@@ -3482,7 +3513,7 @@
             if (b[4] === 'n') { var wn = null, qn; if (o && o.keys) { wn = {}; for (qn = 0; qn < o.keys.length; qn++) wn[o.keys[qn]] = 1; } var nanN = nullsOpt(o); return fetch(i).then(function (x) { if (!file._nr) file._nr = makeNestedReader(S.zdec, sharedOf(file)); var c = b39Cols(file._nr.readBlock(x, wn), wn); return nanN ? nanCols(c) : c; }); }   // a nested block: rows, then columns
             if (b[4] !== 'f') return Promise.reject(new Error('LfcPack: columns() needs a flat-row block; block ' + i + ' is ' + (b[4] === 'r' ? 'raw (exact mode)' : 'nested') + ': read it with block(i)'));
             var want = null, q; if (o && o.keys) { want = {}; for (q = 0; q < o.keys.length; q++) want[o.keys[q]] = 1; }
-            var nan2 = nullsOpt(o), dt2 = datesOpt(o); return fetch(i).then(function (x) { if (!cf) cf = makeFlatReader(S.zdec); if (!dt2) return cf.columnsOf(x, want, false, nan2); var l2 = [], p2 = setDatesLog(l2); try { var r2 = cf.columnsOf(x, want, false, nan2); datesOf(r2, l2); return r2; } finally { setDatesLog(p2); } });   /* its own reader, not the shared arena: the arrays stay valid after the next block */
+            var nan2 = nullsOpt(o), dt2 = datesOpt(o), tb2 = textOpt(o); return fetch(i).then(function (x) { if (!cf) cf = makeFlatReader(S.zdec); if (tb2) { var tp2 = setTextBytes(true); try { if (!dt2) return cf.columnsOf(x, want, false, nan2); var l3 = [], p3 = setDatesLog(l3); try { var r3 = cf.columnsOf(x, want, false, nan2); datesOf(r3, l3); return r3; } finally { setDatesLog(p3); } } finally { setTextBytes(tp2); } } if (!dt2) return cf.columnsOf(x, want, false, nan2); var l2 = [], p2 = setDatesLog(l2); try { var r2 = cf.columnsOf(x, want, false, nan2); datesOf(r2, l2); return r2; } finally { setDatesLog(p2); } });   /* its own reader, not the shared arena: the arrays stay valid after the next block */
           },
           // zone(i, key) (since 0.5.9): { min, max, count } of the number column key in block i, from the footer (nothing is decoded), or null when the block has none for that key. A filter such as id >= 7000000 can skip block i when max < 7000000
           zone: function (i, key) {
@@ -3567,7 +3598,7 @@
       .then(function (ok) { return ok === true; }, function () { return false; });
     return warmP;
   }
-  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, aggregate: auto(aggregate, false), unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.13.6', apiVersion: 0 };
+  var api = { _waStats: function () { var z = S.zdec; return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: z && z.outCap ? z.outCap() : 0, inCap: z && z.inCap ? z.inCap() : 0, mem: z ? z.memBuf().byteLength : 0, arena: ARENA.buf ? ARENA.buf.byteLength : 0 }; }, _wa: function (on, est) { WA_ON = !!on; if (est != null) WA.est = est; arenaDrop(); return { restarts: WA.restarts, moved: WA.moved, want: WA.want, outCap: S.zdec && S.zdec.outCap ? S.zdec.outCap() : 0, inCap: S.zdec && S.zdec.inCap ? S.zdec.inCap() : 0, mem: S.zdec ? S.zdec.memBuf().byteLength : 0 }; }, _arena: function (on, ms) { ARENA_ON = !!on; if (ms != null) ARENA_MS = ms; arenaDrop(); return ARENA_ON; }, _arenaBytes: function () { return ARENA.buf ? ARENA.buf.byteLength : 0; }, trim: trim, clearCache: clearCache, cacheLimit: cacheLimit, cacheBytes: cacheBytes, _trimPacker: trimPacker, _helperTrimMs: function (ms) { HELPER_TRIM_MS = ms; }, _autoTrimMs: function (ms) { AUTO_TRIM_MS = ms; if (S.idle) { clearTimeout(S.idle); S.idle = null; } }, hash: hash, aggregate: auto(aggregate, false), unpackColumns: auto(unpackColumns, false), packRows: auto(packRows, true), packTables: auto(function (x, o) { return o && o.base ? packDelta(x, o) : packTables(x, o); }, true), unpackTables: auto(unpackTables, false), pool: function (o) { return init({ readOnly: true }).then(function () { return makePool(o); }); }, _job: function (m) { return runJob(m); }, init: init, pack: auto(pack, true), packRowsParallel: packRowsParallel, packColumnsParallel: packColumnsParallel, unpackColumnsParallel: unpackColumnsParallel, unpackRowsParallel: unpackRowsParallel, packParallel: packParallel, packParallelStream: packParallelStream, warmPack: warmPack, warm: warm, packStream: packStream, packBlock: packBlock, unpack: auto(unpack, false), info: auto(info, false), metadata: auto(metadata, false), unpackRows: auto(unpackRows, false), open: open, stats: auto(stats, false), unpackText: auto(unpackText, false), version: '0.14.2', apiVersion: 0 };
 // Copyright (c) 2026 LFC Foundry. MIT License. Source part of lfc-pack.js (joined by build.py).
 
   // ================================================================ delta saves v2 (prototype, off by default): packTables(x, { base }) / unpackTables(file, { base })
@@ -3926,7 +3957,7 @@
   }
   function unpackColumnsParallel(bytes, opts) {
     opts = opts || {};
-    try { nullsOpt(opts); datesOpt(opts); } catch (e) { return Promise.reject(e); }
+    try { nullsOpt(opts); datesOpt(opts); if (textOpt(opts)) throw new Error("LfcPack: text: 'bytes' is not supported by unpackColumnsParallel (blocks keep their own labels); use unpackColumns or open().columns"); } catch (e) { return Promise.reject(e); }
     if (opts.dates) return init({ readOnly: true }).then(function () {   // dates: 'numbers' (since 0.13.6): read on the calling thread; the result's non-enumerable `dates` says each date column's unit and fmt
       var blocks = unpackColumns(bytes, { keys: opts.keys, nulls: opts.nulls, dates: 'numbers' }), n = 0, i, res, info = {}, k;
       for (i = 0; i < blocks.length; i++) { n += blocks[i].n; for (k in blocks[i].dates) info[k] = blocks[i].dates[k]; }
