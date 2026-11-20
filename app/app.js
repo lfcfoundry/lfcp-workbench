@@ -233,8 +233,9 @@
           add('a text-like cell in a number column turns only that column into text', okm, whym);
         }
         const badRows = ['id,name,score\r\n', ...plain]; badRows[4001] = '4000,only two\r\n';
-        const bf = new File(badRows, 'plainbad.csv', { type: 'text/csv' }), b1 = await runImport(bf, true), b2 = await runImport(bf, false, { segBytes: 2048 });
+        const bf = new File(badRows, 'plainbad.csv', { type: 'text/csv' }), b1 = await runImport(bf, true, { strict: true }), b2 = await runImport(bf, false, { segBytes: 2048, strict: true }), b3 = await runImport(bf, false, { segBytes: 2048 });   // strict: skip the tidy stage, to test the error path
         segDetail.push('bad ' + Math.round(performance.now() - q3) + 'ms'); add('a bad row in the middle names the same line with pieces', b1.type === 'error' && b2.type === 'error' && b1.message === b2.message && /Line 4002/.test(b2.message), b2.message);
+        add('the same file without strict is tidied and imported', b3.type === 'done' && b3.dataset.rows === 6000, b3.type === 'done' ? b3.dataset.rows + ' rows' : b3.message);
         for (const x of [one, many]) if (x.type === 'done') await call({ type: 'delete', name: x.dataset.name });
         {   // blocks packed by worker threads (LFC-pack 0.7.0) and appended in order give the same rows
           const pk = await runImport(pf, false, { segBytes: 2048, blockBytes: 3000, packWorkers: 2 });
@@ -268,8 +269,11 @@
         }
         add('awkward text and column names are stored and read back exactly', wOk, wDetail);
       }
-      const bad = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'bad.csv', { type: 'text/csv' }));
-      add('a bad row stops the import and names its line', bad.type === 'error' && /Line 3/.test(bad.message), bad.message);
+      const short1 = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'short.csv', { type: 'text/csv' }));
+      add('a file with one short row is tidied and imported', short1.type === 'done' && short1.dataset.rows === 2, short1.type === 'done' ? short1.dataset.rows + ' rows' : short1.message);
+      const badRows = ['a,b']; for (let i = 0; i < 24; i++) badRows.push(i % 2 ? '3' : '1,2');
+      const bad = await runImport(new File([badRows.join('\r\n') + '\r\n'], 'bad.csv', { type: 'text/csv' }));
+      add('a file that is mostly bad rows stops the import and names its line', bad.type === 'error' && /Line 3/.test(bad.message), bad.message);
       const idc = 'j' + (++seq), pc = new Promise((r) => waiters.set(idc, r)); worker.postMessage({ type: 'import', id: idc, file, delimiter: ',' }); worker.postMessage({ type: 'cancel', id: idc });
       const cr = await pc; add('cancel stops the import', cr.type === 'cancelled', cr.type);
       add('footer validated', d.validation.ok, d.validation.level);
@@ -403,7 +407,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.19.2137 (LFC-pack 0.13.7)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.19.2216 (LFC-pack 0.13.7)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
