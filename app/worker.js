@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.14.4/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.14.5/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -2822,7 +2822,7 @@ async function exportLfcp(m) {
               tc.set(c.name, col); }
             if (col) { const t = new Float64Array(n); if (fx) { for (let i = 0; i < n; i++) t[i] = col[fx[i]]; } else t.set(col.subarray(start, end)); out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: col.fmt }; continue; }
           }
-          if (ArrayBuffer.isView(src)) {   // a number column goes to LFC-pack as a typed array, NaN for an empty cell (lfc-pack 0.14.4: 0.86 to 0.91x the time of a plain array with nulls in Chromium, Firefox and WebKitGTK, same bytes)
+          if (ArrayBuffer.isView(src)) {   // a number column goes to LFC-pack as a typed array, NaN for an empty cell (lfc-pack 0.14.5: 0.86 to 0.91x the time of a plain array with nulls in Chromium, Firefox and WebKitGTK, same bytes)
             const t = new Float64Array(n); if (fx) { for (let i = 0; i < n; i++) t[i] = src[fx[i]]; } else t.set(src.subarray(start, end));
             out[c.name] = t; continue;
           }
