@@ -15,4 +15,13 @@ const filters = [{}, { id: '>=25' }, { score: '<50', name: 'an' }, { when: '>202
 const sorts = [null, { col: 'id', dir: 'asc' }, { col: 'id', dir: 'desc' }, { col: 'score', dir: 'asc' }, { col: 'score', dir: 'desc' }, { col: 'when', dir: 'asc' }, { col: 'when', dir: 'desc' }, { col: 'name', dir: 'asc' }, { col: 'name', dir: 'desc' }];
 t('column query equals row query for every filter x sort pair', () => { for (const f of filters) for (const s of sorts) same({ filters: f, sort: s }); });
 t('only the needed columns are read', () => { const part = { id: cols.id }; const q = { filters: { id: '>=40' }, sort: { col: 'id', dir: 'desc' } }; assert.deepEqual(Array.from(runColumnQuery(part, rows.length, columns, q).indices), Array.from(runQuery(rows, columns, q).indices)); });
+t('a text column given as dictionary ids filters the same as its text, and a sort reuses the kept rows', () => {
+  const dict = [...new Set(cols.name)], ids = Uint16Array.from(cols.name, (v) => dict.indexOf(v)), codes = { name: { ids, dict } }, part = { id: cols.id, score: cols.score, when: cols.when };
+  for (const f of filters) for (const s of sorts) {
+    if (s && s.col === 'name') continue;
+    const want = runColumnQuery(cols, rows.length, columns, { filters: f, sort: s }), got = runColumnQuery(f.name ? part : cols, rows.length, columns, { filters: f, sort: s }, { codes: f.name ? codes : {} });
+    assert.deepEqual(Array.from(got.indices), Array.from(want.indices)); assert.deepEqual(got.errors, want.errors);
+    if (s && Object.keys(f).length && !Object.keys(want.errors).length) { const kept = runColumnQuery(cols, rows.length, columns, { filters: f, sort: null }).indices, again = runColumnQuery({ [s.col]: cols[s.col] }, rows.length, columns, { filters: f, sort: s }, { base: kept }); assert.deepEqual(Array.from(again.indices), Array.from(want.indices)); }
+  }
+});
 console.log(n + ' columnar checks passed');

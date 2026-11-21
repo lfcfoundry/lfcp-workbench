@@ -6,24 +6,29 @@ import { parseFilter, matches, sortKeyFor, formatScaled } from './query.mjs';
 import { topSortTyped, BLOCK, primeSummary } from './topn.mjs';   // typed top-N with block skipping: see the credits in that file
 export function primeTopN(a) { primeSummary(a); }
 
+// which distinct values of a dictionary column pass a filter (1 or 0 per id)
+function codeTable(c, filter, decimals) { const ok = new Uint8Array(c.dict.length); for (let q = 0; q < ok.length; q++) ok[q] = matches(filter, c.dict[q], decimals) ? 1 : 0; return { ids: c.ids, ok }; }
 export function runColumnQuery(cols, n, columns, { filters = {}, sort = null, top = 0 } = {}, opts = {}) {
   const errors = {}, active = [];
   for (const c of columns) {
     const text = filters[c.name]; if (!text) continue;
     const { filter, error } = parseFilter(text, c.type);
-    if (error) errors[c.name] = error; else if (filter) active.push([cols[c.name], filter, c.decimals]);
+    if (error) errors[c.name] = error; else if (filter) active.push([cols[c.name], filter, c.decimals, opts.codes && opts.codes[c.name] ? codeTable(opts.codes[c.name], filter, c.decimals) : null]);
   }
   if (top && sort && sort.col && cols[sort.col] && !active.length && ArrayBuffer.isView(cols[sort.col]) && cols[sort.col].length === n) {   // whole typed column, no filter: the answer needs no row-number array (7M numbers to allocate and fill)
     const col = columns.find((c) => c.name === sort.col), numeric = col && (col.type === 'integer' || col.type === 'number' || col.type === 'date');
-    if (numeric) { const first = topSortTyped(cols[sort.col], top, sort.dir === 'desc' ? -1 : 1, opts.block || BLOCK); if (first) return { first, count: n, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices }; }
+    if (numeric) { const first = topSortTyped(cols[sort.col], top, sort.dir === 'desc' ? -1 : 1, opts.block || BLOCK); if (first) return { first, count: n, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }, opts).indices }; }
   }
   let idx;
-  if (!active.length) { idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; }
+  if (opts.base) idx = opts.base.slice();   // the rows an earlier call with the same filters kept (file order): only the sort is left to do
+  else if (!active.length) { idx = new Uint32Array(n); for (let i = 0; i < n; i++) idx[i] = i; }
   else {
-    // the first filter scans every row; later filters scan only the survivors
-    const [col0, f0, d0] = active[0], first = []; for (let i = 0; i < n; i++) if (matches(f0, col0[i], d0)) first.push(i);
-    idx = Uint32Array.from(first);
-    for (let a = 1; a < active.length && idx.length; a++) { const [col, f, dd] = active[a]; let m = 0; for (let k = 0; k < idx.length; k++) if (matches(f, col[idx[k]], dd)) idx[m++] = idx[k]; idx = idx.subarray(0, m); }
+    // the first filter scans every row; later filters scan only the survivors. A column given as dictionary ids (opts.codes) is tested once per distinct value, then by id: no text per row.
+    active.sort((a, b) => (b[3] ? 1 : 0) - (a[3] ? 1 : 0));
+    const [col0, f0, d0, c0] = active[0];
+    if (c0) { const ids = c0.ids, ok = c0.ok; let m = 0; for (let i = 0; i < n; i++) m += ok[ids[i]]; idx = new Uint32Array(m); m = 0; for (let i = 0; i < n; i++) if (ok[ids[i]]) idx[m++] = i; }
+    else { const first = []; for (let i = 0; i < n; i++) if (matches(f0, col0[i], d0)) first.push(i); idx = Uint32Array.from(first); }
+    for (let a = 1; a < active.length && idx.length; a++) { const [col, f, dd, cd] = active[a]; let m = 0; if (cd) { const ids = cd.ids, ok = cd.ok; for (let k = 0; k < idx.length; k++) if (ok[ids[idx[k]]]) idx[m++] = idx[k]; } else for (let k = 0; k < idx.length; k++) if (matches(f, col[idx[k]], dd)) idx[m++] = idx[k]; idx = idx.subarray(0, m); }
   }
   if (sort && sort.col && cols[sort.col]) {
     const col = columns.find((c) => c.name === sort.col), key = sortKeyFor(col ? col.type : 'string', col && col.decimals), sign = sort.dir === 'desc' ? -1 : 1;
@@ -32,9 +37,9 @@ export function runColumnQuery(cols, n, columns, { filters = {}, sort = null, to
     const src = text && col && col.decimals ? cols[sort.col].map((v) => (typeof v === 'number' ? formatScaled(v, col.decimals) : v)) : cols[sort.col];
     if (top && !text && !active.length && src.length === n && ArrayBuffer.isView(src)) {   // a whole typed column, no filter: no text, no parsing, whole blocks skipped
       const first = topSortTyped(src, top, sign, opts.block || BLOCK);
-      if (first) return { first, count: n, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices };
+      if (first) return { first, count: n, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }, opts).indices };
     }
-    if (top) { const first = topSortIndices(idx, src, key, sign, text, top); if (first) { const fidx = idx; return { first, count: fidx.length, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }).indices }; } }
+    if (top) { const first = topSortIndices(idx, src, key, sign, text, top); if (first) { const fidx = idx; return { first, count: fidx.length, errors, full: () => runColumnQuery(cols, n, columns, { filters, sort }, opts).indices }; } }
     // rank 0 normal, 1 not a number, 2 empty: empties sort last, then unparsable values, ties keep file order
     if (!text) { idx = radixSortNumbers(idx, src, key, sign); return { indices: idx, errors }; }
     const rank = new Uint8Array(n), num = text ? null : new Float64Array(n), str = text ? new Array(n) : null;
