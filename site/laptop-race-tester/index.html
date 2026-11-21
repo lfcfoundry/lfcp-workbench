@@ -3,27 +3,56 @@
 <title>Laptop race tester</title>
 <meta name="robots" content="noindex,nofollow">
 <style>
-:root{--bg:#fff;--fg:#1b1b1b;--mut:#666;--line:#ddd;--acc:#006ba2;--bad:#c84d4f}
-@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#aaa;--line:#333;--acc:#5db8e8;--bad:#ff8a8c}}
-body{background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;margin:0 auto;max-width:760px;padding:16px}
-h1{font-size:22px;margin:0 0 4px}p{margin:6px 0}.mut{color:var(--mut)}
-button{font:inherit;padding:10px 18px;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:6px;cursor:pointer;margin:4px 6px 4px 0}
-button.go{border-color:var(--acc);color:var(--acc);font-weight:700;font-size:20px;padding:14px 32px}button:disabled{opacity:.45;cursor:default}
-.pick{border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin:8px 0}
-progress{width:100%;height:18px}#panel{border:1px solid var(--line);border-radius:6px;padding:10px;margin:10px 0;white-space:pre-wrap;font-variant-numeric:tabular-nums}
-pre{white-space:pre-wrap;border:1px solid var(--line);border-radius:6px;padding:10px;font-size:13px}.bad{color:var(--bad)}
+:root{color-scheme:light dark;--bg:#fff;--fg:#1b2433;--muted:#566277;--soft:#f1f4f9;--line:#dde3ee;--hero:#0f2a47;--hero-fg:#f3f7fc;--hero-muted:#a9bdd6;--accent:#1f7ae0;--us:#1f6fb5;--us-pale:#b9d3ea;--dot:#0b2e52;--rival:#7b8494;--bad:#c62828;--good:#1b7f4b;--font:'Segoe UI',system-ui,sans-serif;--mono:ui-monospace,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1522;--fg:#e4ebf5;--muted:#9db0c8;--soft:#13233a;--line:#25364f;--hero:#08111d;--accent:#4c9bf5;--us:#4c9bf5;--us-pale:#23466e;--dot:#d7e8fb;--rival:#8f9bb0;--bad:#ff7b72;--good:#56d08e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 var(--font)}
+header{background:var(--hero);color:var(--hero-fg);padding:22px 16px 20px}
+.in{max-width:1080px;margin:0 auto}
+header .tag{font:600 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--hero-muted)}
+h1{font-size:clamp(24px,5vw,34px);font-weight:800;letter-spacing:-.01em;line-height:1.15;margin:6px 0 6px}
+header p{margin:0;color:var(--hero-muted);max-width:46rem}
+main{padding:16px 16px 40px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px}.bar button{flex:1 1 130px;max-width:220px}
+button{font:inherit;font-weight:600;min-height:48px;padding:10px 16px;border-radius:10px;border:1px solid var(--line);background:var(--soft);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button small{display:block;font-weight:400;font-size:12px;opacity:.85}
+.card{border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:0 0 14px;background:var(--bg)}
+.prog{height:12px;border-radius:6px;background:var(--soft);overflow:hidden;margin:10px 0 8px}
+.prog i{display:block;height:100%;width:0;background:var(--accent);border-radius:6px;transition:width .25s}
+#panel{font-weight:600;white-space:pre-wrap;font-variant-numeric:tabular-nums}
+#panel.bad{color:var(--bad)}
+#copied{color:var(--muted);font-size:14px;min-height:1.5em}
+.score{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:0 0 14px}
+.score div{border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.score b{display:block;font-size:28px;line-height:1.1;font-weight:800;letter-spacing:-.01em}
+.score span{color:var(--muted);font-size:13px}
+h2{font-size:20px;margin:0 0 2px;line-height:1.2}
+.note{color:var(--muted);font-size:13px;margin:0 0 10px}
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px}.panels>div{max-width:460px}
+.panels h3{font-size:15px;margin:0 0 2px}
+svg{display:block;width:100%;height:auto}svg text{font-family:var(--font)}
+details{margin:0 0 14px}summary{cursor:pointer;font-weight:600;padding:6px 0}
+textarea{width:100%;font:12.5px/1.45 var(--mono);padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--soft);color:var(--fg);margin:8px 0 0}
+label{display:block;margin:4px 0}
+.key{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted);margin:0 0 8px}
+.key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
-<h1>Laptop race tester <small class="mut" id="ver">version 2026.11.21.1526, quick run, a fresh page for every run</small></h1>
-<p class="mut">Workbench against DuckDB on your own machine, same files, alternating runs. Everything stays in this browser. The quick run takes about 5 to 10 minutes. Keep this tab in front and do not use the laptop meanwhile.</p>
-<p>The page downloads the two test files itself (about 140 MB, one time) and joins them here. Nothing to pick.</p>
-<p><label><input type="checkbox" id="runh4" checked> H4 Wikimedia pageviews (15.3 million rows)</label><br><label><input type="checkbox" id="runh6" checked> H6 NASA exoplanets (6,473 rows, 703 columns)</label></p>
-<details class="pick"><summary>Use my own files instead (optional)</summary><p>Wikimedia file: <input type="file" id="fwiki"></p><p>Exoplanets file: <input type="file" id="fexo"></p></details>
-<p><label><input type="checkbox" id="full"> Full run (more repeats, about 3 times longer; the default quick run is for a first answer)</label></p>
-<p><button class="go" id="start">Start</button> <button id="stop" disabled>Stop and keep results</button> <button id="copy" disabled>Copy results</button> <button id="save" disabled>Download results (.txt)</button> <span id="copied" class="mut" role="status"></span></p>
-<progress id="bar" value="0" max="1"></progress>
-<div id="panel">Pick one or both files, then press Start.</div>
-<p class="mut">Results (select all and copy also works):</p>
-<textarea id="out" readonly rows="14" style="width:100%;box-sizing:border-box;font:12px/1.4 ui-monospace,monospace"></textarea>
+<header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.1554, a fresh page for every run</span></p></div></header>
+<main><div class="in">
+<div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
+<div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
+<div class="score"><div><b id="s1">-</b><span>H6 exoplanets: Workbench share of DuckDB base's time</span></div><div><b id="s2">-</b><span>H4 Wikimedia: share of DuckDB base's time</span></div><div><b id="s3">-</b><span>H4: share of DuckDB threaded's time</span></div><div><b id="s4">0</b><span>runs finished</span></div></div>
+<div class="card"><h2 id="head">Total time start to finish, by race</h2><p class="note">Shorter is better. Grey is DuckDB, blue is Workbench (counted when its table is usable and saved). Each dot is one run.</p>
+<div class="key"><span><i style="background:var(--us)"></i>Workbench (middle run)</span><span><i style="background:var(--rival)"></i>DuckDB</span><span><i style="background:var(--dot);width:10px;border-radius:5px"></i>each run</span></div>
+<div class="panels" id="panels"><p class="note">The charts appear here as runs finish.</p></div></div>
+<details><summary>Options: pick races or use my own files</summary><label><input type="checkbox" id="runh4" checked> H4 Wikimedia pageviews (15.3 million rows)</label><label><input type="checkbox" id="runh6" checked> H6 NASA exoplanets (6,473 rows, 703 columns)</label><p class="note">Wikimedia file: <input type="file" id="fwiki"> &nbsp; Exoplanets file: <input type="file" id="fexo"></p></details>
+<details><summary>What is measured</summary><p class="note">Two public Wikimedia pageview hours joined (H4, 15.3 million rows) and the NASA exoplanet table (H6, 6,473 rows by 703 columns), fetched by this page and kept in browser storage. Each run starts from a fresh page. Workbench is timed from import start until its table is usable and saved as a view; its stored copy finishes later and is reported on its own line. DuckDB-WASM (base build, plus a self-built threaded build, labeled estimated performance) imports the file, adds the first-letter column, filters, sorts, summarizes and writes Parquet. Runs alternate, the order swaps each round, and the threaded runs go last because they can stall on some machines. The parse-thread sweep runs Workbench with 2, 4, 6, 8 and up to 12 reading threads.</p></details>
+<details id="rawd"><summary>Results as text</summary><textarea id="out" readonly rows="14" autocomplete="off"></textarea></details>
+</div></main>
 <script>window.addEventListener('error', function (e) { var p = document.getElementById('panel'); if (p) { p.textContent = 'Page error: ' + e.message + ' (line ' + e.lineno + '). Please press Copy results or send this line.'; p.className = 'bad'; } });</script>
 <script type="module">
 const $ = (id) => document.getElementById(id), Q = new URLSearchParams(location.search), RUNS = +(Q.get('runs') || 3);
@@ -38,6 +67,8 @@ const CFG = {
     rc: ", delim=',', strict_mode=false", derive: 'substr(hostname,1,1)', filter: "discoverymethod='Transit' AND pl_rade>=1", sort: 'pl_rade DESC, pl_name', agg: 'SELECT discoverymethod AS k, count(*)::INT AS n, 0 AS a FROM c GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', rows: 6473 } };
 let ST = null, threadedOk = false, curLabel = '', curW = 1, tNow0 = Date.now();
 const dl = { on: false, got: 0, total: 0, t: 0, label: '' };   // the download phase: the bar and the text show bytes, speed and time left
+const setBar = (f) => { $('bar').style.width = Math.round(100 * f) + '%'; };
+const busy = (b) => { $('start').disabled = b; $('startfull').disabled = b; };
 const mb = (n) => (n / 1048576).toFixed(0) + ' MB';
 const KEY = 'ltState';
 const saveState = () => { try { sessionStorage.setItem(KEY, JSON.stringify(ST)); } catch (e) { /* none */ } };
@@ -47,12 +78,12 @@ const panel = () => {
   if (dl.on) {
     const secs = Math.max(0.5, (performance.now() - dl.t) / 1000), rate = dl.got / secs, left = dl.total && rate > 0 ? Math.round((dl.total - dl.got) / rate) : 0;
     $('panel').textContent = 'Downloading the test files (' + dl.label + ')\n' + mb(dl.got) + ' of ' + mb(dl.total) + ' (' + Math.round(100 * dl.got / (dl.total || 1)) + '%)   ' + (rate / 1048576).toFixed(1) + ' MB/s   about ' + left + ' s left\nThis happens once. The races start right after it.';
-    $('bar').value = dl.total ? dl.got / dl.total : 0; return;
+    setBar(dl.total ? dl.got / dl.total : 0); return;
   }
   if (!ST) return;
   const el = (Date.now() - ST.t0) / 1000, wd = wDoneOf(), eta = wd >= 2 ? Math.round(((Date.now() - ST.tRace) / 1000) / wd * (ST.wTot - wd)) : 0;   // from the races only; an H4 run counts 3, an H6 run counts 1
   $('panel').textContent = 'Run ' + Math.min(ST.idx + 1, ST.jobs.length) + ' of ' + ST.jobs.length + ': ' + (curLabel || (ST.jobs[ST.idx] && ST.jobs[ST.idx].label) || '') + '\nElapsed ' + Math.round(el) + ' s   Finished: ' + ST.results.length + ' of ' + ST.jobs.length + (eta ? '   about ' + Math.ceil(eta / 60) + ' min left' : '') + (ST.stopped ? '\nStopping after this run...' : '') + '\nLast: ' + (ST.last || '');
-  $('bar').value = ST.jobs.length ? ST.results.length / ST.jobs.length : 0;
+  setBar(ST.jobs.length ? ST.results.length / ST.jobs.length : 0);
 };
 setInterval(() => { if (ST && ST.running) panel(); }, 500);
 async function wipe() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }); } catch (e) { /* none */ } }
@@ -111,31 +142,32 @@ async function wbRun(file, c, extra, chart) {
 }
 // ---- DuckDB (base = published build; threaded = self-built extension, estimated performance), the SQL of the benchmark harness ----
 let duckMod = null;
-async function duckRun(kind, file, c) {
+let duckStage = '';
+async function duckRun(kind, file, c, extra) {
   duckMod ||= await import('./duck/duckdb-browser.mjs'); const duck = duckMod, steps = {}, thr = kind === 'threaded';
   const worker = new Worker(thr ? './duck/duckdb-browser-threads.worker.js' : './duck/duckdb-browser-base.worker.js'); const db = new duck.AsyncDuckDB({ log: () => {} }, worker);
-  const T = async (name, f) => { const s = performance.now(); const r = await f(); steps[name] = Math.round(performance.now() - s); return r; };
+  const T = async (name, f) => { duckStage = name; const s = performance.now(); const r = await f(); steps[name] = Math.round(performance.now() - s); return r; };
   try {
     const abs = (p) => new URL(p, location.href).href;
     await T('start', async () => { if (thr) { await db.instantiate(abs('./duck/duckdb-threads.wasm'), abs('./duck/duckdb-browser-threads.pthread.worker.js')); await db.open({ allowUnsignedExtensions: true }); } else await db.instantiate(abs('./duck/duckdb-base.wasm')); });
-    const cn = await db.connect(); const q = (s) => cn.query(s); if (thr) await q('SET threads=' + (navigator.hardwareConcurrency || 4));
-    await db.registerFileHandle('data.csv', file, duck.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+    const cn = await db.connect(); const q = (s) => cn.query(s); duckStage = 'setup'; const nth = (extra && extra.threads) || navigator.hardwareConcurrency || 4; if (thr) await q('SET threads=' + nth);
+    duckStage = 'open file'; await db.registerFileHandle('data.csv', file, duck.DuckDBDataProtocol.BROWSER_FILEREADER, true);
     let rows; await T('import', async () => { await q("CREATE TABLE raw AS SELECT * FROM read_csv('data.csv', header=true" + c.rc + ')'); rows = (await q('SELECT count(*)::INT AS n FROM raw')).get(0).n; });
     await T('add_column', async () => { await q('CREATE TABLE c AS SELECT *, ' + c.derive + ' AS pfx FROM raw'); await q('DROP TABLE raw'); });
     let fr; await T('filter', async () => { await q('CREATE TABLE f AS SELECT * FROM c WHERE ' + c.filter); fr = (await q('SELECT count(*)::INT AS n FROM f')).get(0).n; });
     await T('sort', async () => { await q('CREATE TABLE s AS SELECT * FROM f ORDER BY ' + c.sort); });
     await T('summarize', async () => { await q(c.agg); });
-    await q("SET custom_extension_repository='" + abs('./repo') + "'"); await q('INSTALL parquet'); await q('LOAD parquet');   // outside the timing, as in the benchmark harness
+    duckStage = 'parquet extension'; await q("SET custom_extension_repository='" + abs('./repo') + "'"); await q('INSTALL parquet'); await q('LOAD parquet');   // outside the timing, as in the benchmark harness
     let bytes; await T('save_parquet', async () => { await q("COPY s TO 'out.parquet' (FORMAT PARQUET)"); bytes = (await db.copyFileToBuffer('out.parquet')).byteLength; });
     const total = Object.values(steps).reduce((a, b) => a + b, 0);
-    return { total, steps, rows, filterRows: fr, saveBytes: bytes };
+    return { total, steps, rows, filterRows: fr, saveBytes: bytes, threads: thr ? nth : 0 };
   } finally { try { worker.terminate(); } catch (e) { /* gone */ } }
 }
 const ENG = { workbench: (f, c) => wbRun(f, c, null, true), base: (f, c) => duckRun('base', f, c), threaded: (f, c) => duckRun('threaded', f, c) };
 const LAB = { wb: 'Workbench', base: 'DuckDB base', thr: 'DuckDB threaded (self-built extension, estimated performance)' };
-const sweepNs = (full) => { const cores = navigator.hardwareConcurrency || 4; return (full ? [2, 4, 8, Math.min(12, cores)] : [2, 8, Math.min(12, cores)]).filter((x, i, a) => a.indexOf(x) === i); };
+const sweepNs = (full) => { const cores = navigator.hardwareConcurrency || 4; return (full ? [2, 4, 6, 8, Math.min(12, cores)] : [2, 4, 6, 8, Math.min(12, cores)]).filter((x, i, a) => a.indexOf(x) === i); };
 function buildJobs(full, hasWiki, hasExo) {
-  const J = [], add = (ds, eng, label, w, extra, chart, grp) => J.push({ ds, eng, label, w, extra: extra || null, chart: !!chart, grp });
+  const J = [], add = (ds, eng, label, w, extra, chart, grp, to) => J.push({ ds, eng, label, w, extra: extra || null, chart: !!chart, grp, to: to || 420 });
   const dsn = (ds) => ds === 'wiki' ? 'H4' : 'H6';
   for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) {
     if (!ds) continue; const w = ds === 'wiki' ? 3 : 1, cw = full ? 3 : 2, cb = full || ds === 'exo' ? cw : 1, n = Math.max(cw, cb);
@@ -145,7 +177,8 @@ function buildJobs(full, hasWiki, hasExo) {
       for (const nn of sweepNs(full)) add('wiki', 'wb', 'Parse threads ' + nn, 3, { parseHelpers: nn }, false, 'sweep-' + nn);
     }
   }
-  if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), ds === 'wiki' ? 3 : 1, null, false, 'race');   // last: it is the one that hangs on some machines
+  if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), ds === 'wiki' ? 3 : 1, null, false, 'race', 120);   // last: it is the one that hangs on some machines
+  if (threadedOk && hasWiki && (navigator.hardwareConcurrency || 4) > 4) add('wiki', 'thr', 'H4 DuckDB threaded limited to 4 threads', 3, { threads: 4 }, false, 'thr4', 120);   // shows whether the full thread count is what stalls
   return J;
 }
 function report(final) {
@@ -157,6 +190,7 @@ function report(final) {
     if (!R.some((r) => ST.jobs[r.i].ds === ds)) continue; const c = CFG[ds], res = { wb: get(ds, 'race', 'wb'), base: get(ds, 'race', 'base'), thr: get(ds, 'race', 'thr') };
     L.push(c.name + ': total time start to finish, median of the finished runs, alternating');
     for (const e of ['wb', 'base', 'thr']) { const a = res[e]; if (!a.length) { if (e !== 'thr' || ST.threaded) L.push('  ' + LAB[e] + ': no finished run'); continue; } L.push('  ' + LAB[e] + ': ' + sec(med(a.map((r) => r.total))) + '   (runs ' + a.map((r) => sec(r.total)).join(', ') + ')   [' + stepLine(a, e === 'wb' ? wbN : dkN) + ']'); }
+    const t4 = get(ds, 'thr4', 'thr'); if (t4.length) L.push('  DuckDB threaded limited to 4 threads: ' + sec(med(t4.map((r) => r.total))) + '   [' + stepLine(t4, dkN) + ']');
     if (res.wb.length && res.base.length) { const w = med(res.wb.map((r) => r.total)), b = med(res.base.map((r) => r.total)); L.push('  Verdict: Workbench ' + (w < b ? 'WINS' : 'LOSES') + ' against DuckDB base by ' + sec(Math.abs(w - b)) + ' (' + pct(w, b) + ')'); }
     if (res.wb.length && res.thr.length) { const w = med(res.wb.map((r) => r.total)), t = med(res.thr.map((r) => r.total)); L.push('  Verdict: Workbench ' + (w < t ? 'WINS' : 'LOSES') + ' against DuckDB threaded by ' + sec(Math.abs(w - t)) + ' (' + pct(w, t) + ')'); }
     if (res.wb.length) { const wr = res.wb[0]; L.push('  Workbench is usable (table, group, add column, filter, sort, Save) at the time shown; its stored copy in the browser finished at ' + sec(med(res.wb.map((r) => r.storedAt))) + '. DuckDB keeps nothing.', '  Rows: ' + wr.rows + ' (expected ' + c.rows + '), filter keeps ' + wr.filterRows + ', Save wrote ' + wr.saveRows + ' rows' + (wr.rows === c.rows ? '' : '  <-- ROW COUNT DIFFERS')); }
@@ -170,9 +204,29 @@ function report(final) {
   L.push('Not measured here: overlap of column unpack and Save with parse (not built yet). The DuckDB Parquet extension install is outside the timing.', '', 'Raw:'); for (const r of R) L.push('  ' + ST.jobs[r.i].label + ' ' + (r.err ? 'FAILED ' + r.err : JSON.stringify({ total: r.r.total, steps: r.r.steps, storedAt: r.r.storedAt, rows: r.r.rows, filterRows: r.r.filterRows })));
   return L.join('\n');
 }
+
+const fmtS = (ms) => (ms / 1000).toFixed(1) + ' s';
+function draw() {
+  if (!ST) return; const R = ST.results.filter((r) => !r.err), host = $('panels'); let html = '';
+  const vals = (ds, eng) => R.filter((r) => ST.jobs[r.i].ds === ds && ST.jobs[r.i].grp === 'race' && ST.jobs[r.i].eng === eng).map((r) => r.r.total);
+  for (const ds of ['exo', 'wiki']) {
+    const rows = [['wb', 'Workbench'], ['base', 'DuckDB base'], ['thr', 'DuckDB threaded']].map(([e, n]) => [e, n, vals(ds, e)]).filter((x) => x[2].length); if (!rows.length) continue;
+    const top = Math.max(...rows.map((x) => Math.max(...x[2]))) * 1.18, W = 360, L = 112, Rm = 52, rh = 40, H = rows.length * rh + 30, pw = W - L - Rm, X = (v) => L + v / top * pw;
+    let s = '<div><h3>' + (ds === 'wiki' ? 'H4 Wikimedia, 15.3 million rows' : 'H6 exoplanets, 703 columns') + '</h3><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Total time by engine">';
+    rows.forEach(([e, n, v], k) => { const so = v.slice().sort((a, b) => a - b), mid = so[so.length >> 1], y = 6 + k * rh, col = e === 'wb' ? 'var(--us)' : 'var(--rival)';
+      s += '<text x="' + (L - 8) + '" y="' + (y + 17) + '" font-size="11.5" fill="var(--fg)" text-anchor="end">' + n + '</text><rect x="' + L + '" y="' + y + '" width="' + (X(mid) - L) + '" height="24" rx="2" fill="' + col + '"/>';
+      v.forEach((q) => { s += '<circle cx="' + X(q) + '" cy="' + (y + 12) + '" r="3" fill="var(--dot)" stroke="var(--bg)" stroke-width="1"/>'; });
+      s += '<text x="' + (W - 2) + '" y="' + (y + 17) + '" font-size="12" font-weight="700" text-anchor="end" fill="var(--fg)">' + fmtS(mid) + '</text>'; });
+    html += s + '<line x1="' + L + '" y1="2" x2="' + L + '" y2="' + (rows.length * rh + 4) + '" stroke="var(--line)"/></svg></div>';
+  }
+  host.innerHTML = html || '<p class="note">The charts appear here as runs finish.</p>';
+  const m = (ds, e) => { const v = vals(ds, e); return v.length ? v.slice().sort((a, b) => a - b)[v.length >> 1] : 0; }, share = (id, a, b, ds) => { const x = m(ds, a), y = m(ds, b); $(id).textContent = x && y ? (x / y).toFixed(2) : '-'; $(id).style.color = x && y ? (x < y ? 'var(--good)' : 'var(--bad)') : ''; };
+  share('s1', 'wb', 'base', 'exo'); share('s2', 'wb', 'base', 'wiki'); share('s3', 'wb', 'thr', 'wiki'); $('s4').textContent = ST.results.length + ' of ' + ST.jobs.length;
+}
 function showReport(final) {
+  draw();
   const t = report(final); $('out').value = t; $('copy').disabled = false; $('save').disabled = false;
-  try { localStorage.setItem('ltReport', t); } catch (e) { /* none */ } return t;
+  return t;
 }
 async function copyText(t) {
   let ok = false;
@@ -185,15 +239,15 @@ const FILES = { wiki: () => getWiki(), exo: () => getExo() };
 async function runNext() {
   while (ST.idx < ST.jobs.length && !ST.stopped) {
     const job = ST.jobs[ST.idx]; curLabel = job.label; panel();
-    const watchdog = setTimeout(() => { ST.results.push({ i: ST.idx, err: 'took more than 420 s, the page was reloaded and the test went on' }); ST.idx++; ST.last = job.label + ' FAILED (timeout)'; saveState(); location.reload(); }, 420000);
+    const watchdog = setTimeout(() => { ST.results.push({ i: ST.idx, err: 'stalled for more than ' + job.to + ' s' + (job.eng === 'thr' ? ' (last stage reached: ' + duckStage + ')' : '') + ', the page was reloaded and the test went on' }); ST.idx++; ST.last = job.label + ' FAILED (timeout)'; saveState(); location.reload(); }, (job.to || 420) * 1000);
     let res;
-    try { await wipe(); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
+    try { await wipe(); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
     catch (e) { res = { i: ST.idx, err: String(e && e.message || e).slice(0, 160) }; ST.last = job.label + ' FAILED ' + res.err; }
     clearTimeout(watchdog); ST.results.push(res); ST.idx++; saveState(); showReport(false);
     if (ST.idx < ST.jobs.length && !ST.stopped) { $('panel').textContent = 'Finished ' + job.label + '. Starting a fresh page for the next run...'; await sleep(400); location.reload(); return; }   // a page turn between runs: nothing is kept in memory from the run before
   }
-  ST.running = false; saveState(); const t = showReport(true); $('stop').disabled = true; $('start').disabled = false;
-  $('panel').textContent = (ST.stopped ? 'Stopped. ' : 'Done. ') + 'Press Copy results and paste them into the chat.   Total ' + Math.round((Date.now() - ST.t0) / 1000) + ' s'; $('bar').value = 1;
+  ST.running = false; saveState(); const t = showReport(true); $('stop').disabled = true; busy(false);
+  $('panel').textContent = (ST.stopped ? 'Stopped. ' : 'Done. ') + 'Press Copy results and paste them into the chat.   Total ' + Math.round((Date.now() - ST.t0) / 1000) + ' s'; setBar(1);
   if (Q.get('post')) { try { await fetch(Q.get('post'), { method: 'POST', body: t }); } catch (e) { /* none */ } }
 }
 async function ownFile(file, name) {   // a picked file is copied into browser storage once, so it survives the page turns
@@ -201,20 +255,20 @@ async function ownFile(file, name) {   // a picked file is copied into browser s
   await file.stream().pipeThrough(new TransformStream({ transform(c, ctl) { dl.got += c.length; ctl.enqueue(c); } })).pipeTo(w); dl.on = false;
   const ok = await (await dir.getFileHandle(name + '.ok', { create: true })).createWritable(); await ok.write('1'); await ok.close();
 }
-async function start() {
-  $('start').disabled = true; $('copy').disabled = true; $('save').disabled = true; $('copied').textContent = ''; $('panel').className = ''; $('panel').textContent = 'Starting: checking for the test files...';
-  const full = $('full').checked || !!Q.get('full'), pw = $('fwiki').files[0], pe = $('fexo').files[0];
+async function start(fullFlag) {
+  busy(true); $('copy').disabled = true; $('save').disabled = true; $('copied').textContent = ''; $('panel').className = ''; $('panel').textContent = 'Starting: checking for the test files...';
+  const full = fullFlag || !!Q.get('full'), pw = $('fwiki').files[0], pe = $('fexo').files[0];
   let hasWiki = $('runh4').checked || !!pw, hasExo = $('runh6').checked || !!pe;
   try {
     if (pw) { await ownFile(pw, 'lt-h4-wiki.txt'); } else if (hasWiki) await getWiki();
     if (pe) { await ownFile(pe, 'lt-h6-exo.csv'); } else if (hasExo) await getExo();
-  } catch (e) { $('panel').textContent = 'Could not get the test files: ' + (e && e.message || e) + '. Use the "my own files" box instead.'; $('panel').className = 'bad'; dl.on = false; $('start').disabled = false; return; }
-  if (!hasWiki && !hasExo) { $('panel').textContent = 'Tick at least one race, or pick a file.'; $('start').disabled = false; return; }
+  } catch (e) { $('panel').textContent = 'Could not get the test files: ' + (e && e.message || e) + '. Use the "my own files" box instead.'; $('panel').className = 'bad'; dl.on = false; busy(false); return; }
+  if (!hasWiki && !hasExo) { $('panel').textContent = 'Tick at least one race, or pick a file.'; busy(false); return; }
   const jobs = buildJobs(full, hasWiki, hasExo);
   ST = { running: true, full, jobs, results: [], idx: 0, t0: Date.now(), tRace: Date.now(), wTot: jobs.reduce((a, j) => a + j.w, 0), stopped: false, ua: navigator.userAgent, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory, threaded: threadedOk, ver: document.getElementById('ver').textContent, last: '' };
   saveState(); $('stop').disabled = false; await runNext();
 }
-$('start').onclick = start;
+$('start').onclick = () => start(false); $('startfull').onclick = () => start(true);
 $('stop').onclick = () => { if (ST) { ST.stopped = true; saveState(); } $('stop').disabled = true; };
 $('copy').onclick = () => copyText($('out').value);
 $('save').onclick = () => downloadText($('out').value);
@@ -228,11 +282,11 @@ $('save').onclick = () => downloadText($('out').value);
       if (!self.crossOriginIsolated && !tried) { location.reload(); return; }   // once, so the page itself is served with the two headers
     } catch (e) { /* run without the threaded build */ }
   }
+  $('out').value = ''; $('copy').disabled = true; $('save').disabled = true; $('stop').disabled = true; busy(false); $('copied').textContent = ''; setBar(0);   // never trust what the browser restored into the form
   const st = loadState();
-  if (st && st.running) { ST = st; $('start').disabled = true; $('stop').disabled = false; if (ST.results.length) showReport(false); await runNext(); return; }   // a page turn in the middle of a run: carry on
-  if (st && st.results && st.results.length) { ST = st; showReport(!!st.stopped || st.idx >= st.jobs.length); $('panel').textContent = 'The last run is shown below. Press Start for a new one.'; }
-  else { try { const t = localStorage.getItem('ltReport'); if (t) { $('out').value = t; $('copy').disabled = false; $('save').disabled = false; } } catch (e) { /* none */ } }
+  if (st && st.running) { ST = st; busy(true); $('stop').disabled = false; if (ST.results.length) showReport(false); await runNext(); return; }   // a page turn in the middle of a run: carry on
+  else { try { sessionStorage.removeItem(KEY); } catch (e) { /* none */ } }   // a new visit starts empty: no earlier results are shown
   if (Q.get('auto')) { setTimeout(start, 500); return; }
-  if (!($('out').value)) $('panel').textContent = 'Press Start.  (Threaded DuckDB: ' + (threadedOk ? 'ready' : 'not available here') + ')';
+  if (!($('out').value)) $('panel').textContent = 'Tap Quick run.  (Threaded DuckDB: ' + (threadedOk ? 'ready' : 'not available here') + ')';
 })();
 </script></body></html>
