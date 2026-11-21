@@ -262,9 +262,10 @@ const slabChunk = (c) => {
   return Object.assign({}, c, { cols, slab });
 };
 const reView = (a, buf) => new a.constructor(buf, a.byteOffset, a.length);
-const dupSlab = (c) => { const b = c.slab.slice(0); return { n: c.n, bytes: c.bytes, slab: b, cols: c.cols.map((x) => (x.codes ? { codes: reView(x.codes, b), lb: { bytes: reView(x.lb.bytes, b), start: reView(x.lb.start, b), end: reView(x.lb.end, b) } } : x.bytes ? { bytes: reView(x.bytes, b), start: reView(x.start, b), end: reView(x.end, b) } : reView(x, b))) }; };   // one copy of the buffer, the columns are views at the same places
+const ownDup = (x, extra) => { const y = dupText(x); y.own = true; extra.push(y.bytes.buffer, y.start.buffer); return y; };   // a column that was turned to text after the chunk was built has its own buffers
+const dupSlab = (c) => { const b = c.slab.slice(0), extra = [], o = { n: c.n, bytes: c.bytes, slab: b, cols: c.cols.map((x) => (x.own ? ownDup(x, extra) : x.codes ? { codes: reView(x.codes, b), lb: { bytes: reView(x.lb.bytes, b), start: reView(x.lb.start, b), end: reView(x.lb.end, b) } } : x.bytes ? { bytes: reView(x.bytes, b), start: reView(x.start, b), end: reView(x.end, b) } : reView(x, b))) }; if (extra.length) o.extra = extra; return o; };   // one copy of the buffer, the columns are views at the same places
 const dupChunk = (c) => c.slab ? dupSlab(c) : ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.codes ? { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } } : x.bytes ? dupText(x) : x.slice())) });
-const chunkBuffers = (c) => { if (c.slab) return [c.slab]; const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
+const chunkBuffers = (c) => { if (c.slab) return c.extra ? [c.slab].concat(c.extra) : [c.slab]; const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
 // Dictionary chunk column to the text shape (a code per row to start and end offsets into joined bytes).
 function expandDict(x, n) {
   const lb = x.lb; let tb = 0; for (let r = 0; r < n; r++) { const q = x.codes[r]; tb += lb.end[q] - lb.start[q]; }
@@ -559,10 +560,14 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
   const closeAll = () => helpers.forEach((h) => h.terminate());
   try { for (let i = 0; i < nh; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; }
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
-  for (const h of helpers) {
+  const wire = (h) => {
     h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); p.res(d.r); } } };
     h.onerror = (e) => failAll(new Error('The import helper failed: ' + (e && e.message || 'unknown error')));
-  }
+  };
+  for (const h of helpers) wire(h);
+  // Once a column has turned to text in place the pieces still being read use the old plan. A helper reads two pieces at once when a repeat lands on it, and its one builder cannot hold two plans,
+  // so from then on repeats go to a helper of their own.
+  let redoH = null; const redoOn = (k) => { if (!t.demotes) return helpers[k % nh]; if (!redoH) { redoH = mkWorker(); wire(redoH); helpers.push(redoH); } return redoH; };
   const rpc = async (h, msg) => {
     let tr = []; if (msg.file && msg.file.lazy) {   // a zip entry still being unpacked: hand the helper the bytes of its own window (segment plus 2 MiB past its end to finish the last row)
       const f = msg.file, lo = msg.headerOnly ? 0 : msg.startAt != null ? msg.startAt : msg.first ? msg.hdrEnd : msg.s, hi = Math.min(f.size, msg.headerOnly ? 4194304 : (msg.e || f.size) + 2097152);
@@ -599,9 +604,11 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       let r = done.get(k); done.delete(k); nextP = k + 1; signal(); stop(job);
       if (r.error || r.startPos !== expect) {   // a guessed start sat inside quotes: parse this piece again from the verified spot
         t.redos = (t.redos || 0) + 1;
-        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, dict, cols, survey, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
+        r = await rpc(redoOn(k), { file, delimiter, headers, plan, dict, cols, survey, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
         stop(job);
-        if (r.mixed) throw mixedErr(r.col);   // from a verified start: the file really has a text-like cell in a number column
+        // from a verified start: the file really has a text-like cell in a number column. A wide live table turns that column to text in place and reads the piece again; any other import starts over.
+        for (let g = 0; r.mixed && g < headers.length && col && col.demote && await col.demote(r.col); g++) { t.demotes = (t.demotes || 0) + 1; r = await rpc(redoOn(k), { file, delimiter, headers, plan, dict, cols, survey, dup: !!col.dup, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) })); stop(job); }
+        if (r.mixed) throw mixedErr(r.col);
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
       for (const b of r.pieces) await packBytes(b);
@@ -2240,7 +2247,27 @@ async function importOnce(m) {
           }
           if (view && view.preview && now - pvSent >= 250) { view.total = total; send('previewGrow', m.id, { total }); pvSent = now; }
         };
-        col = { begin: async (h) => { colHeaders = h; if (h.length > 128) { t.wide = true; if (!m.colBlockBytes) colBlock = 16777216; } },   /* wide tables: LFC-pack has a fixed cost per column per block, so fewer, larger blocks (measured on a 703-column table) */ dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= (colHeaders.length > 128 ? 256 : 4096)) await sendCols(); } };
+        // A wide live table that meets a text-like cell in a number column does not start over: the column becomes text in every chunk read so far (the number's text is exactly the file's text, see typedCell
+        // and typedDecimal), the blocks packed so far are dropped, reading goes on, and everything is packed once from the kept chunks when reading ends.
+        let held = false; const demoted = new Map();
+        const numText = (x, d) => { const n = x.length, off = new Int32Array(n + 1); let buf = new Uint8Array(n * 8 + 32), at = 0; for (let i = 0; i < n; i++) { const v = x[i]; off[i] = at; if (v === v) { const tx = d ? formatScaled(v, d) : String(v); if (at + tx.length > buf.length) { const nb = new Uint8Array(buf.length * 2 + tx.length); nb.set(buf.subarray(0, at)); buf = nb; } for (let q = 0; q < tx.length; q++) buf[at++] = tx.charCodeAt(q); } } off[n] = at; return { bytes: buf.slice(0, at), start: off.subarray(0, n), end: off.subarray(1, n + 1) }; };
+        const retext = (c) => { for (const [k, d] of demoted) if (ArrayBuffer.isView(c.cols[k])) { const y = numText(c.cols[k], d); y.own = true; c.cols[k] = y; } };
+        const demote = async (k) => {
+          if (!t.wide || !liveChunks || !plan || k < 0 || k >= colHeaders.length || demoted.has(k) || !(plan[k] === true || (typeof plan[k] === 'number' && plan[k] > 0))) return false;
+          demoted.set(k, plan[k] === true ? 0 : plan[k]); plan[k] = false; if (numPlan && samplePlan.num) numPlan[k] = !!samplePlan.num[k];
+          for (const c of liveChunks) retext(c);
+          if (pvKind) { pvKind[k] = false; if (view && view.preview && view.columns[k]) { view.columns[k].type = 'string'; delete view.columns[k].decimals; } }
+          if (!held) {
+            held = true; col.dup = false; cq = []; cqBytes = 0; cqRows = 0; blockQ.length = 0; while (pumping) await pumping;
+            while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
+            await wchain; if (failed) throw failed;
+            try { await writable.abort(); } catch { /* a new file replaces it */ } writable = await store.create(name); outBytes = 0;
+            packer = LfcPack.packStream(Object.assign({}, popts, { meta })); seq = 0; emit = 0; dkBlocks.clear();
+          }
+          return true;
+        };
+        const release = () => { if (!held) return; held = false; for (const c of liveChunks) { cq.push(dupChunk(c)); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 256) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(list); } } pump(); };
+        col = { demote, release, begin: async (h) => { colHeaders = h; if (h.length > 128) { t.wide = true; if (!m.colBlockBytes) colBlock = 16777216; } },   /* wide tables: LFC-pack has a fixed cost per column per block, so fewer, larger blocks (measured on a 703-column table) */ dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { if (demoted.size) retext(c); liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } if (held) return; cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= (colHeaders.length > 128 ? 256 : 4096)) await sendCols(); } };
       }
       const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
       packBytes = async (bytes) => {
@@ -2263,6 +2290,7 @@ async function importOnce(m) {
     let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
     let res = null;
     if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null, m.parseHelpers);
+    if (res && col && col.release) col.release();   // chunks held back after a column turned to text: pack them now
     if (!res && !m.ndjson && !m.parquet) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
         if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer, col, (p) => { plan = p; }, m.exact); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
