@@ -1,0 +1,2 @@
+# packWorkers sweep tester
+tester.html times Workbench main 1f0f958 (live CSV import) with packWorkers 1, 2, 3, 4, 6, 8 on a taxi-shaped CSV (1.5M rows, made in the page) and its one-entry zip (made in the page), 3 runs per value, rotating order. Elapsed timer stops at the end, Copy results button (cores, deviceMemory, per-run timing JSON), noindex. Needs http(s). ?rows=N and ?runs=N for smaller runs. Requested by the CSV parse thread.
