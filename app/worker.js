@@ -250,8 +250,18 @@ function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink, dictOn
   };
 }
 const dupText = (x) => { if (x.start.buffer === x.end.buffer) { const b = x.start.buffer.slice(0); return { bytes: x.bytes.slice(), start: new Int32Array(b, 0, x.start.length), end: new Int32Array(b, 4, x.end.length) }; } return { bytes: x.bytes.slice(), start: x.start.slice(), end: x.end.slice() }; };   // a text chunk shares one offsets array between start and end: the copy does too
+// One buffer for a whole chunk: a wide file makes chunks of 100+ columns, each with 2 or 3 small arrays; handing 700 small buffers to postMessage costs about 9 microseconds each in Chromium
+// (36,000 buffers per 8 MiB piece, 13 s of the helpers' time on a 116-column file), so the arrays of a chunk are copied into one slab and travel as views of it.
+const slabChunk = (c) => {
+  let tot = 0; const add = (a) => { tot += (a.byteLength + 7) & ~7; };
+  for (const x of c.cols) { if (x.codes) { add(x.codes); add(x.lb.bytes); add(x.lb.start); add(x.lb.end); } else if (x.bytes) { add(x.bytes); add(x.start); add(x.end); } else add(x); }
+  const slab = new ArrayBuffer(tot); let off = 0;
+  const mv = (a) => { const v = new a.constructor(slab, off, a.length); v.set(a); off += (a.byteLength + 7) & ~7; return v; };
+  const cols = c.cols.map((x) => (x.codes ? { codes: mv(x.codes), lb: { bytes: mv(x.lb.bytes), start: mv(x.lb.start), end: mv(x.lb.end) } } : x.bytes ? Object.assign({}, x, { bytes: mv(x.bytes), start: mv(x.start), end: mv(x.end) }) : mv(x)));
+  return Object.assign({}, c, { cols, slab });
+};
 const dupChunk = (c) => ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.codes ? { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } } : x.bytes ? dupText(x) : x.slice())) });
-const chunkBuffers = (c) => { const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
+const chunkBuffers = (c) => { if (c.slab) return [c.slab]; const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
 // Dictionary chunk column to the text shape (a code per row to start and end offsets into joined bytes).
 function expandDict(x, n) {
   const lb = x.lb; let tb = 0; for (let r = 0; r < n; r++) { const q = x.codes[r]; tb += lb.end[q] - lb.start[q]; }
@@ -529,6 +539,7 @@ async function segJob(m) {
   try {
     const r = await parseSegment(m);
     if (m.dup) r.chunks2 = r.chunks.map(dupChunk);   // live columns: a second copy made here, in parallel, so the import worker keeps one and forwards the other to the pack workers
+    if (r.chunks && r.chunks.length) { r.chunks = r.chunks.map(slabChunk); if (r.chunks2) r.chunks2 = r.chunks2.map(slabChunk); }
     self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer).concat(...r.chunks.map(chunkBuffers), ...(r.chunks2 || []).map(chunkBuffers)));
   } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed), col: err && err.col != null ? err.col : -1 } }); }
 }
@@ -2810,7 +2821,11 @@ async function exportLfcp(m) {
               tc.set(c.name, col); }
             if (col) { const t = new Float64Array(n); if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) t[i] = col[ix[start + i]]; } else for (let i = 0; i < n; i++) t[i] = col[start + i]; out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: col.fmt }; continue; }
           }
-          if (ArrayBuffer.isView(src)) { for (let i = 0; i < n; i++) { const x = src[view.filtered ? view.indices[start + i] : start + i]; a[i] = x !== x ? null : x; } }
+          if (ArrayBuffer.isView(src)) {   // a number column without empty cells goes to LFC-pack as a typed array (about 0.6 of the time of a plain array); with empty cells it stays an array with nulls (the NaN form packs 4-5 times slower)
+            const t = new Float64Array(n); let nan = false; if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) { const x = src[ix[start + i]]; t[i] = x; if (x !== x) nan = true; } } else for (let i = 0; i < n; i++) { const x = src[start + i]; t[i] = x; if (x !== x) nan = true; }
+            if (!nan) { out[c.name] = t; continue; }
+            for (let i = 0; i < n; i++) { const x = t[i]; a[i] = x !== x ? null : x; }
+          }
           else for (let i = 0; i < n; i++) a[i] = src[view.filtered ? view.indices[start + i] : start + i];
           out[c.name] = a;
         }
