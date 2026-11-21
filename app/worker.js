@@ -2836,7 +2836,15 @@ function mergeDicts(blocks, rows) {
 }
 const ASCII1 = Array.from({ length: 128 }, (_, i) => String.fromCharCode(i));
 // first code unit and length in UTF-16 units of the text at b[s..e), the same answers as String charAt(0) and length on the decoded text (valid UTF-8: a 4-byte character counts 2 units)
-function firstUnit(b, s, e, dec) { if (s >= e) return ''; const c = b[s]; return c < 128 ? ASCII1[c] : dec.decode(b.subarray(s, Math.min(e, s + 4))).charAt(0); }
+const CP1 = new Map();
+function firstUnit(b, s, e, dec) {
+  if (s >= e) return ''; const c = b[s]; if (c < 128) return ASCII1[c];
+  let cp = -1;   // well-formed 2 and 3 byte sequences are decoded by hand (a decoder call per row costs about 100 ns); anything else (4 byte, damaged) goes to the decoder
+  if (c >= 0xC2 && c < 0xE0) { if (s + 1 < e && (b[s + 1] & 0xC0) === 0x80) cp = ((c & 31) << 6) | (b[s + 1] & 63); }
+  else if (c >= 0xE0 && c < 0xF0) { if (s + 2 < e && (b[s + 1] & 0xC0) === 0x80 && (b[s + 2] & 0xC0) === 0x80) { cp = ((c & 15) << 12) | ((b[s + 1] & 63) << 6) | (b[s + 2] & 63); if (cp < 0x800 || (cp >= 0xD800 && cp < 0xE000)) cp = -1; } }
+  if (cp < 0) return dec.decode(b.subarray(s, Math.min(e, s + 4))).charAt(0);
+  let r = CP1.get(cp); if (r === undefined) { r = String.fromCharCode(cp); CP1.set(cp, r); } return r;
+}
 function unitLength(b, s, e) { let n = 0; for (let i = s; i < e; i++) { const c = b[i]; if ((c & 0xC0) !== 0x80) n += c >= 0xF0 ? 2 : 1; } return n; }
 async function deriveFromBytes(fn, name, total) {
   const num = fn === 'length', out = num ? new Float64Array(total) : new Array(total), dec = new TextDecoder(), one = (b, s, e) => (num ? unitLength(b, s, e) : firstUnit(b, s, e, dec));
