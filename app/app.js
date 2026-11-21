@@ -278,6 +278,20 @@
         const pq2 = await runImport(new File([pv.join('\n') + '\nen Short 5\n'], 'views2.txt', { type: 'text/plain' }));
         add('the same list with a short row at the end is tidied the thorough way and imports', pq2.type === 'done' && pq2.dataset.rows === 3000, pq2.type === 'done' ? pq2.dataset.rows + ' rows' : pq2.message);
       }
+      {   // first letter and length of a text column straight from the stored bytes: the same answers as on strings (ASCII, accents, CJK, a 4-byte character, empty cells)
+        const ws = ['Zo\u00eb', '\u65e5\u672c\u8a9e', '\ud83d\ude00 smile', 'abc', '', '\u00e9clair', 'x'], dl = ['id,title'];
+        for (let i = 0; i < 400; i++) dl.push(i + ',' + ws[i % ws.length]);
+        const dr = await runImport(new File([dl.join('\n') + '\n'], 'derive-bytes.csv', { type: 'text/csv' }), false, { blockBytes: 1500 });
+        let ok = dr.type === 'done', det = dr.type === 'done' ? '' : dr.message;
+        if (ok) {
+          await openGrid(dr.dataset.name);
+          const d1 = await call({ type: 'derive', source: 'title', fn: 'first', name: 'f1' }), d2 = await call({ type: 'derive', source: 'title', fn: 'length', name: 'n1' });
+          const pg = await call({ type: 'page', start: 0, count: 400 });
+          for (let i = 0; i < 400 && ok; i++) { const t = ws[i % ws.length], row = pg.rows[i]; if (String(row[2]) !== t.charAt(0) || String(row[3]) !== String(t.length)) { ok = false; det = 'row ' + i + ': ' + JSON.stringify(row) + ' for ' + JSON.stringify(t); } }
+          if (d1.type === 'error' || d2.type === 'error') { ok = false; det = d1.message || d2.message; }
+        }
+        add('first letter and length come out the same from stored bytes as from strings', ok, det);
+      }
       const fwLines = ['id   name        score', '1    Ann Lee     10.5', '2    Bob         7', '3    Cy Young    8.25', '4    Di          9', '5    Ed Norton   6'].join('\n') + '\n';
       const fwg = await runImport(new File([fwLines], 'fw.txt', { type: 'text/plain' }));
       add('fixed-width text is guessed, and the Column widths box then shows the widths', fwg.type === 'done' && fwg.dataset.rows === 5 && !$('fwbox').hidden && $('delim').value === 'fixed' && $('fwidths').value === '5,12', fwg.type === 'done' ? fwg.dataset.rows + ' rows, widths ' + $('fwidths').value : fwg.message);
@@ -446,7 +460,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0501 (LFC-pack 0.14.8)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0510 (LFC-pack 0.14.8)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }

@@ -2449,8 +2449,8 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   const restK = []; for (let k = 0; k < n; k++) if (!kindOf[k] && !chunks.every((c) => c.cols[k].codes)) restK.push(k);
   let restBytes = 0; for (const k of restK) for (const c of chunks) { const x = c.cols[k]; if (x.bytes) restBytes += x.bytes.length; }
   // Turning the kept text into strings costs about 30 to 60 ns a cell and 100 bytes or more of memory a cell: for a very tall or very long text column (a 15M-row title list: 9 to 13 s of thread time, 2 GB) it
-  // also holds up the import itself, so past 5M rows or 160 MB of text the strings are not made ahead: a Save or a text sort reads that column from the saved file instead.
-  if (restK.length && rows <= 5000000 && restBytes <= 160 * 1048576) {
+  // also holds up the import itself, so past 5M rows or 160 MB of text the strings are not made ahead in Chromium and Safari: a Save, a text sort or a derive reads that column from the saved file instead (first letter and length straight from the bytes). Firefox builds them in the idle pack tail at no cost to the import (measured on the real file: skipping them there made the whole run 30% slower), so it keeps them.
+  if (restK.length && (isFirefox || (rows <= 5000000 && restBytes <= 160 * 1048576))) {
     view.liveRest = { names: restK.map((k) => headers[k]), L };
     if (EARLY_TEXT) textFromChunks(view);
   }   // variant: start now, while the pack threads finish the file
@@ -2720,6 +2720,25 @@ function mergeDicts(blocks, rows) {
   }
   return out;
 }
+const ASCII1 = Array.from({ length: 128 }, (_, i) => String.fromCharCode(i));
+// first code unit and length in UTF-16 units of the text at b[s..e), the same answers as String charAt(0) and length on the decoded text (valid UTF-8: a 4-byte character counts 2 units)
+function firstUnit(b, s, e, dec) { if (s >= e) return ''; const c = b[s]; return c < 128 ? ASCII1[c] : dec.decode(b.subarray(s, Math.min(e, s + 4))).charAt(0); }
+function unitLength(b, s, e) { let n = 0; for (let i = s; i < e; i++) { const c = b[i]; if ((c & 0xC0) !== 0x80) n += c >= 0xF0 ? 2 : 1; } return n; }
+async function deriveFromBytes(fn, name, total) {
+  const num = fn === 'length', out = num ? new Float64Array(total) : new Array(total), dec = new TextDecoder(), one = (b, s, e) => (num ? unitLength(b, s, e) : firstUnit(b, s, e, dec));
+  const data = new Uint8Array(await view.f.arrayBuffer()), v = view; let at = 0, k = 0;
+  for (const e of LfcPack.unpackColumns(data, { keys: [name], text: 'bytes' })) {
+    if (view !== v) throw new Error('The data changed.');
+    const x = e.cols[name], n = e.n;
+    if (x == null) { for (let i = 0; i < n; i++) out[at + i] = num ? NaN : ''; }
+    else if (Array.isArray(x)) { for (let i = 0; i < n; i++) { const t = x[i]; out[at + i] = typeof t === 'string' ? (num ? t.length : t.charAt(0)) : (num ? NaN : ''); } }
+    else if (x.kind === 'dict') { const lb = x.labels, nl = lb.start.length, lab = num ? new Float64Array(nl) : new Array(nl); for (let q = 0; q < nl; q++) lab[q] = one(lb.bytes, lb.start[q], lb.end[q]); const ids = x.ids; for (let i = 0; i < n; i++) out[at + i] = lab[ids[i]]; }
+    else { const b = x.bytes, st = x.start, en = x.end; for (let i = 0; i < n; i++) out[at + i] = one(b, st[i], en[i]); }
+    at += n; if (++k % 8 === 0) await yieldNow();
+  }
+  if (at !== total) throw new Error('Row count mismatch.');
+  return out;
+}
 async function deriveColumn(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
@@ -2727,7 +2746,10 @@ async function deriveColumn(m) {
     const t0 = performance.now(), src = view.columns.find((c) => c.name === m.source), name = String(m.name || '').trim();
     if (!src) throw new Error('Pick a column to work from.');
     if (!name || view.columns.some((c) => c.name === name)) throw new Error('Give the new column a name no other column has.');
-    const cols = await loadColumns([m.source], false, true), data = deriveMod.derive(cols[m.source], view.total, m.fn), isNum = ArrayBuffer.isView(data);
+    let data = null;
+    if ((m.fn === 'first' || m.fn === 'length') && src.type === 'string' && !view.live && view.f && view.flat && !view.cols.has(m.source) && !(view.dictCols && view.dictCols[m.source]) && view.f.size <= WHOLE_FILE_MAX && LfcPack.unpackColumns) { try { data = await deriveFromBytes(m.fn, m.source, view.total); } catch { data = null; } }   // first letter and length straight from the stored bytes: no string is built per cell (15M titles: 5.9 s of strings to about 2 s)
+    if (!data) { const cols = await loadColumns([m.source], false, true); data = deriveMod.derive(cols[m.source], view.total, m.fn); }
+    const isNum = ArrayBuffer.isView(data);
     let whole = isNum; if (isNum) for (let i = 0; i < data.length; i++) { const x = data[i]; if (x === x && x !== Math.floor(x)) { whole = false; break; } }
     const meta = { name, type: isNum ? (whole ? 'integer' : 'number') : 'string', nullable: true, derived: true, from: m.source, fn: m.fn };
     (view.derived ||= new Map()).set(name, data); view.cols.set(name, data); view.columns = view.columns.concat([meta]); view.cache && view.cache.clear();
