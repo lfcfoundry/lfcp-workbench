@@ -2822,10 +2822,9 @@ async function exportLfcp(m) {
               tc.set(c.name, col); }
             if (col) { const t = new Float64Array(n); if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) t[i] = col[ix[start + i]]; } else for (let i = 0; i < n; i++) t[i] = col[start + i]; out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: col.fmt }; continue; }
           }
-          if (ArrayBuffer.isView(src)) {   // a number column without empty cells goes to LFC-pack as a typed array (about 0.6 of the time of a plain array); with empty cells it stays an array with nulls (the NaN form packs 4-5 times slower)
-            const t = new Float64Array(n); let nan = false; if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) { const x = src[ix[start + i]]; t[i] = x; if (x !== x) nan = true; } } else for (let i = 0; i < n; i++) { const x = src[start + i]; t[i] = x; if (x !== x) nan = true; }
-            if (!nan) { out[c.name] = t; continue; }
-            for (let i = 0; i < n; i++) { const x = t[i]; a[i] = x !== x ? null : x; }
+          if (ArrayBuffer.isView(src)) {   // a number column goes to LFC-pack as a typed array, NaN for an empty cell (lfc-pack 0.14.4: 0.86 to 0.91x the time of a plain array with nulls in Chromium, Firefox and WebKitGTK, same bytes)
+            const t = new Float64Array(n); if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) t[i] = src[ix[start + i]]; } else for (let i = 0; i < n; i++) t[i] = src[start + i];
+            out[c.name] = t; continue;
           }
           else for (let i = 0; i < n; i++) a[i] = src[view.filtered ? view.indices[start + i] : start + i];
           out[c.name] = a;
