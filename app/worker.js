@@ -873,6 +873,7 @@ async function fixedWidthStage(m) {
   else {
     if (m.delimiter && m.delimiter !== 'auto' && !forced) return null;
     const ls = sample.split(/\r?\n/); ls.pop(); const probe = ls.filter((l) => l.trim()).slice(0, 12);
+    if (!forced) { await loadCore(); if (core.spaceDelimited(sample)) return null; }   // single-space separated fields with the same count on every line are a delimited file, not fixed-width
     if (probe.length < 5) { if (forced) throw new Error('Could not find fixed-width columns in this file. Type the column widths, such as 5,12,10,9.'); return null; }
     if (!forced) for (const d of [',', '\t', ';', '|']) { let tot = 0; for (const l of probe) { let q = false, k = 1; for (const c of l) { if (c === '"') q = !q; else if (c === d && !q) k++; } tot += k; } if (tot / probe.length >= 1.5) return null; }
     const g = guessWidths(ls); if (!g) { if (forced) throw new Error('Could not find fixed-width columns in this file. Type the column widths, such as 5,12,10,9.'); return null; } lay = layoutFromGuess(g); guessed = g.starts.slice(1).map((x, i) => x - (i ? g.starts[i] : 0)).join(',');
@@ -1984,7 +1985,7 @@ const columnsOk = (m) => !m.noColumns && typeof WebAssembly !== 'undefined' && (
 // o: delim (byte), comments (bool), backslash (bool), width (0 = take it from the first row)
 function makeNormalizer(o) {
   const D = o.delim, Q = 34, BS = 92, NL = 10, CR = 13;
-  const st = { comments: 0, headerPad: 0, padded: 0, truncated: 0, escapes: 0, blank: 0, rows: 0, maxFields: 0, width: o.width || 0 };
+  const st = { comments: 0, headerPad: 0, padded: 0, truncated: 0, escapes: 0, blank: 0, rows: 0, maxFields: 0, width: o.width || 0, quotedDelim: 0 };
   let fb = new Uint8Array(1 << 16), fn = 0, ob = new Uint8Array(1 << 20), on = 0, doneEnd = 0;
   let needQ = false, fields = 0, rowStart = true, inQ = false, justClosed = false, quoted = false, pendBS = false, bomChecked = false, sawCR = false, skipLine = false, firstRow = true, cutPos = -1;
   const growF = () => { const n = new Uint8Array(fb.length * 2); n.set(fb); fb = n; };
@@ -2031,14 +2032,15 @@ function makeNormalizer(o) {
       if (inQ) {
         if (o.backslash && c === BS) { pendBS = true; continue; }
         if (c === Q) { inQ = false; justClosed = true; continue; }
-        needQ = true; let j = i + 1; while (j < n && !spQ[b[j]]) j++; pushRun(b, i, j); i = j - 1; continue;
+        needQ = true; let j = i + 1; while (j < n && !spQ[b[j]]) j++; if (c === D) st.quotedDelim++; else for (let x = i + 1; x < j; x++) if (b[x] === D) { st.quotedDelim++; break; } pushRun(b, i, j); i = j - 1; continue;
       }
       if (justClosed) { if (c === Q) { inQ = true; justClosed = false; pushF(Q); continue; } justClosed = false; }
       if (c === NL || c === CR) { if (c === NL && sawCR) { sawCR = false; continue; } sawCR = c === CR; finishRow(); continue; }
       sawCR = false;
       if (rowStart) { rowStart = false; if (o.comments && c === 35) { st.comments++; skipLine = true; rowStart = true; continue; } }
       if (c === D) { emit(); continue; }
-      if (c === Q && fn === 0 && !quoted) { inQ = true; quoted = true; continue; }
+      if (c === Q && fn === 0 && !quoted && !o.noQuote) { inQ = true; quoted = true; continue; }
+      if (c === Q) { pushF(c); continue; }   // a quote in the middle of a field is plain text; pushF marks the field for quoting on output
       if (o.backslash && c === BS) { pendBS = true; continue; }
       { let j = i + 1; while (j < n && !spPlain[b[j]]) j++; pushRun(b, i, j); i = j - 1; }
     }
@@ -2058,9 +2060,10 @@ async function normalizeFile(file, delimiter) {
   const bs = /\\["\\,;\t|]/.test(text.slice(0, 4 << 20));
   let dch = delimiter && delimiter !== 'auto' ? delimiter : null;
   if (!dch) { await loadCore(); dch = core.detectDelimiter(comments ? text.split(/\r?\n/).filter((l) => l && l[0] !== '#').join('\n') : text); }
-  const D = dch.charCodeAt(0), dry = makeNormalizer({ delim: D, comments, backslash: bs }); dry.feed(sample.subarray(0, sample.length)); dry.end();
+  const D = dch.charCodeAt(0); let dry = makeNormalizer({ delim: D, comments, backslash: bs }); dry.feed(sample.subarray(0, sample.length)); dry.end();
+  let noQuote = false; if (D === 32 && dry.stats.quotedDelim === 0) { noQuote = true; dry = makeNormalizer({ delim: D, comments, backslash: bs, noQuote }); dry.feed(sample.subarray(0, sample.length)); dry.end(); }   // space-separated text (pageview lists): when no quoted field holds a space, a quote is just a character
   const ds = dry.stats; if (!ds.rows || (!comments && !bs && ds.rows >= 20 && ds.padded + ds.truncated > 0.3 * ds.rows)) return null;   // too irregular to be a tidy-able table: report the original error
-  const nz = makeNormalizer({ delim: D, comments, backslash: bs, width: ds.maxFields }), parts = []; let acc = [], accN = 0;
+  const nz = makeNormalizer({ delim: D, comments, backslash: bs, noQuote, width: ds.maxFields }), parts = []; let acc = [], accN = 0;
   const put = (b) => { if (!b) return; acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
   const rd = file.stream().getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; put(nz.feed(value)); }
   put(nz.end()); if (acc.length) parts.push(new Blob(acc));
