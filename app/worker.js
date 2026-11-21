@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.14.4/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.14.6/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -2811,22 +2811,22 @@ async function exportLfcp(m) {
     for (let start = 0; start < count; start += BATCH) {
       const end = Math.min(count, start + BATCH); let ts = performance.now();
       if (allWarm && LfcPack.packBlock) {   // every column is in memory: gather the batch column by column and pack it as columns (no row objects, no JSON text)
-        const out = {}, n = end - start;
+        const out = {}, n = end - start, fx = view.filtered ? view.indices.subarray(start, end) : null;   // the batch's row numbers are cut out once, not looked up per cell
         for (const c of cols) {
-          const src = view.cols.get(c.name), a = new Array(n);
+          const src = view.cols.get(c.name);
           if (!m.noTs && c.type === 'date' && Array.isArray(src)) {   // date text of a fixed width ('YYYY-MM-DD HH:MM:SS[.000000]') goes to packBlock as { kind: 'ts' } epoch seconds: parsed once for all rows (at the end of a live import from the kept bytes, otherwise here from the strings), the saved rows gathered as a typed copy
             const tc = view.tsCache || (view.tsCache = new Map()); let col = tc.get(c.name);
             if (col === undefined) { const t0p = performance.now(); col = new Float64Array(src.length); col.fmt = typeof src[0] === 'string' ? 'YYYY-MM-DD HH:MM:SS' + (src[0].length > 19 ? '.' + 'f'.repeat(src[0].length - 20) : '') : null; for (let r = 0; r < src.length; r++) { const v = src[r]; if (typeof v !== 'string' || v.length < 19 || v.charCodeAt(4) !== 45 || v.charCodeAt(10) !== 32 || v.length !== src[0].length || (v.length > 19 && !/^\.0+$/.test(v.slice(19)))) { col = null; break; }
                 const Y = (v.charCodeAt(0) - 48) * 1000 + (v.charCodeAt(1) - 48) * 100 + (v.charCodeAt(2) - 48) * 10 + v.charCodeAt(3) - 48, M = (v.charCodeAt(5) - 48) * 10 + v.charCodeAt(6) - 48, D = (v.charCodeAt(8) - 48) * 10 + v.charCodeAt(9) - 48, h = (v.charCodeAt(11) - 48) * 10 + v.charCodeAt(12) - 48, mi = (v.charCodeAt(14) - 48) * 10 + v.charCodeAt(15) - 48, se = (v.charCodeAt(17) - 48) * 10 + v.charCodeAt(18) - 48;
                 const yy = M <= 2 ? Y - 1 : Y, era = Math.floor(yy / 400), yoe = yy - era * 400, doy = Math.floor((153 * (M + (M > 2 ? -3 : 9)) + 2) / 5) + D - 1, doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy; col[r] = ((era * 146097 + doe - 719468) * 24 + h) * 3600 + mi * 60 + se; }
               tc.set(c.name, col); }
-            if (col) { const t = new Float64Array(n); if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) t[i] = col[ix[start + i]]; } else for (let i = 0; i < n; i++) t[i] = col[start + i]; out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: col.fmt }; continue; }
+            if (col) { const t = new Float64Array(n); if (fx) { for (let i = 0; i < n; i++) t[i] = col[fx[i]]; } else t.set(col.subarray(start, end)); out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: col.fmt }; continue; }
           }
-          if (ArrayBuffer.isView(src)) {   // a number column goes to LFC-pack as a typed array, NaN for an empty cell (lfc-pack 0.14.4: 0.86 to 0.91x the time of a plain array with nulls in Chromium, Firefox and WebKitGTK, same bytes)
-            const t = new Float64Array(n); if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) t[i] = src[ix[start + i]]; } else for (let i = 0; i < n; i++) t[i] = src[start + i];
+          if (ArrayBuffer.isView(src)) {   // a number column goes to LFC-pack as a typed array, NaN for an empty cell (lfc-pack 0.14.6: 0.86 to 0.91x the time of a plain array with nulls in Chromium, Firefox and WebKitGTK, same bytes)
+            const t = new Float64Array(n); if (fx) { for (let i = 0; i < n; i++) t[i] = src[fx[i]]; } else t.set(src.subarray(start, end));
             out[c.name] = t; continue;
           }
-          else for (let i = 0; i < n; i++) a[i] = src[view.filtered ? view.indices[start + i] : start + i];
+          const a = new Array(n); if (fx) { for (let i = 0; i < n; i++) a[i] = src[fx[i]]; } else for (let i = 0; i < n; i++) a[i] = src[start + i];
           out[c.name] = a;
         }
         tm.rows += performance.now() - ts; ts = performance.now();
