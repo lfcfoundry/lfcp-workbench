@@ -2722,7 +2722,7 @@ async function groupView(m) {
 // Decode every file column that is not decoded yet in two parallel calls (numbers as typed arrays, text as strings), so a filtered export reads its rows from memory instead of from 450 scattered blocks.
 // Decodes the wanted columns that are not in memory yet, all in one pass (two parallel calls: number columns as typed arrays, text columns as strings; a dictionary column kept from the import costs
 // one lookup per row and no decode). A column another call is already decoding is waited for, never decoded twice (a Save right after the background warm used to start the same decode again).
-const yieldNow = (() => { const mc = new MessageChannel(); let res = null; mc.port1.onmessage = () => { const r = res; res = null; if (r) r(); }; return () => new Promise((r) => { res = r; mc.port2.postMessage(0); }); })();   // a turn for queued messages without the timer delay
+const yieldNow = (() => { const mc = new MessageChannel(), waiting = []; mc.port1.onmessage = () => { const r = waiting.shift(); if (r) r(); }; return () => new Promise((r) => { waiting.push(r); mc.port2.postMessage(0); }); })();   // one queue slot per caller: two callers at once used to overwrite each other and the first never resumed (a Save or sort waiting on a kept column hung)   // a turn for queued messages without the timer delay
 const EARLY_TEXT = true;
 function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
