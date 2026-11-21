@@ -13,8 +13,12 @@ const safe = (s) => String(s || 'dataset').replace(/\.[^.]+$/, '').replace(/[^\w
 // Storage layer: OPFS when the browser has it, otherwise memory for this tab only (WebKitGTK 2.52.6 has no navigator.storage).
 let OPFS = false, STORAGE = 'memory, this tab only';
 const MEM = { files: new Map(), catalog: [] };
+// One catalog change at a time: read, change, write. (A Save that ends while an import is still storing its copy used to be able to read the list, then write it back after the import had added its own entry.)
+// also() runs beside the read (Save checks its footer there); fn returns the new list, or nothing to leave the list as it is.
+let catQ = Promise.resolve();
+const catEdit = (fn, also) => { const p = catQ.then(async () => { const [cat, x] = await Promise.all([store.catalog(), also ? also() : null]); const out = fn(cat, x); if (out) await store.setCatalog(out); return x; }); catQ = p.catch(() => {}); return p; };
 const opfsStore = {
-  async dir() { return (await navigator.storage.getDirectory()).getDirectoryHandle(DIR, { create: true }); },
+  dir() { return (this._dir ||= (async () => (await navigator.storage.getDirectory()).getDirectoryHandle(DIR, { create: true }))().catch((e) => { this._dir = null; throw e; })); },   // asked once: every storage call used to make these two browser calls again, each waiting its turn behind an import that is still writing
   async create(name) { const h = await (await this.dir()).getFileHandle(name, { create: true }); const w = await h.createWritable({ keepExistingData: false }); return { write: (p) => w.write(p), close: () => w.close(), abort: () => w.abort() }; },
   async file(name) { return (await (await this.dir()).getFileHandle(name)).getFile(); },
   async remove(name) { try { await (await this.dir()).removeEntry(name); } catch {} },
@@ -2425,7 +2429,7 @@ async function importOnce(m) {
     // Complete only after the footer is validated, then recorded in the catalog.
     const v = await validate(name, rows);
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
-    const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
+    await catEdit((cat) => { cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); return cat; });
     if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); const L0 = view.live; Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: isFlatFile(R2), live: null }); liveChunks = null; if (m.keepText !== false && !(self.navigator && self.navigator.deviceMemory && self.navigator.deviceMemory < 8) && L0 && L0.keepText) { try { view.liveT = L0.keepText(view); } catch { view.liveT = null; } } textFromChunks(view); } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
     if (NOQ && (t.stray || t.padN || t.truN)) { const bits = []; if (t.stray) bits.push('some cells held a quote mark inside plain text, so they were read as written'); if (t.padN) bits.push(t.padN + ' short row' + (t.padN === 1 ? ' was' : 's were') + ' filled with empty cells'); if (t.truN) bits.push(t.truN + ' row' + (t.truN === 1 ? ' had' : 's had') + ' more cells than the header, and the extra cells were left out'); send('notice', m.id, { text: bits[0].charAt(0).toUpperCase() + bits.join('; ').slice(1) + '.' }); }
     else if (t.stray && !m.normalized) send('notice', m.id, { text: 'Some cells held a quote mark inside plain text, so they were read as written.' });   // nothing is rewritten on this path: the notice says only what happened
@@ -2446,8 +2450,8 @@ async function importOnce(m) {
   return restart ? (restart === true ? 'mixed' : restart) : null;
 }
 
-async function validate(name, rows) {
-  const f = await store.file(name);
+async function validate(name, rows, f0) {
+  const f = f0 || await store.file(name);
   if (f.size < 8) return { ok: false, reason: 'file too small' };
   if (new TextDecoder().decode(new Uint8Array(await f.slice(f.size - 4).arrayBuffer())) !== 'LFC1') return { ok: false, reason: 'end marker missing' };
   await LfcPack.init({ readOnly: true });
@@ -2478,7 +2482,7 @@ async function remove(m) {
   try {
     if (!/^[\w.-]+\.json\.lfc$/.test(m.name)) throw new Error('Invalid dataset name.');
     await store.remove(m.name); keptDict.delete(m.name);
-    await store.setCatalog((await store.catalog()).filter((c) => c.name !== m.name));
+    await catEdit((cat) => cat.filter((c) => c.name !== m.name));
     send('deleted', m.id, { name: m.name });
   } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
 }
@@ -3073,7 +3077,7 @@ async function exportSummary(m) {
     const BATCH = 65536; for (let s = 0; s < n; s += BATCH) { const out = {}; for (const nm of names) out[nm] = cols[nm].slice(s, s + BATCH); const r = await LfcPack.packBlock(out, popts); await write(packer.pushPacked(r)); }
     await write(packer.finish()); await writable.close(); closed = true; writable = null;
     const vd = await validate(name, n); if (!vd.ok) throw new Error('The written file failed footer validation: ' + vd.reason);
-    const cat = await store.catalog(); cat.push({ name, source: 'summary of ' + view.name, rows: n, bytes: outBytes, columns: colMeta.map((c) => ({ name: c.name, type: c.type, nullable: true })), created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
+    await catEdit((cat) => { cat.push({ name, source: 'summary of ' + view.name, rows: n, bytes: outBytes, columns: colMeta.map((c) => ({ name: c.name, type: c.type, nullable: true })), created: Date.now(), storage: STORAGE }); return cat; });
     send('exportedLfcp', m.id, { name, rows: n, bytes: outBytes, blob: await store.file(name), ms: Math.round(performance.now() - t0) });
   } catch (err) {
     if (writable && !closed) { try { await writable.abort(); } catch {} } if (name) await store.remove(name);
@@ -3155,10 +3159,11 @@ async function exportLfcp(m) {
     }
     if (pool) { const ts = performance.now(); while (pending > 0 || results.size) { if (failed) throw failed; await drain(); if (pending > 0) await new Promise((r) => { wake = r; }); } tm.pack += performance.now() - ts; if (kept) { self.__keepBusy = false; if (self.__keepDrop) dropKeep(); else self.__keepT = setTimeout(dropKeep, 60000); } else pool.forEach((w) => w.terminate()); }
     await write(packer2.finish()); await writable.close(); closed = true; writable = null;
-    const v = await validate(name, count); if (!v.ok) throw new Error('The written file failed footer validation: ' + v.reason);
-    const cat = await store.catalog(), outCols = cols.map((c) => { const o = Object.assign({}, c); delete o.derived; delete o.from; delete o.fn; return o; });
-    cat.push({ name, source: 'view of ' + view.name, rows: count, bytes: outBytes, columns: outCols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
-    send('exportedLfcp', m.id, { name, rows: count, bytes: outBytes, blob: await store.file(name), ms: Math.round(performance.now() - t0), warmMs: Math.round(tWarm), rowsMs: Math.round(tm.rows), textMs: Math.round(tm.text), packMs: Math.round(tm.pack) });
+    const outCols = cols.map((c) => { const o = Object.assign({}, c); delete o.derived; delete o.from; delete o.fn; return o; }), srcName = view.name;
+    // the footer check, the catalog read and the file handle are asked for together (in Firefox each waits its turn behind an import that is still storing its copy)
+    const [v, blob] = await catEdit((cat, x) => { if (!x[0].ok) return null; cat.push({ name, source: 'view of ' + srcName, rows: count, bytes: outBytes, columns: outCols, created: Date.now(), storage: STORAGE }); return cat; }, async () => { const f = await store.file(name); return [await validate(name, count, f), f]; });   // one file handle serves the check and the reply
+    if (!v.ok) throw new Error('The written file failed footer validation: ' + v.reason);
+    send('exportedLfcp', m.id, { name, rows: count, bytes: outBytes, blob, ms: Math.round(performance.now() - t0), warmMs: Math.round(tWarm), rowsMs: Math.round(tm.rows), textMs: Math.round(tm.text), packMs: Math.round(tm.pack) });
   } catch (err) {
     if (self.__keepBusy) dropKeep(true);   // a failed Save: the kept threads may hold unfinished jobs, so they go
     if (writable && !closed) { try { await writable.abort(); } catch {} } if (name) await store.remove(name);
