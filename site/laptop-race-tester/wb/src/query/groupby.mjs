@@ -58,7 +58,8 @@ function fusedDense(cols, kc, rows, m, lo, R, aggs) {
   return { keys, counts, values };
 }
 export function groupBy(cols, n, rows, { key, aggs }) {
-  const kc = cols[key], m = rows ? rows.length : n, gid = new Uint32Array(m), names = [], map = new Map(), numKey = ArrayBuffer.isView(kc);
+  const kc = cols[key], m = rows ? rows.length : n, names = [], map = new Map(), numKey = ArrayBuffer.isView(kc);
+  let gid;   // one group number per row; made only when a path needs it (the fused numeric path does not)
   if (numKey) {   // whole-number keys in a small range (ids, years, codes): a table slot per value, no Map; groups numbered by first appearance as before
     let lo = Infinity, hi = -Infinity, ok = true;
     for (let i = 0; i < m; i++) { const k = kc[rows ? rows[i] : i]; if (k !== k) continue; if (k < lo) lo = k; if (k > hi) hi = k; if (k !== Math.floor(k)) { ok = false; break; } }
@@ -66,7 +67,7 @@ export function groupBy(cols, n, rows, { key, aggs }) {
       const R = lo === Infinity ? 1 : hi - lo + 1;
       const fused = fusedDense(cols, kc, rows, m, lo, R, aggs);   // count, sum and avg of up to two number columns in one pass over the rows
       if (fused) return fused;
-      const slot = new Int32Array(R + 1).fill(-1), counts0 = [];
+      gid = new Uint32Array(m); const slot = new Int32Array(R + 1).fill(-1), counts0 = [];
       for (let i = 0; i < m; i++) {
         const k = kc[rows ? rows[i] : i], s = k !== k ? R : k - lo; let g = slot[s];
         if (g < 0) { g = names.length; slot[s] = g; names.push(k !== k ? '' : String(k)); counts0.push(0); }
@@ -76,7 +77,7 @@ export function groupBy(cols, n, rows, { key, aggs }) {
       return { keys: names, counts, values: aggregate(cols, rows, m, gid, names.length, counts, aggs) };
     }
   }
-  let lastK, lastG = -1;
+  gid = new Uint32Array(m); let lastK, lastG = -1;
   for (let i = 0; i < m; i++) {
     const r = rows ? rows[i] : i, k = kc[r];
     if (k === lastK && lastG >= 0) { gid[i] = lastG; continue; }
@@ -124,43 +125,43 @@ export const DENSE_SLOTS = 1 << 18;
 function keyIds(kc, n, rows, ids, dict, cache, name) {
   if (ids) return { ids, labels: dict };
   const hit = cache && cache.get(name); if (hit) return hit;   // ids of a whole column from an earlier Summarize (valid for any row selection; labels no selected row uses become empty groups and are dropped)
-  const m = rows ? rows.length : n, out = new Uint32Array(n), map = new Map(), labels = [], num = ArrayBuffer.isView(kc);
+  const m = rows ? rows.length : n, out = new Uint32Array(rows ? m : n), map = new Map(), labels = [], num = ArrayBuffer.isView(kc);   // a filtered cold column: ids per selected row (slot i), not per table row, so a small selection does not allocate the whole column
   let lastK, lastG = -1;
   for (let i = 0; i < m; i++) {
     const r = rows ? rows[i] : i, k = kc[r];
-    if (k === lastK && lastG >= 0) { out[r] = lastG; continue; }
+    if (k === lastK && lastG >= 0) { out[rows ? i : r] = lastG; continue; }
     let g = map.get(k);
     if (g === undefined) { g = labels.length; map.set(k, g); labels.push(num ? (k !== k ? '' : String(k)) : k); }
-    out[r] = lastG = g; lastK = k;
+    out[rows ? i : r] = lastG = g; lastK = k;
   }
-  const res = { ids: out, labels }; if (cache && !rows) { if (cache.size >= 6) cache.delete(cache.keys().next().value); cache.set(name, res); }   // at most 6 columns kept (4 bytes a row each)
+  const res = { ids: out, labels, sel: !!rows }; if (cache && !rows) { if (cache.size >= 6) cache.delete(cache.keys().next().value); cache.set(name, res); }   // at most 6 columns kept (4 bytes a row each)
   return res;
 }
 export function groupBy2(cols, n, rows, { key, key2, aggs, ids1, dict1, ids2, dict2, forceMap, codeCols, cache }) {
   const m = rows ? rows.length : n, A = keyIds(cols[key], n, rows, ids1, dict1, cache, key), B = keyIds(cols[key2], n, rows, ids2, dict2, cache, key2), G2 = B.labels.length || 1, slots = A.labels.length * G2;
-  const dense = !forceMap && slots <= DENSE_SLOTS, gid = new Uint32Array(m), a = A.ids, b = B.ids;
+  const dense = !forceMap && slots <= DENSE_SLOTS, gid = new Uint32Array(m), a = A.ids, b = B.ids, sa = !!A.sel, sb = !!B.sel;   // sel: the ids are per selected row (slot i), otherwise per table row (slot r)
   let G, firstA, firstB;
   if (dense) {
     G = slots;
-    if (rows) for (let i = 0; i < m; i++) { const r = rows[i]; gid[i] = a[r] * G2 + b[r]; } else for (let i = 0; i < m; i++) gid[i] = a[i] * G2 + b[i];
+    if (rows) for (let i = 0; i < m; i++) { const r = rows[i]; gid[i] = a[sa ? i : r] * G2 + b[sb ? i : r]; } else for (let i = 0; i < m; i++) gid[i] = a[i] * G2 + b[i];
   } else {
     firstA = []; firstB = []; let lastC = -1, lastG = -1;
     if (slots <= 2147483647) {   // open addressing on the packed key (power-of-two table at most half full, linear probing, multiplicative hash): no Map, no boxing
       let cap = 1024; const need = Math.min(m, slots) * 2; while (cap < need) cap <<= 1;
       const sh = 32 - Math.log2(cap), tk = new Int32Array(cap).fill(-1), tg = new Int32Array(cap), mask = cap - 1;
       for (let i = 0; i < m; i++) {
-        const r = rows ? rows[i] : i, c = a[r] * G2 + b[r];
+        const r = rows ? rows[i] : i, ia = sa ? i : r, ib = sb ? i : r, c = a[ia] * G2 + b[ib];
         if (c === lastC) { gid[i] = lastG; continue; }
         let h = Math.imul(c, -1640531535) >>> sh, g;
-        for (;;) { const k = tk[h]; if (k === c) { g = tg[h]; break; } if (k === -1) { g = firstA.length; tk[h] = c; tg[h] = g; firstA.push(a[r]); firstB.push(b[r]); break; } h = (h + 1) & mask; }
+        for (;;) { const k = tk[h]; if (k === c) { g = tg[h]; break; } if (k === -1) { g = firstA.length; tk[h] = c; tg[h] = g; firstA.push(a[ia]); firstB.push(b[ib]); break; } h = (h + 1) & mask; }
         gid[i] = lastG = g; lastC = c;
       }
     } else {
       const map = new Map();
       for (let i = 0; i < m; i++) {
-        const r = rows ? rows[i] : i, c = a[r] * G2 + b[r];
+        const r = rows ? rows[i] : i, ia = sa ? i : r, ib = sb ? i : r, c = a[ia] * G2 + b[ib];
         if (c === lastC) { gid[i] = lastG; continue; }
-        let g = map.get(c); if (g === undefined) { g = firstA.length; map.set(c, g); firstA.push(a[r]); firstB.push(b[r]); }
+        let g = map.get(c); if (g === undefined) { g = firstA.length; map.set(c, g); firstA.push(a[ia]); firstB.push(b[ib]); }
         gid[i] = lastG = g; lastC = c;
       }
     }
