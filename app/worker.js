@@ -547,11 +547,12 @@ async function segJob(m) {
 
 // Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
-async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict) {
+async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict, nh) {
+  nh = Math.max(2, Math.min(8, nh | 0 || 2));   // parse helpers: 2 by default; the page option parseHelpers tries more on machines with spare cores
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
-  try { for (let i = 0; i < 2; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; }
+  try { for (let i = 0; i < nh; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; }
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   for (const h of helpers) {
     h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); p.res(d.r); } } };
@@ -580,7 +581,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
     const wait = () => new Promise((r) => waiters.add(r));
     const run = async (h) => {
       while (!quit && nextD < total) {
-        if (nextD >= nextP + SEG_WINDOW) { await wait(); continue; }
+        if (nextD >= nextP + SEG_WINDOW + nh - 2) { await wait(); continue; }
         const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
         done.set(k, await rpc(h, { file, delimiter, headers, plan, dict, cols, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
         signal();
@@ -2179,7 +2180,7 @@ async function importOnce(m) {
     }
     let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
     let res = null;
-    if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
+    if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null, m.parseHelpers);
     if (!res && !m.ndjson && !m.parquet) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
         if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer, col, (p) => { plan = p; }, m.exact); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
