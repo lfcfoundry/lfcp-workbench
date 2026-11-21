@@ -277,6 +277,14 @@
         add('space-separated rows with quote marks in the titles import every row', pq.type === 'done' && pq.dataset.rows === 3000 - 1, pq.type === 'done' ? pq.dataset.rows + ' rows' : pq.message);
         const pq2 = await runImport(new File([pv.join('\n') + '\nen Short 5\n'], 'views2.txt', { type: 'text/plain' }));
         add('the same list with a short row at the end is tidied the thorough way and imports', pq2.type === 'done' && pq2.dataset.rows === 3000, pq2.type === 'done' ? pq2.dataset.rows + ' rows' : pq2.message);
+        {   // a big list is read as it is (a quote mark is an ordinary character, a short row is filled, a blank line is skipped), with no tidy pass: forced here with small pieces
+          const sv = ['project title views bytes']; for (let i = 0; i < 4000; i++) sv.push('en ' + (i % 40 === 0 ? '"Foo_' + i : i % 55 === 0 ? 'Bar_' + i + '"' : 'Page_' + i) + ' ' + (i % 900) + ' ' + (i % 7));
+          sv.splice(2000, 0, 'en Short', '');
+          const sr = await runImport(new File([sv.join('\n') + '\n'], 'views3.txt', { type: 'text/plain' }), false, { segBytes: 65536 });
+          let sok = sr.type === 'done' && sr.dataset.rows === 4001, sdet = sr.type === 'done' ? sr.dataset.rows + ' rows' : sr.message;
+          if (sok) { await openGrid(sr.dataset.name); const pg = await call({ type: 'page', start: 0, count: 4001 }); const r0 = pg.rows[0], rs = pg.rows[1999], re = pg.rows[4000]; sok = r0[1] === '"Foo_0' && rs[1] === 'Short' && String(re[1]) === 'Page_3999' && pg.rows.some((r) => r[1] === 'Bar_55"'); if (!sok) sdet = JSON.stringify([r0, rs, re]); }
+          add('a big space-separated list with plain quote marks, a short row and a blank line is read as it is', sok, sdet);
+        }
       }
       {   // first letter and length of a text column straight from the stored bytes: the same answers as on strings (ASCII, accents, CJK, a 4-byte character, empty cells)
         const ws = ['Zo\u00eb', '\u65e5\u672c\u8a9e', '\ud83d\ude00 smile', 'abc', '', '\u00e9clair', 'x'], dl = ['id,title'];
@@ -460,7 +468,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0716 (LFC-pack 0.14.10)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0735 (LFC-pack 0.14.10)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
