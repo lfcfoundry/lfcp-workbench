@@ -501,7 +501,7 @@ async function parseSegment(m) {
   else if (m.headers && m.s < size && (start = pickStart(new Uint8Array(await file.slice(m.s, Math.min(size, m.s + 262144)).arrayBuffer()), m.headers.length, m.delimiter.charCodeAt(0))) >= 0) start += m.s;
   else { start = size; for (let o = m.s; o < size; o += 65536) { const b = new Uint8Array(await file.slice(o, Math.min(size, o + 65536)).arrayBuffer()); const k = b.indexOf(10); if (k >= 0) { start = o + k + 1; break; } } }
   const limit = Math.max(m.e, start), headers = m.headers, plan = m.plan;
-  const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
+  const trackers = m.trackers || (headers ? headers.map((_, c) => { const x = new TypeTracker(), sd = m.noSample && m.seed && m.seed.length === headers.length ? m.seed[c] : 15; if (!(sd & 1)) x.int = false; if (!(sd & 2)) x.num = false; if (!(sd & 4)) x.bool = false; if (!(sd & 8)) x.date = false; return x; }) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
   let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
   const colMode = !!(m.cols && headers && !m.headerOnly), chunks = [];
   const dictOn = headers ? headers.map(() => false) : null;   // which columns are in dictionary shape right now
@@ -523,6 +523,7 @@ async function parseSegment(m) {
   const dec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: !m.headerOnly && start > 0 });
   const ready = () => cleanState(parser) && (!m.headerOnly || header);
   const DD = m.delimiter ? m.delimiter.charCodeAt(0) : 0, strayOn = !m.headerOnly && !!headers && DD !== 32 && DD !== 34 && m.stray !== false; let strayN = 0;   // not for space-separated lists: the tidy pass has its own quote rules for those
+  const needSample = m.noSample ? 0 : 20;   // the sample rows come from the first piece; a later piece only reads its first rows the slow way when the first piece may hold fewer than 20
   const carryOn = !m.headerOnly && !!headers && !!F && m.carry !== false; let carry = null;
   let at = start, end = size, finished = false, pre = at < size ? file.slice(at, Math.min(size, at + SL)).arrayBuffer() : null;
   while (at < size && !finished) {
@@ -532,7 +533,7 @@ async function parseSegment(m) {
     if (carry) { const nb = new Uint8Array(carry.length + b.length); nb.set(carry); nb.set(b, carry.length); b = nb; base = at - carry.length; carry = null; }
     let i = 0; const from = Math.max(0, limit - base);
     while (i < b.length) {
-      if (F && !F.off && sample.length >= 20 && cleanState(parser)) { drain(); const io = { buf, pos }; i = F.run(b, i, from, parser, io); buf = io.buf; pos = io.pos; if (i >= b.length) break; }
+      if (F && !F.off && sample.length >= needSample && cleanState(parser)) { drain(); const io = { buf, pos }; i = F.run(b, i, from, parser, io); buf = io.buf; pos = io.pos; if (i >= b.length) break; }
       const k1 = F && !F.off ? b.indexOf(10, i) : -1;   // one line by the character parser, then the byte path may take over again
       if (k1 >= 0 && k1 < from) { const fx = strayOn && cleanState(parser) ? strayFix(b, i, k1, DD) : null; if (fx) strayN++; parser.feed(dec.decode(fx || b.subarray(i, k1 + 1), { stream: true }), false); i = k1 + 1; if (survey && slow.changed) { slow.changed = false; F = makeColW(headers, slow.plan, trackers, m.delimiter, () => {}, m.dict, dictOn); } continue; }
       const k = from < b.length ? b.indexOf(10, Math.max(from, i)) : -1;
@@ -613,6 +614,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
     const cols = !!col; t.cols = cols; t.ncols = headers.length;
     const agg = headers.map(() => new TypeTracker());
     let rows = 0, expect = hdrEnd, lineBase = hdr.lines + 1; const sample = [];
+    const noSample = (t.headRows || 0) >= 20 && SEGB >= 8388608 && !survey;   // the first piece (8 MiB) holds the first 4 MB, whose 20 or more whole rows fill the sample
     let nextD = 0, nextP = 0, quit = false; const done = new Map(), waiters = new Set();
     const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } };
     const wait = () => new Promise((r) => waiters.add(r));
@@ -620,7 +622,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       while (!quit && nextD < total) {
         if (nextD >= nextP + SEG_WINDOW + nh - 2) { await wait(); continue; }
         const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
-        done.set(k, await rpc(h, { file, delimiter, headers, plan, dict, cols, survey, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
+        done.set(k, await rpc(h, { file, delimiter, headers, plan, dict, cols, survey, noSample: k > 0 && noSample, seed: k > 0 && noSample ? t.seed : null, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
         signal();
       }
     };
@@ -631,10 +633,10 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       let r = done.get(k); done.delete(k); nextP = k + 1; signal(); stop(job);
       if (r.error || r.startPos !== expect) {   // a guessed start sat inside quotes: parse this piece again from the verified spot
         t.redos = (t.redos || 0) + 1;
-        r = await rpc(redoOn(k), { file, delimiter, headers, plan, dict, cols, survey, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
+        r = await rpc(redoOn(k), { file, delimiter, headers, plan, dict, cols, survey, noSample: k > 0 && noSample, seed: k > 0 && noSample ? t.seed : null, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
         stop(job);
         // from a verified start: the file really has a text-like cell in a number column. A wide live table turns that column to text in place and reads the piece again; any other import starts over.
-        for (let g = 0; r.mixed && g < headers.length && col && col.demote && await col.demote(r.col); g++) { t.demotes = (t.demotes || 0) + 1; r = await rpc(redoOn(k), { file, delimiter, headers, plan, dict, cols, survey, dup: !!col.dup, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) })); stop(job); }
+        for (let g = 0; r.mixed && g < headers.length && col && col.demote && await col.demote(r.col); g++) { t.demotes = (t.demotes || 0) + 1; r = await rpc(redoOn(k), { file, delimiter, headers, plan, dict, cols, survey, noSample: k > 0 && noSample, seed: k > 0 && noSample ? t.seed : null, dup: !!col.dup, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) })); stop(job); }
         if (r.mixed) throw mixedErr(r.col);
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
@@ -659,7 +661,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
 // Which columns are stored as numbers: those whose first 2,000 rows (from the first MB) are all plain whole numbers or empty, with at least one number.
 // Decided once from the sample so every piece and helper agrees; a later value that is not a plain whole number stays text in its cell.
 async function samplePlan(file, delimiter) {
-  samplePlan.dict = null; samplePlan.num = null;
+  samplePlan.dict = null; samplePlan.num = null; samplePlan.headRows = 0; samplePlan.seed = null;
   try {
     await loadCore(); const { DelimitedParser, TypeTracker } = core;
     const hb = new Uint8Array(await file.slice(0, 4194304).arrayBuffer()), DS = delimiter.charCodeAt(0); let text = new TextDecoder().decode(hb); let cutAll = file.size <= 4194304, lenient = false;
@@ -674,6 +676,10 @@ async function samplePlan(file, delimiter) {
     if (rows.length < 2) return null;
     const cols = rows[0].length, tr = Array.from({ length: cols }, () => new TypeTracker());
     for (let r = 1; r < rows.length; r++) { if (rows[r].length !== cols) return null; for (let c = 0; c < cols; c++) tr[c].add(rows[r][c]); }
+    samplePlan.headRows = rows.length - 1;   // whole rows in the first 4 MB
+    // What those rows already rule out for each column (bit 1 whole number, 2 number, 4 true/false, 8 date). A later piece starts its type tally from this instead of learning it again from its own first
+    // rows, one slow line at a time. The answer cannot change: the tally of the whole file includes these rows.
+    samplePlan.seed = tr.map((x) => (x.int ? 1 : 0) | (x.num ? 2 : 0) | (x.bool ? 4 : 0) | (x.date ? 8 : 0));
     // Five 256 KB slices from later in the file feed the type tally and the decimal-digit check, so a column whose digits or number-ness change after the first MB is planned as text up front (saves the restart).
     const extra = [];
     if (file.size > 8 * 1048576) for (const frac of [0.2, 0.4, 0.6, 0.8, 0.97]) {
@@ -2320,7 +2326,7 @@ async function importOnce(m) {
       };
       var packWorkersToStop = ws;
     }
-    let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
+    let plan = m.untyped ? null : await samplePlan(file, delimiter); t.headRows = m.untyped ? 0 : samplePlan.headRows || 0; t.seed = m.untyped ? null : samplePlan.seed; if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
     let res = null;
     if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null, m.parseHelpers);
     if (res && col && col.release) col.release();   // chunks held back after a column turned to text: pack them now
