@@ -60,7 +60,7 @@ export function placeColumns(X, headers, plan, delimiter, opts = {}) {
       new Uint8Array(mem(), IN, bytes.length).set(bytes); X.reset_text(); for (let c = 0; c < n; c++) if (pls[c].on) X.dict_reset(c);
       const used = X.build(IN, bytes.length, capRows), rows = X.rows(), b = X.bail(), cols = {}, g = this.grab(rows);
       for (let c = 0; c < n; c++) cols[headers[c]] = g[c];
-      return { n: rows, used, bail: b === 2 ? 'mixed' : b === 1 ? 'line' : b === 4 ? 'dict' : null, bailcol: b === 4 ? X.bailcol() : -1, cols, arr: g };
+      return { n: rows, used, stray: X.stray ? X.stray() : 0, bail: b === 2 ? 'mixed' : b === 1 ? 'line' : b === 4 ? 'dict' : null, bailcol: b === 4 ? X.bailcol() : -1, cols, arr: g };
     },
     undict(c) { const pl = pls[c]; if (pl.on) { pl.on = false; X.set_dict(c, 0); X.set_out(c, pl.a, pl.b, pl.t); } },   // this column is text from now on (more than 4096 distinct values in a chunk)
     isDict(c) { return !!pls[c].on; },
