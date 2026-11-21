@@ -271,6 +271,13 @@
       }
       const short1 = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'short.csv', { type: 'text/csv' }));
       add('a file with one short row is tidied and imported', short1.type === 'done' && short1.dataset.rows === 2, short1.type === 'done' ? short1.dataset.rows + ' rows' : short1.message);
+      {   // space-separated pageview lists: quotes are ordinary characters (balanced, stray, and a short row far down that sends the quick tidy to the thorough one)
+        const pv = []; for (let i = 0; i < 3000; i++) pv.push('en ' + (i % 50 === 0 ? '"Foo_' + i + '"_Bar' : i % 70 === 0 ? '"Stray_' + i : 'Page_' + i) + ' ' + (i % 900) + ' ' + (i % 7));
+        const pq = await runImport(new File([pv.join('\n') + '\n'], 'views.txt', { type: 'text/plain' }));
+        add('space-separated rows with quote marks in the titles import every row', pq.type === 'done' && pq.dataset.rows === 3000 - 1, pq.type === 'done' ? pq.dataset.rows + ' rows' : pq.message);
+        const pq2 = await runImport(new File([pv.join('\n') + '\nen Short 5\n'], 'views2.txt', { type: 'text/plain' }));
+        add('the same list with a short row at the end is tidied the thorough way and imports', pq2.type === 'done' && pq2.dataset.rows === 3000, pq2.type === 'done' ? pq2.dataset.rows + ' rows' : pq2.message);
+      }
       const fwLines = ['id   name        score', '1    Ann Lee     10.5', '2    Bob         7', '3    Cy Young    8.25', '4    Di          9', '5    Ed Norton   6'].join('\n') + '\n';
       const fwg = await runImport(new File([fwLines], 'fw.txt', { type: 'text/plain' }));
       add('fixed-width text is guessed, and the Column widths box then shows the widths', fwg.type === 'done' && fwg.dataset.rows === 5 && !$('fwbox').hidden && $('delim').value === 'fixed' && $('fwidths').value === '5,12', fwg.type === 'done' ? fwg.dataset.rows + ' rows, widths ' + $('fwidths').value : fwg.message);
@@ -439,7 +446,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0003 (LFC-pack 0.14.6)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0132 (LFC-pack 0.14.6)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }

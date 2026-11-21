@@ -1980,10 +1980,11 @@ async function importFile0(m) {
   const demote = new Set(); let mm = m;
   for (let tries = 0; tries < 4; tries++) {
     const r = await importOnce(mm); if (!r) return; if (r.enc) return r;
-    if (r === 'normalize') {   // tidy the file once, then import it the normal way; if it cannot be tidied the first error is reported
-      let nz = null; try { nz = await normalizeFile(m.file, m.delimiter); } catch { nz = null; }
+    if (r === 'normalize' || r === 'normalize2') {   // tidy the file once, then import it the normal way; if it cannot be tidied the first error is reported
+      if (r === 'normalize2') m = Object.assign({}, m, { slowNorm: true, file: m.origFile, fastNorm: false, normalized: false });
+      let nz = null; try { nz = await normalizeFile(m.file, m.delimiter, m.slowNorm); } catch { nz = null; }
       if (!nz) { send('error', m.id, { message: mm.firstError, line: mm.firstLine }); return; }
-      send('notice', m.id, { text: nz.text }); m = Object.assign({}, m, { file: nz.file, delimiter: nz.delimiter, normalized: true }); mm = Object.assign({}, m, { demote: [...demote] }); tries--; continue;
+      send('notice', m.id, { text: nz.text }); m = Object.assign({}, m, { origFile: m.file, file: nz.file, delimiter: nz.delimiter, normalized: true, fastNorm: !!nz.fast }); mm = Object.assign({}, m, { demote: [...demote] }); tries--; continue;
     }
     if (r === 'mixed' || tries === 3) break;
     demote.add(r.col); mm = Object.assign({}, m, { demote: [...demote] });
@@ -2066,15 +2067,57 @@ function makeNormalizer(o) {
   return { feed, end: () => take(true), stats: st };
 }
 const NORMALIZE_ERR = /^(Line \d+: )?(Row has \d+ fields|Unexpected text after a closing quote|A quote may only start|The header has more)/;
-async function normalizeFile(file, delimiter) {
+// Space-separated lists where a quote mark is only a character (pageview dumps): rows without a quote pass through as slices of the original file; only rows with a quote are rewritten (the field is quoted, its quotes doubled).
+async function quoteRewrite(file, D) {
+  const parts = []; let ob = new Uint8Array(1 << 20), op = 0, got = 0, pending = null;
+  const flushOb = () => { if (op) { parts.push(ob.slice(0, op)); op = 0; } };
+  const ensure = (n) => { if (op + n > ob.length) { flushOb(); if (n > ob.length) ob = new Uint8Array(n * 2); } };
+  const fix = (b, ls, le, nl) => {   // one line, b[ls..le) without its newline
+    ensure((le - ls) * 2 + 8); const e2 = le > ls && b[le - 1] === 13 ? le - 1 : le; let fs = ls;
+    for (let j = ls; j <= e2; j++) {
+      if (j === e2 || b[j] === D) {
+        let q = false; for (let x = fs; x < j; x++) if (b[x] === 34) { q = true; break; }
+        if (q) { ob[op++] = 34; for (let x = fs; x < j; x++) { const c = b[x]; ob[op++] = c; if (c === 34) ob[op++] = 34; } ob[op++] = 34; } else { ob.set(b.subarray(fs, j), op); op += j - fs; }
+        if (j < e2) ob[op++] = D; fs = j + 1;
+      }
+    }
+    if (e2 < le) ob[op++] = 13; if (nl) ob[op++] = 10;
+  };
+  const run = (b, a, z, base) => { const n = z - a; if (n >= 262144) { flushOb(); parts.push(file.slice(base + a, base + z)); } else if (n > 0) { ensure(n); ob.set(b.subarray(a, z), op); op += n; } };
+  const region = (b, cut, base, last) => {
+    let rs = 0, pos = 0;
+    for (;;) {
+      const p = pos < cut ? b.indexOf(34, pos) : -1; if (p < 0 || p >= cut) break;
+      const ls = p === 0 ? 0 : b.lastIndexOf(10, p - 1) + 1; let le = b.indexOf(10, p); if (le < 0 || le >= cut) le = cut - (last ? 0 : 1);
+      run(b, rs, ls, base); fix(b, ls, le, !last || le < cut); rs = Math.min(le + 1, cut); pos = rs;
+    }
+    run(b, rs, cut, base);
+  };
+  const rd = file.stream().getReader();
+  for (;;) {
+    const { done, value } = await rd.read(); if (done) break;
+    let b = value; if (pending) { b = new Uint8Array(pending.length + value.length); b.set(pending, 0); b.set(value, pending.length); }
+    got += value.length; const base = got - b.length, cut = b.lastIndexOf(10) + 1;
+    if (cut === 0) { pending = b; continue; }
+    region(b, cut, base, false); pending = cut < b.length ? b.slice(cut) : null;
+  }
+  if (pending) region(pending, pending.length, got - pending.length, true);
+  flushOb(); return parts;
+}
+async function normalizeFile(file, delimiter, slow) {
   const sample = new Uint8Array(await file.slice(0, 4 << 20).arrayBuffer()); let s0 = 0; if (sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF) s0 = 3;
   const comments = sample[s0] === 35, text = new TextDecoder().decode(sample);
   const bs = /\\["\\,;\t|]/.test(text.slice(0, 4 << 20));
   let dch = delimiter && delimiter !== 'auto' ? delimiter : null;
   if (!dch) { await loadCore(); dch = core.detectDelimiter(comments ? text.split(/\r?\n/).filter((l) => l && l[0] !== '#').join('\n') : text); }
   const D = dch.charCodeAt(0); let dry = makeNormalizer({ delim: D, comments, backslash: bs }); dry.feed(sample.subarray(0, sample.length)); dry.end();
-  let noQuote = false; if (D === 32 && dry.stats.quotedDelim === 0) { noQuote = true; dry = makeNormalizer({ delim: D, comments, backslash: bs, noQuote }); dry.feed(sample.subarray(0, sample.length)); dry.end(); }   // space-separated text (pageview lists): when no quoted field holds a space, a quote is just a character
+  const wfQuoted = D === 32 && /(?:^|\x20)"[^"\n]*\x20[^"\n]*"(?=\x20|\r?$)/m.test(text);   // a quoted field that holds a space and closes on its own line; a stray opening quote ("Foo ...) is not one
+  let noQuote = false; if (D === 32 && (dry.stats.quotedDelim === 0 || !wfQuoted)) { noQuote = true; dry = makeNormalizer({ delim: D, comments, backslash: bs, noQuote }); dry.feed(sample.subarray(0, sample.length)); dry.end(); }   // space-separated text (pageview lists): when no quoted field holds a space, a quote is just a character
   const ds = dry.stats; if (!ds.rows || (!comments && !bs && ds.rows >= 20 && ds.padded + ds.truncated > 0.3 * ds.rows)) return null;   // too irregular to be a tidy-able table: report the original error
+  if (noQuote && !slow && !comments && !bs && ds.padded <= (sample.length >= (4 << 20) ? 1 : 0) && !ds.truncated && !ds.blank && !ds.escapes && !ds.headerPad) {
+    const fp = await quoteRewrite(file, D);
+    return { file: new File(fp, String(file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), delimiter: dch, text: 'This file had irregular rows, so it was tidied first: blank lines removed.', fast: true };
+  }
   const nz = makeNormalizer({ delim: D, comments, backslash: bs, noQuote, width: ds.maxFields }), parts = []; let acc = [], accN = 0;
   const put = (b) => { if (!b) return; acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
   const rd = file.stream().getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; put(nz.feed(value)); }
@@ -2232,6 +2275,7 @@ async function importOnce(m) {
     if (err && err.pqExact != null && m.parquet) restart = { pqExact: err.pqExact };   // an INT64 column holds a value beyond 2^53: read that column as exact digit text and start again
     else if (err && err.mixed && !m.noColumns) restart = err.col != null && err.col >= 0 ? { col: err.col } : true;
     else if (!m.reencoded && !m.ndjson && /TextDecoder/.test(String(err && err.message)) && /not valid|decoding failed/i.test(String(err && err.message))) restart = { enc: true };   // a Windows-1252 byte past the sampled start: read the file again as Windows-1252 (valid UTF-8 files never pay for a whole-file check)
+    else if (m.normalized && m.fastNorm && !m.strict && NORMALIZE_ERR.test(String(err && err.message || ''))) restart = 'normalize2';   // the quick tidy missed a later irregular row: tidy the original the thorough way
     else if (!m.normalized && !m.strict && !m.ndjson && NORMALIZE_ERR.test(String(err && err.message || ''))) { restart = 'normalize'; m.firstError = String(err.message); m.firstLine = err.line || null; }
     else send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
   } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => { if (!(self.__keep && self.__keep.includes(w))) w.terminate(); }); jobs.delete(m.id); }
