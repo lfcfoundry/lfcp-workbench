@@ -2393,7 +2393,6 @@ function makeInterner() {
     },
   };
 }
-const TXT_SLICE = 16384;
 async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
   const n = headers.length, starts = new Uint32Array(chunks.length + 1); for (let i = 0; i < chunks.length; i++) starts[i + 1] = starts[i] + chunks[i].n;
@@ -2409,14 +2408,10 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
         yield;   // between chunks: the caller may let queued messages run
         const x = ch.cols[k];
         if (x.codes) { const lb = x.lb, labs = new Array(lb.start.length); for (let q = 0; q < labs.length; q++) labs[q] = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); for (let r = 0; r < ch.n; r++) out[at++] = labs[x.codes[r]]; continue; }   // dictionary chunk: the distinct values decoded once, one lookup per row
-        let ascii = null;
-        for (let r0 = 0; r0 < ch.n; r0 += TXT_SLICE) {   // slices of 16,384 cells: the importer's pack results and file writes get the thread between slices
-          const r1 = Math.min(ch.n, r0 + TXT_SLICE); if (r0) yield;
-          if (I && I.on) { I.chunk(out, at, x.bytes, x.start.subarray(r0, r1), x.end.subarray(r0, r1), r1 - r0, mk); at += r1 - r0; if (!I.on) I = null; continue; }   // equal cells share one string
-          if (ascii === null) { const b = x.bytes; ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; } }
-          if (ascii && x.end[r1 - 1] >= x.start[r0]) { const lo = x.start[r0], sub = latin.decode(x.bytes.subarray(lo, x.end[r1 - 1])); for (let r = r0; r < r1; r++) out[at++] = sub.substring(x.start[r] - lo, x.end[r] - lo); }   // plain ASCII chunk: one decode per slice, then substrings
-          else { const b = x.bytes; for (let r = r0; r < r1; r++) out[at++] = dec.decode(b.subarray(x.start[r], x.end[r])); }
-        }
+        if (I && I.on) { I.chunk(out, at, x.bytes, x.start, x.end, ch.n, mk); at += ch.n; if (!I.on) I = null; continue; }   // equal cells share one string
+        const b = x.bytes; let ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; }
+        if (ascii) { const s = latin.decode(b); for (let r = 0; r < ch.n; r++) out[at++] = s.substring(x.start[r], x.end[r]); }   // plain ASCII chunk: one decode, then slices
+        else for (let r = 0; r < ch.n; r++) out[at++] = dec.decode(b.subarray(x.start[r], x.end[r]));
       }
       return out;
     },
@@ -2747,7 +2742,7 @@ async function deriveColumn(m) {
     if (!src) throw new Error('Pick a column to work from.');
     if (!name || view.columns.some((c) => c.name === name)) throw new Error('Give the new column a name no other column has.');
     let data = null;
-    if ((m.fn === 'first' || m.fn === 'length') && src.type === 'string' && !view.live && view.f && view.flat && !view.cols.has(m.source) && !(view.dictCols && view.dictCols[m.source]) && view.f.size <= WHOLE_FILE_MAX && LfcPack.unpackColumns) { try { data = await deriveFromBytes(m.fn, m.source, view.total); } catch { data = null; } }   // first letter and length straight from the stored bytes: no string is built per cell (15M titles: 5.9 s of strings to about 2 s)
+    if (!isFirefox && (m.fn === 'first' || m.fn === 'length') && src.type === 'string' && !view.live && view.f && view.flat && !view.cols.has(m.source) && !(view.dictCols && view.dictCols[m.source]) && view.f.size <= WHOLE_FILE_MAX && LfcPack.unpackColumns) { try { data = await deriveFromBytes(m.fn, m.source, view.total); } catch { data = null; } }   // first letter and length straight from the stored bytes: no string is built per cell (15M titles: 5.9 s of strings to about 2 s)
     if (!data) { const cols = await loadColumns([m.source], false, true); data = deriveMod.derive(cols[m.source], view.total, m.fn); }
     const isNum = ArrayBuffer.isView(data);
     let whole = isNum; if (isNum) for (let i = 0; i < data.length; i++) { const x = data[i]; if (x === x && x !== Math.floor(x)) { whole = false; break; } }
@@ -2809,7 +2804,7 @@ function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
   const fly = (v.inflight ||= new Map()); let done; const p = new Promise((r) => { done = r; }); for (const n of lr.names) fly.set(n, p);
   setTimeout(async () => {
-    try { for (const nm of lr.names) { if (view !== v) break; if (!v.cols.has(nm)) { try { const g = lr.L.columnGen(nm); let r, k = 0; while (!(r = g.next()).done) { await yieldNow(); if (view !== v) break; } if (r.done && view === v) v.cols.set(nm, r.value); } catch {} } fly.delete(nm); await yieldNow(); } }
+    try { for (const nm of lr.names) { if (view !== v) break; if (!v.cols.has(nm)) { try { const g = lr.L.columnGen(nm); let r, k = 0; while (!(r = g.next()).done) { if (++k % 4 === 0) await yieldNow(); if (view !== v) break; } if (r.done && view === v) v.cols.set(nm, r.value); } catch {} } fly.delete(nm); await yieldNow(); } }
     finally { for (const nm of lr.names) fly.delete(nm); done(); }
   }, 0);
 }
