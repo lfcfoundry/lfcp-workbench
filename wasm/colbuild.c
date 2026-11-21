@@ -3,7 +3,7 @@
 #include <wasm_simd128.h>
 typedef unsigned char u8; typedef unsigned int u32; typedef unsigned long long u64;
 #define EXPORT(n) __attribute__((export_name(n)))
-#define MAXC 64
+#define MAXC 128
 #define DSL 40
 #define DCAP 4096
 #define DSLOTS 8
