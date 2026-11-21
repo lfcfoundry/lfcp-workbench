@@ -28,6 +28,8 @@ EXPORT("dict_blen") u32 dict_blen(u32 c){ return dlen_[c]; }
 EXPORT("bailcol") u32 bailcol(void){ return g_bailcol; }
 static u8 g_lenient;   // text right after a closing quote is kept as plain text of the same cell, the way the tidy pass reads it (set only when that pass would use its plain options)
 EXPORT("set_lenient") void set_lenient(u32 on){ g_lenient = (u8)on; }
+static u8 g_noq;   // space-separated lists whose quote marks are ordinary characters: a quote never opens or closes a cell
+EXPORT("set_noq") void set_noq(u32 on){ g_noq = (u8)on; }
 static u32 g_stray;   // lines of the last build that held a quote mark inside an unquoted cell (kept as plain text, as the tidy pass does)
 EXPORT("stray") u32 stray(void){ return g_stray; }
 static u32 hashb2(const u8* p, u32 l);
@@ -199,6 +201,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
             continue;   // a delimiter, tab or other control character inside quotes is cell text
           }
           if (c == 34) {
+            if (g_noq) { sq = 1; continue; }
             if ((fq[col] == 2 || (q != fs[col] && !fq[col])) && D0 != 32) { sq = 1; continue; }   // a quote mark inside an unquoted cell is plain text (not in space-separated lists: the tidy pass has its own quote rules for those)
             if (q != fs[col] || fq[col]) { ok = 0; done = 1; break; }
             if (q + 2 < len && in[q + 1] == 34) { u8 a = in[q + 2]; if (a == D0 || a == 10 || (a == 13 && q + 3 < len && in[q + 2 + 1] == 10)) { fq[col] = 1; fs[col] = fe[col] = q + 1; skipq = q + 1; continue; } }   // "" followed by a delimiter or line end: an empty quoted cell

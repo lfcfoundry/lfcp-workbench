@@ -10,9 +10,9 @@ export class IngestError extends Error {
 }
 
 export class DelimitedParser {
-  constructor(delimiter, onRow, { maxRecordChars = 8 * 1024 * 1024 } = {}) {
+  constructor(delimiter, onRow, { maxRecordChars = 8 * 1024 * 1024, noQuote = false } = {}) {
     if (typeof delimiter !== 'string' || delimiter.length !== 1 || /["\r\n]/.test(delimiter)) throw new IngestError('The delimiter must be one ordinary character.');
-    this.d = delimiter; this.onRow = onRow; this.max = maxRecordChars;
+    this.d = delimiter; this.onRow = onRow; this.max = maxRecordChars; this.nq = !!noQuote;   // noQuote: a quote mark is an ordinary character (space-separated lists such as pageview dumps)
     this.row = []; this.field = ''; this.mode = 0; // 0 plain, 1 in quotes, 2 after closing quote
     this.pendingQuote = false; this.skipLF = false;
     this.line = 1; this.startLine = 1; this.chars = 0; this.seen = false;
@@ -50,7 +50,7 @@ export class DelimitedParser {
         continue;
       }
       let j = i; // modes 0 and 2: find the next delimiter, line break or quote
-      while (j < n) { const c = text.charCodeAt(j); if (c === D || c === 10 || c === 13 || c === 34) break; j++; }
+      const nq = this.nq; while (j < n) { const c = text.charCodeAt(j); if (c === D || c === 10 || c === 13 || (c === 34 && !nq)) break; j++; }
       if (j > i) {
         if (this.mode === 2) throw new IngestError('Unexpected text after a closing quote.', this.line);
         this.field += text.slice(i, j); this.chars += j - i;
