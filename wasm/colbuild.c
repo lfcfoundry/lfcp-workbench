@@ -26,6 +26,8 @@ EXPORT("dict_reset") void dict_reset(u32 c){ for (u32 k = 0; k < DHS; k++) dhash
 EXPORT("dict_n") u32 dict_n(u32 c){ return dn[c]; }
 EXPORT("dict_blen") u32 dict_blen(u32 c){ return dlen_[c]; }
 EXPORT("bailcol") u32 bailcol(void){ return g_bailcol; }
+static u32 g_stray;   // lines of the last build that held a quote mark inside an unquoted cell (kept as plain text, as the tidy pass does)
+EXPORT("stray") u32 stray(void){ return g_stray; }
 static u32 hashb2(const u8* p, u32 l);
 static int dict_code(u32 c, const u8* p, u32 l, u32* out){
   u32 h = hashb2(p, l) ^ l;
@@ -165,11 +167,11 @@ static int utf8_ok(const u8* p, u32 l){
   return 1;
 }
 EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
-  u32 i = 0, nrows = 0; g_bail = 0; g_nl = 0;
+  u32 i = 0, nrows = 0; g_bail = 0; g_nl = 0; g_stray = 0;
   u32 n = ncols; u8 D0 = D;
   for (u32 c = 0; c < n; c++) { cnt_n[c] = 0; cnt_e[c] = 0; }
   while (i < len) {
-    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC], esc[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; esc[0] = 0; int ok = 1, inq = 0, hi8 = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
+    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC], esc[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; esc[0] = 0; int ok = 1, inq = 0, hi8 = 0, sq = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
     {
       v128_t vd = wasm_i8x16_splat((int8_t)D0), vnl = wasm_i8x16_splat(10), vq = wasm_i8x16_splat(34), vbs = wasm_i8x16_splat(92), v31 = wasm_i8x16_splat(31), v126 = wasm_i8x16_splat(126);
       int done = 0;
@@ -195,6 +197,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
             continue;   // a delimiter, tab or other control character inside quotes is cell text
           }
           if (c == 34) {
+            if (q != fs[col] && !fq[col] && D0 != 32) { sq = 1; continue; }   // a quote mark inside an unquoted cell is plain text (not in space-separated lists: the tidy pass has its own quote rules for those)
             if (q != fs[col] || fq[col]) { ok = 0; done = 1; break; }
             if (q + 2 < len && in[q + 1] == 34) { u8 a = in[q + 2]; if (a == D0 || a == 10 || (a == 13 && q + 3 < len && in[q + 2 + 1] == 10)) { fq[col] = 1; fs[col] = fe[col] = q + 1; skipq = q + 1; continue; } }   // "" followed by a delimiter or line end: an empty quoted cell
             inq = 1; fq[col] = 1; fs[col] = q + 1; continue;
@@ -252,7 +255,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
       }
       ((f64*)colA[c])[nrows] = v;
     }
-    nrows++; g_nl += nl; i = e + 1;
+    nrows++; g_nl += nl; g_stray += (u32)sq; i = e + 1;
   }
 stop:
   g_rows = nrows; return i;
