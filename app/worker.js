@@ -487,6 +487,9 @@ async function parseJob(m) {
 const SEG_BYTES = 8 * 1048576, SEG_MIN_FILE = 48 * 1048576, SEG_WINDOW = 5;
 // Pieces need two parsing helpers that really run side by side. They do in all three test browsers now that rows are built as text
 // (when each row was an object, Firefox ran two helpers at half speed each). Tests can force pieces on small files with m.segBytes.
+// Parse helpers by machine (no setting): 2 below 8 cores, on phones and under 8 GB; from 8 cores half the cores, up to 8 (16 cores: 8).
+// Laptop (16 cores, Firefox 161): 2 -> 8 helpers cut the 15M-row import to usable 3.8 -> 2.7 s; 12 gave nothing more. On 4 cores 3 helpers were up to 13% slower to done on the 116-column stand-in (Firefox), so 4 cores stay at 2.
+function autoHelpers() { const nv = self.navigator || {}, hw = nv.hardwareConcurrency || 2; if (hw < 8 || (nv.deviceMemory && nv.deviceMemory < 8) || /Android|iPhone|iPad|Mobile/i.test(nv.userAgent || '')) return 2; return Math.min(8, hw >> 1); }
 const useSegments = (m, file) => !m.inline && (m.segBytes || (file.size >= SEG_MIN_FILE && (self.navigator && self.navigator.hardwareConcurrency || 2) >= 4));
 const cleanState = (p) => p.mode === 0 && !p.seen && p.row.length === 0 && p.field === '' && !p.pendingQuote && !p.skipLF;
 // m: file, delimiter, headers (null for the header scan), headerOnly, first, hdrEnd, s (cut), e (next cut), startAt, lineBase, trackers, emit, stopFn.
@@ -600,7 +603,7 @@ async function segJob(m) {
 // Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
 async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict, nh, survey) {
-  nh = Math.max(2, Math.min(8, nh | 0 || 2));   // parse helpers: 2 by default; the page option parseHelpers tries more on machines with spare cores
+  nh = Math.max(2, Math.min(8, nh | 0 || autoHelpers()));   // parse helpers: chosen from the core count; the page option parseHelpers (tests) overrides
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
