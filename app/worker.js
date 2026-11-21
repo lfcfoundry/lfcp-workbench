@@ -2311,7 +2311,7 @@ async function importOnce(m) {
         // Early view: the grid opens on the first parsed chunks and the row count grows while the file is still being read (a preview: no sort or filter until the end).
         const pvStarts = [0], pvDec = new TextDecoder(); let pvSent = 0, pvKind = null, pvOn = liveChunks !== null && m.preview !== false;
         // Early chart (draft): the first column with 2 to 12 different words is counted from the chunks read so far, at most every 250 ms, each chunk once. The page draws it grey and marks it DRAFT; the final counts come from the group-by when the file is read.
-        let ecK = -2, ecDone = 0, ecRows = 0, ecSent = 0; const ecMap = new Map();
+        let ecK = m.noEarlyChart ? -1 : -2, ecDone = 0, ecRows = 0, ecSent = 0; const ecMap = new Map();
         const ecTick = (now) => {
           if (ecK === -1 || now - ecSent < 250) return;
           const chunks = liveChunks;

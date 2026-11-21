@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laptop race tester</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+:root{--bg:#fff;--fg:#1b1b1b;--mut:#666;--line:#ddd;--acc:#006ba2;--bad:#c84d4f}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#aaa;--line:#333;--acc:#5db8e8;--bad:#ff8a8c}}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;margin:0 auto;max-width:760px;padding:16px}
+h1{font-size:22px;margin:0 0 4px}p{margin:6px 0}.mut{color:var(--mut)}
+button{font:inherit;padding:10px 18px;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:6px;cursor:pointer;margin:4px 6px 4px 0}
+button.go{border-color:var(--acc);color:var(--acc);font-weight:700;font-size:20px;padding:14px 32px}button:disabled{opacity:.45;cursor:default}
+.pick{border:1px solid var(--line);border-radius:6px;padding:8px 12px;margin:8px 0}
+progress{width:100%;height:18px}#panel{border:1px solid var(--line);border-radius:6px;padding:10px;margin:10px 0;white-space:pre-wrap;font-variant-numeric:tabular-nums}
+pre{white-space:pre-wrap;border:1px solid var(--line);border-radius:6px;padding:10px;font-size:13px}.bad{color:var(--bad)}
+</style></head><body>
+<h1>Laptop race tester</h1>
+<p class="mut">Workbench against DuckDB on your own machine, same files, alternating runs. Everything stays in this browser. About 5 minutes. Keep this tab in front and do not use the laptop meanwhile.</p>
+<div class="pick"><b>1. Wikimedia file (H4)</b> <span class="mut">optional</span><br><input type="file" id="fwiki"></div>
+<div class="pick"><b>2. Exoplanets file (H6)</b> <span class="mut">optional</span><br><input type="file" id="fexo"></div>
+<p><button class="go" id="start">Start</button> <button id="copy" disabled>Copy results</button></p>
+<progress id="bar" value="0" max="1"></progress>
+<div id="panel">Pick one or both files, then press Start.</div>
+<pre id="out"></pre>
+<script>window.addEventListener('error', function (e) { var p = document.getElementById('panel'); if (p) { p.textContent = 'Page error: ' + e.message + ' (line ' + e.lineno + '). Please press Copy results or send this line.'; p.className = 'bad'; } });</script>
+<script type="module">
+const $ = (id) => document.getElementById(id), Q = new URLSearchParams(location.search), RUNS = +(Q.get('runs') || 3);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const med = (a) => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const sec = (ms) => (ms / 1000).toFixed(2) + ' s';
+const pct = (a, b) => ((a / b - 1) * 100 >= 0 ? '+' : '') + ((a / b - 1) * 100).toFixed(0) + '%';
+const CFG = {
+  wiki: { name: 'H4 Wikimedia', wb: { derive: { source: 'page', fn: 'first', name: 'pfx' }, f: { project: '=en', views: '>=100' }, sort: { col: 'views', dir: 'desc' }, key: 'project', aggs: [{ fn: 'count' }] },
+    rc: ", delim=' ', quote=''", derive: 'substr(page,1,1)', filter: "project='en' AND views>=100", sort: 'views DESC, project, page', agg: 'SELECT project AS k, count(*)::INT AS n, 0 AS a FROM c GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', rows: 15324510 },
+  exo: { name: 'H6 exoplanets', wb: { derive: { source: 'hostname', fn: 'first', name: 'pfx' }, f: { discoverymethod: '=Transit', pl_rade: '>=1' }, sort: { col: 'pl_rade', dir: 'desc' }, key: 'discoverymethod', aggs: [{ fn: 'count' }] },
+    rc: ", delim=',', strict_mode=false", derive: 'substr(hostname,1,1)', filter: "discoverymethod='Transit' AND pl_rade>=1", sort: 'pl_rade DESC, pl_name', agg: 'SELECT discoverymethod AS k, count(*)::INT AS n, 0 AS a FROM c GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', rows: 6473 } };
+const lines = [], raw = []; let planned = 0, done = 0, step = '', section = '', t0 = 0, tEnd = 0, last = '', threadedOk = false;
+const panel = () => { $('panel').textContent = section + '\n' + step + '\nElapsed ' + (((tEnd || performance.now()) - t0) / 1000).toFixed(0) + ' s   Runs finished: ' + done + ' of ' + planned + '\nLast: ' + last; $('bar').value = planned ? done / planned : 0; };
+const tick = setInterval(() => { if (t0 && !tEnd) panel(); }, 500);
+async function wipe() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }); } catch (e) { /* none */ } }
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' took more than ' + Math.round(ms / 1000) + ' s, moved on')), ms))]);
+// ---- Workbench: the app's own worker, the same messages as the app (import live, open, group, add column, filter, sort, summarize, Save) ----
+async function wbRun(file, c, extra, chart) {
+  const w = new Worker('./wb/app/worker.js'); let seq = 0; const waiters = new Map(), steps = {}; let ecKey = '', liveSeen = false, liveWork = null;
+  const call = (msg) => new Promise((res) => { const id = 'j' + (++seq); waiters.set(id, res); w.postMessage(Object.assign({ id }, msg)); });
+  const ok = (r) => { if (r.type === 'error' || r.type === 'cancelled') throw new Error(r.message || r.type); return r; };
+  w.onmessage = (e) => { const m = e.data || {};
+    if (m.type === 'earlyChart') { if (m.key) ecKey = m.key; return; }
+    if (['progress', 'preview', 'previewGrow', 'notice', 'liveclosed'].includes(m.type)) return;
+    if (m.type === 'live') { if (chart && ecKey && !liveSeen) { liveSeen = true; liveWork = call({ type: 'groupby', key: ecKey, aggs: [{ fn: 'count' }], filters: {} }); } return; }   // what the page does for the blue chart
+    const g = waiters.get(m.id); if (g) { waiters.delete(m.id); g(m); } };
+  w.onerror = (e) => { for (const g of waiters.values()) g({ type: 'error', message: 'worker error: ' + (e.message || '?') }); };
+  const T = async (name, f) => { const s = performance.now(); const r = await f(); steps[name] = Math.round(performance.now() - s); return r; };
+  try {
+    let d; await T('import', async () => { d = ok(await call(Object.assign({ type: 'import', file, delimiter: 'auto', live: true }, extra || {}))).dataset; });
+    if (liveWork) await liveWork;
+    await T('open', async () => ok(await call({ type: 'open', name: d.name })));
+    await T('summarize_first', async () => ok(await call({ type: 'groupby', key: c.wb.key, aggs: c.wb.aggs, filters: {} })));
+    await T('add_column', async () => ok(await call(Object.assign({ type: 'derive' }, c.wb.derive))));
+    let fr; await T('filter', async () => { fr = ok(await call({ type: 'query', filters: c.wb.f, sort: null })).count; });
+    await T('sort', async () => ok(await call({ type: 'query', filters: c.wb.f, sort: c.wb.sort })));
+    await T('summarize', async () => ok(await call({ type: 'groupby', key: c.wb.key, aggs: c.wb.aggs, filters: {} })));
+    let sv; await T('save', async () => { sv = ok(await call({ type: 'exportLfcp' })); });
+    const total = Object.values(steps).reduce((a, b) => a + b, 0);
+    return { total, steps, rows: d.rows, filterRows: fr, saveRows: sv.rows, timing: d.timing };
+  } finally { w.terminate(); await wipe(); }
+}
+// ---- DuckDB (base = published build; threaded = self-built extension, estimated performance), the SQL of the benchmark harness ----
+let duckMod = null;
+async function duckRun(kind, file, c) {
+  duckMod ||= await import('./duck/duckdb-browser.mjs'); const duck = duckMod, steps = {}, thr = kind === 'threaded';
+  const worker = new Worker(thr ? './duck/duckdb-browser-threads.worker.js' : './duck/duckdb-browser-base.worker.js'); const db = new duck.AsyncDuckDB({ log: () => {} }, worker);
+  const T = async (name, f) => { const s = performance.now(); const r = await f(); steps[name] = Math.round(performance.now() - s); return r; };
+  try {
+    const abs = (p) => new URL(p, location.href).href;
+    await T('start', async () => { if (thr) { await db.instantiate(abs('./duck/duckdb-threads.wasm'), abs('./duck/duckdb-browser-threads.pthread.worker.js')); await db.open({ allowUnsignedExtensions: true }); } else await db.instantiate(abs('./duck/duckdb-base.wasm')); });
+    const cn = await db.connect(); const q = (s) => cn.query(s); if (thr) await q('SET threads=' + (navigator.hardwareConcurrency || 4));
+    await db.registerFileHandle('data.csv', file, duck.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+    let rows; await T('import', async () => { await q("CREATE TABLE raw AS SELECT * FROM read_csv('data.csv', header=true" + c.rc + ')'); rows = (await q('SELECT count(*)::INT AS n FROM raw')).get(0).n; });
+    await T('add_column', async () => { await q('CREATE TABLE c AS SELECT *, ' + c.derive + ' AS pfx FROM raw'); await q('DROP TABLE raw'); });
+    let fr; await T('filter', async () => { await q('CREATE TABLE f AS SELECT * FROM c WHERE ' + c.filter); fr = (await q('SELECT count(*)::INT AS n FROM f')).get(0).n; });
+    await T('sort', async () => { await q('CREATE TABLE s AS SELECT * FROM f ORDER BY ' + c.sort); });
+    await T('summarize', async () => { await q(c.agg); });
+    await q("SET custom_extension_repository='" + abs('./repo') + "'"); await q('INSTALL parquet'); await q('LOAD parquet');   // outside the timing, as in the benchmark harness
+    let bytes; await T('save_parquet', async () => { await q("COPY s TO 'out.parquet' (FORMAT PARQUET)"); bytes = (await db.copyFileToBuffer('out.parquet')).byteLength; });
+    const total = Object.values(steps).reduce((a, b) => a + b, 0);
+    return { total, steps, rows, filterRows: fr, saveBytes: bytes };
+  } finally { try { worker.terminate(); } catch (e) { /* gone */ } }
+}
+const ENG = { workbench: (f, c) => wbRun(f, c, null, true), base: (f, c) => duckRun('base', f, c), threaded: (f, c) => duckRun('threaded', f, c) };
+const LAB = { workbench: 'Workbench', base: 'DuckDB base', threaded: 'DuckDB threaded (self-built extension, estimated performance)' };
+async function runOne(label, eng, fn) {
+  step = label; panel(); await wipe(); await sleep(400);
+  try { const r = await withTimeout(fn(), 420000, label); done++; last = label + ': ' + sec(r.total); raw.push(label + ' ' + JSON.stringify({ total: r.total, steps: r.steps, rows: r.rows, filterRows: r.filterRows })); return r; }
+  catch (e) { done++; last = label + ' FAILED ' + (e && e.message || e); raw.push(last); return { err: String(e && e.message || e) }; }
+}
+function stepLine(res, names) { return names.filter((n) => res.some((r) => r.steps[n] !== undefined)).map((n) => n + ' ' + sec(med(res.filter((r) => r.steps[n] !== undefined).map((r) => r.steps[n])))).join(', '); }
+async function race(key, file) {
+  const c = CFG[key], engs = ['workbench', 'base'].concat(threadedOk ? ['threaded'] : []), res = { workbench: [], base: [], threaded: [] }; section = c.name + ' (' + file.name + ', ' + Math.round(file.size / 1048576) + ' MB): race';
+  for (let i = 0; i < RUNS; i++) { const order = engs.slice(); if (i % 2) order.reverse(); for (const e of order) { const r = await runOne(c.name + ' ' + LAB[e].split(' (')[0] + ', run ' + (i + 1) + ' of ' + RUNS, e, () => ENG[e](file, c)); if (!r.err) res[e].push(r); } }
+  lines.push(c.name + ' (' + file.name + ', ' + Math.round(file.size / 1048576) + ' MB): total time start to finish, median of ' + RUNS + ' alternating runs');
+  const wbN = ['import', 'open', 'summarize_first', 'add_column', 'filter', 'sort', 'summarize', 'save'], dkN = ['start', 'import', 'add_column', 'filter', 'sort', 'summarize', 'save_parquet'];
+  for (const e of engs) { const a = res[e]; if (!a.length) { lines.push('  ' + LAB[e] + ': no finished run'); continue; } lines.push('  ' + LAB[e] + ': ' + sec(med(a.map((r) => r.total))) + '   (runs ' + a.map((r) => sec(r.total)).join(', ') + ')   [' + stepLine(a, e === 'workbench' ? wbN : dkN) + ']'); }
+  if (res.workbench.length && res.base.length) { const w = med(res.workbench.map((r) => r.total)), b = med(res.base.map((r) => r.total)); lines.push('  Verdict: Workbench ' + (w < b ? 'WINS' : 'LOSES') + ' against DuckDB base by ' + sec(Math.abs(w - b)) + ' (' + pct(w, b) + ')'); }
+  if (res.workbench.length && res.threaded.length) { const w = med(res.workbench.map((r) => r.total)), t = med(res.threaded.map((r) => r.total)); lines.push('  Verdict: Workbench ' + (w < t ? 'WINS' : 'LOSES') + ' against DuckDB threaded by ' + sec(Math.abs(w - t)) + ' (' + pct(w, t) + ')'); }
+  const wr = res.workbench[0]; if (wr) lines.push('  Rows: ' + wr.rows + ' (expected ' + c.rows + '), filter keeps ' + wr.filterRows + ', Save wrote ' + wr.saveRows + ' rows' + (wr.rows === c.rows ? '' : '  <-- ROW COUNT DIFFERS'));
+  lines.push('');
+}
+async function chartCost(file) {
+  const c = CFG.wiki; section = c.name + ': early chart on and off'; const on = [], off = [];
+  for (let i = 0; i < 2; i++) for (const v of (i % 2 ? ['off', 'on'] : ['on', 'off'])) { const r = await runOne('Early chart ' + v + ', run ' + (i + 1) + ' of 2', v, () => wbRun(file, c, v === 'off' ? { noEarlyChart: true } : null, v === 'on')); if (!r.err) (v === 'on' ? on : off).push(r.total); }
+  lines.push(c.name + ': early chart cost (Workbench total, 2 runs each, alternating)');
+  if (on.length && off.length) lines.push('  chart on ' + sec(med(on)) + ' (' + on.map(sec).join(', ') + '), chart off ' + sec(med(off)) + ' (' + off.map(sec).join(', ') + '), difference ' + pct(med(on), med(off)) + '. Noise on one machine is about 10%.'); lines.push('');
+}
+async function sweep(file) {
+  const c = CFG.wiki, cores = navigator.hardwareConcurrency || 4, Ns = [2, 4, 8, Math.min(12, cores)].filter((x, i, a) => a.indexOf(x) === i), out = {}; section = c.name + ': parse threads sweep';
+  for (const n of Ns) { const r = await runOne('Parse threads ' + n, n, () => wbRun(file, c, { parseHelpers: n }, false)); if (!r.err) out[n] = r; }
+  lines.push(c.name + ': Workbench total by number of parse helper threads (this machine has ' + cores + ' cores; one run each)');
+  for (const n of Ns) if (out[n]) lines.push('  ' + n + ' helpers: total ' + sec(out[n].total) + ' (import ' + sec(out[n].steps.import) + ', save ' + sec(out[n].steps.save) + ')'); lines.push('');
+}
+async function start() {
+  $('start').disabled = true; $('copy').disabled = true; lines.length = 0; raw.length = 0; done = 0; t0 = performance.now(); tEnd = 0;
+  const urlFile = async (u) => { const b = await (await fetch(u)).blob(); return new File([b], u.split('/').pop()); };   // test hook: ?wikiurl=...&exourl=...&post=... runs by itself and posts the text
+  const wiki = $('fwiki').files[0] || (Q.get('wikiurl') ? await urlFile(Q.get('wikiurl')) : null), exo = $('fexo').files[0] || (Q.get('exourl') ? await urlFile(Q.get('exourl')) : null);
+  if (!wiki && !exo) { $('panel').textContent = 'Pick at least one file first.'; $('start').disabled = false; return; }
+  const engCount = threadedOk ? 3 : 2; planned = (exo ? RUNS * engCount : 0) + (wiki ? RUNS * engCount + 4 + 4 : 0);
+  lines.push('Laptop race tester, ' + new Date().toString(), 'Browser: ' + navigator.userAgent, 'Cores: ' + navigator.hardwareConcurrency + '   deviceMemory: ' + (navigator.deviceMemory || 'n/a') + '   threaded DuckDB ' + (threadedOk ? 'available' : 'NOT available (page not cross-origin isolated); only DuckDB base ran'), '');
+  try { if (exo) await race('exo', exo); if (wiki) { await race('wiki', wiki); await chartCost(wiki); await sweep(wiki); } } catch (e) { raw.push('FAILED: ' + (e && e.message || e)); }
+  lines.push('Not measured here: overlap of column unpack and Save with parse (not built yet). DuckDB Parquet extension install is outside the timing, as in the benchmark harness.', '', 'Raw:'); for (const l of raw) lines.push('  ' + l);
+  $('out').textContent = lines.join('\n'); tEnd = performance.now(); clearInterval(tick); step = 'finished'; section = 'Done. Press Copy results and paste them into the chat.'; panel(); $('bar').value = 1; $('copy').disabled = false; $('start').disabled = false;
+  if (Q.get('post')) { try { await fetch(Q.get('post'), { method: 'POST', body: lines.join('\n') }); } catch (e) { /* none */ } }
+}
+$('start').onclick = start;
+$('copy').onclick = async () => { const t = $('out').textContent; try { await navigator.clipboard.writeText(t); } catch (e) { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy results'; }, 2000); };
+// threaded DuckDB needs shared memory: a small service worker adds the two headers, then the page reloads once
+(async () => {
+  threadedOk = !!self.crossOriginIsolated;
+  if (!threadedOk && 'serviceWorker' in navigator && !Q.get('nothreads')) { try { const reg = await navigator.serviceWorker.register('./coi-sw.js'); if (reg.active && !navigator.serviceWorker.controller) { location.reload(); return; } await navigator.serviceWorker.ready; if (!navigator.serviceWorker.controller) { location.reload(); return; } } catch (e) { /* run without the threaded build */ } }
+  if (Q.get('auto')) { setTimeout(start, 500); }
+  $('panel').textContent = 'Pick one or both files, then press Start.  (Threaded DuckDB: ' + (threadedOk ? 'ready' : 'not available here') + ')';
+})();
+</script></body></html>
