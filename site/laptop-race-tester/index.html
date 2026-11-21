@@ -35,7 +35,18 @@ const CFG = {
   exo: { name: 'H6 exoplanets', wb: { derive: { source: 'hostname', fn: 'first', name: 'pfx' }, f: { discoverymethod: '=Transit', pl_rade: '>=1' }, sort: { col: 'pl_rade', dir: 'desc' }, key: 'discoverymethod', aggs: [{ fn: 'count' }] },
     rc: ", delim=',', strict_mode=false", derive: 'substr(hostname,1,1)', filter: "discoverymethod='Transit' AND pl_rade>=1", sort: 'pl_rade DESC, pl_name', agg: 'SELECT discoverymethod AS k, count(*)::INT AS n, 0 AS a FROM c GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', rows: 6473 } };
 const lines = [], raw = []; let planned = 0, done = 0, step = '', section = '', t0 = 0, tEnd = 0, last = '', threadedOk = false;
-const panel = () => { $('panel').textContent = section + '\n' + step + '\nElapsed ' + (((tEnd || performance.now()) - t0) / 1000).toFixed(0) + ' s   Runs finished: ' + done + ' of ' + planned + '\nLast: ' + last; $('bar').value = planned ? done / planned : 0; };
+const dl = { on: false, got: 0, total: 0, t: 0, label: '' };   // the download phase: the bar and the text show bytes, speed and time left
+const mb = (n) => (n / 1048576).toFixed(0) + ' MB';
+const panel = () => {
+  const el = ((tEnd || performance.now()) - t0) / 1000;
+  if (dl.on) {
+    const secs = Math.max(0.5, (performance.now() - dl.t) / 1000), rate = dl.got / secs, left = dl.total && rate > 0 ? Math.round((dl.total - dl.got) / rate) : 0;
+    $('panel').textContent = 'Downloading the test files (' + dl.label + ')\n' + mb(dl.got) + ' of ' + mb(dl.total) + ' (' + Math.round(100 * dl.got / (dl.total || 1)) + '%)   ' + (rate / 1048576).toFixed(1) + ' MB/s   about ' + left + ' s left\nThis happens once. The races start right after it.';
+    $('bar').value = dl.total ? dl.got / dl.total : 0; return;
+  }
+  const eta = done >= 3 && planned ? Math.round(el / done * (planned - done)) : 0;
+  $('panel').textContent = section + '\n' + step + '\nElapsed ' + el.toFixed(0) + ' s   Runs finished: ' + done + ' of ' + planned + (eta ? '   about ' + Math.ceil(eta / 60) + ' min left' : '') + '\nLast: ' + last; $('bar').value = planned ? done / planned : 0;
+};
 const tick = setInterval(() => { if (t0 && !tEnd) panel(); }, 500);
 async function wipe() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }); } catch (e) { /* none */ } }
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' took more than ' + Math.round(ms / 1000) + ' s, moved on')), ms))]);
@@ -43,14 +54,18 @@ const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => se
 async function hosted(name, parts, header, label) {
   const dir = await navigator.storage.getDirectory();
   try { const have = await (await dir.getFileHandle(name)).getFile(); if (have.size > 0) { const mark = await (await dir.getFileHandle(name + '.ok')).getFile(); if (mark.size) return have; } } catch (e) { /* not there yet */ }
-  const fh = await dir.getFileHandle(name, { create: true }), w = await fh.createWritable(); let got = 0, total = 0;
+  const fh = await dir.getFileHandle(name, { create: true }), w = await fh.createWritable(); let total = 0;
+  dl.on = true; dl.label = label; dl.t = performance.now(); panel();
   for (const p of parts) { const h = await fetch(p, { method: 'HEAD' }); total += +h.headers.get('content-length') || 0; }
+  dl.total += total; dl.t = performance.now(); const start = dl.got;
   if (header) await w.write(header);
-  for (let i = 0; i < parts.length; i++) {
-    const r = await fetch(parts[i]); if (!r.ok) throw new Error(parts[i] + ' answered ' + r.status);
-    const counted = r.body.pipeThrough(new TransformStream({ transform(c, ctl) { got += c.length; step = label + ': downloading and unpacking, ' + Math.round(100 * got / (total || 1)) + '%'; $('bar').value = got / (total || 1); section = 'Getting the test files'; ctl.enqueue(c); } }));
-    await counted.pipeThrough(new DecompressionStream('gzip')).pipeTo(w, { preventClose: i < parts.length - 1 });
-  }
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const r = await fetch(parts[i]); if (!r.ok) throw new Error(parts[i] + ' answered ' + r.status);
+      const counted = r.body.pipeThrough(new TransformStream({ transform(c, ctl) { dl.got += c.length; ctl.enqueue(c); } }));
+      await counted.pipeThrough(new DecompressionStream('gzip')).pipeTo(w, { preventClose: i < parts.length - 1 });
+    }
+  } finally { dl.on = false; }
   const ok = await (await dir.getFileHandle(name + '.ok', { create: true })).createWritable(); await ok.write('1'); await ok.close();
   return fh.getFile();
 }
@@ -136,7 +151,7 @@ async function sweep(file) {
   for (const n of Ns) if (out[n]) lines.push('  ' + n + ' helpers: total ' + sec(out[n].total) + ' (import ' + sec(out[n].steps.import) + ', save ' + sec(out[n].steps.save) + ')'); lines.push('');
 }
 async function start() {
-  $('start').disabled = true; $('copy').disabled = true; lines.length = 0; raw.length = 0; done = 0; t0 = performance.now(); tEnd = 0;
+  $('start').disabled = true; $('copy').disabled = true; $('panel').className = ''; $('panel').textContent = 'Starting: checking for the test files...'; lines.length = 0; raw.length = 0; done = 0; t0 = performance.now(); tEnd = 0;
   const urlFile = async (u) => { const b = await (await fetch(u)).blob(); return new File([b], u.split('/').pop()); };   // test hook: ?wikiurl=...&exourl=...&post=... runs by itself and posts the text
   let wiki = $('fwiki').files[0] || (Q.get('wikiurl') ? await urlFile(Q.get('wikiurl')) : null), exo = $('fexo').files[0] || (Q.get('exourl') ? await urlFile(Q.get('exourl')) : null);
   try { if (!wiki && $('runh4').checked) wiki = await getWiki(); if (!exo && $('runh6').checked) exo = await getExo(); } catch (e) { $('panel').textContent = 'Could not get the test files: ' + (e && e.message || e) + '. Use the "my own files" box instead.'; $('panel').className = 'bad'; $('start').disabled = false; return; }
