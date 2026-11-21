@@ -96,5 +96,25 @@ export function detectDelimiter(sample) {
     const score = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : 0;
     if (score > bestScore) { best = d; bestScore = score; }
   }
+  if (bestScore <= 1 && spaceDelimited(sample)) return ' ';   // none of the usual delimiters occurs: a file of single-space separated fields
   return best;
+}
+
+// Space-separated values (for example "en Main_Page 1234 5678"): at least 5 lines, every line with the same number of single-space fields (no empty field),
+// and either 3 or more fields or one field that is a number on every line. Plain text with a varying number of words never qualifies. The last line of the
+// sample is ignored since the sample may end in the middle of it.
+export function spaceDelimited(sample) {
+  const all = sample.split(/\r?\n/); if (all.length > 1) all.pop();
+  const lines = all.filter((l) => l.trim()).slice(0, 12);
+  if (lines.length < 5) return false;
+  const plain = lines.map((l) => l.split(' '));
+  const quoted = lines.map((l) => { const r = []; let f = '', q = false; for (const c of l) { if (c === '"') { q = !q; f += c; } else if (c === ' ' && !q) { r.push(f); f = ''; } else f += c; } r.push(f); return r; });
+  return consistent(plain) || (lines.some((l) => l.includes('"')) && consistent(quoted));
+}
+function consistent(rows) {
+  const k = rows[0].length; if (k < 2) return false;
+  for (const r of rows) { if (r.length !== k) return false; for (const f of r) if (f === '') return false; }
+  if (k >= 3) return true;
+  for (let c = 0; c < k; c++) if (rows.every((r) => /^-?\d+(\.\d+)?$/.test(r[c]))) return true;
+  return false;
 }
