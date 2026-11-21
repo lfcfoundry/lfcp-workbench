@@ -19,12 +19,28 @@
     if (m.type === 'progress') { $('prog').value = m.total ? m.bytes / m.total : 0; status(m.rows.toLocaleString() + ' rows · ' + fmt(m.bytes) + ' of ' + fmt(m.total)); return; }
     if (m.type === 'preview') { if (!liveHook) previewOpen(m); return; }   // the first rows are in: the grid opens now, the row count grows until the file is read
     if (m.type === 'notice') { encNote = m.text || ''; if (m.widths) fwGuess = m.widths; return; }
+    if (m.type === 'earlyChart') { if (m.off) ecHide(); else if (!ecFinal) ecDraw(m.key, m.bars, m.rows, false); return; }
     if (m.type === 'previewGrow') { if (G.preview) previewGrow(m); return; }
+    if (m.type === 'live') ecLive();
     if (m.type === 'live' && G.preview && !liveHook) { liveSeen = performance.now(); liveDone = finishPreview(m); return; }
     if (m.type === 'live') { liveSeen = performance.now(); liveDone = (liveHook || ((x) => { status('Reading while the file is saved…'); return openGrid(x.name); }))(m); return; }   // the worker has parsed the file and keeps the columns: the grid can open before the save ends
     if (m.type === 'liveclosed') { G.preview = false; $('gridbox').hidden = true; return; }
     const w = waiters.get(m.id); if (w) { waiters.delete(m.id); w(m); }
   };
+  // Early chart: a grey DRAFT of the most common values in the first rows while the file is read, then the same chart in blue with the counts of every row.
+  let ecFinal = false, ecKey = '';
+  function ecHide() { $('earlychart').hidden = true; ecFinal = false; ecKey = ''; }
+  function ecDraw(key, bars, rows, final) {
+    ecKey = key; const sec = $('earlychart'); sec.hidden = false; sec.className = final ? 'final' : '';
+    const mx = Math.max(1, ...bars.map((b) => b[1]));
+    $('ecnote').innerHTML = (final ? '' : '<span class="ecbadge">DRAFT</span>') + 'Most common values in <b>' + esc(key) + '</b>, ' + (final ? 'all ' + rows.toLocaleString() + ' rows.' : 'first ' + rows.toLocaleString() + ' rows so far. It turns blue when the whole file is read.');
+    $('ecbars').innerHTML = bars.map((b) => '<div class="ecrow"><span title="' + esc(b[0]) + '">' + esc(b[0] || '(empty)') + '</span><div><i></i></div><b>' + b[1].toLocaleString() + '</b></div>').join('');
+    $('ecbars').querySelectorAll('i').forEach((el, j) => { el.style.width = (100 * bars[j][1] / mx).toFixed(1) + '%'; });   // set from script: the page's style rules forbid inline style attributes
+  }
+  async function ecLive() {
+    if (!ecKey || ecFinal) return; const key = ecKey; ecFinal = true;
+    try { const r = await call({ type: 'groupby', key, aggs: [{ fn: 'count' }], filters: {} }); if (r.type === 'grouped') ecDraw(key, r.rows.slice(0, 8).map((x) => [x[0], +x[1]]), r.rowsUsed, true); else ecHide(); } catch { ecHide(); }
+  }
   let fwGuess = '', fwAuto = false, liveHook = null, liveDone = null, liveSeen = 0, encNote = '';
   worker.onerror = (e) => status('Worker stopped: ' + (e.message || 'unknown error'), true);
 
@@ -47,7 +63,7 @@
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => { await call({ type: 'delete', name: b.dataset.del }); refresh(); }));
   }
   async function runImport(file, inline, opts) {
-    $('go').disabled = true; $('selftest').disabled = true; $('cancel').hidden = false; $('prog').hidden = false; $('prog').value = 0;
+    ecHide();     $('go').disabled = true; $('selftest').disabled = true; $('cancel').hidden = false; $('prog').hidden = false; $('prog').value = 0;
     const id = 'j' + (++seq); active = id;
     const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage(Object.assign({ type: 'import', id, file, delimiter: $('delim').value, widths: ($('fwbox') && !$('fwbox').hidden && $('fwidths').value) || '', inline: !!inline || /[?&]inline=1/.test(location.search) }, opts || {})); });
     active = null; $('cancel').hidden = true; $('prog').hidden = true; $('selftest').disabled = false; $('go').disabled = !$('file').files.length;
@@ -468,7 +484,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0742 (LFC-pack 0.14.10)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0921 (LFC-pack 0.14.10)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }

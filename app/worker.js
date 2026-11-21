@@ -2310,6 +2310,22 @@ async function importOnce(m) {
         colFlush = async () => { if (cq.length) await sendCols(); while (pumping) await pumping; if (pumpErr) throw pumpErr; };
         // Early view: the grid opens on the first parsed chunks and the row count grows while the file is still being read (a preview: no sort or filter until the end).
         const pvStarts = [0], pvDec = new TextDecoder(); let pvSent = 0, pvKind = null, pvOn = liveChunks !== null && m.preview !== false;
+        // Early chart (draft): the first column with 2 to 12 different words is counted from the chunks read so far, at most every 250 ms, each chunk once. The page draws it grey and marks it DRAFT; the final counts come from the group-by when the file is read.
+        let ecK = -2, ecDone = 0, ecRows = 0, ecSent = 0; const ecMap = new Map();
+        const ecTick = (now) => {
+          if (ecK === -1 || now - ecSent < 250) return;
+          const chunks = liveChunks;
+          if (ecK === -2) { for (let k = 0; k < colHeaders.length; k++) { const x = chunks[0].cols[k]; if (!pvKind[k] && x && x.codes && x.lb && x.lb.start.length >= 2 && x.lb.start.length <= 12) { ecK = k; break; } } if (ecK === -2) { ecK = -1; return; } }
+          for (; ecDone < chunks.length; ecDone++) {
+            const ch = chunks[ecDone], x = ch.cols[ecK]; if (!x || !x.codes) { ecK = -1; send('earlyChart', null, { off: true }); return; }
+            const lb = x.lb, nl = lb.start.length, cnt = new Uint32Array(nl), cd = x.codes;
+            for (let i = 0; i < ch.n; i++) { const q = cd[i]; if (q < nl) cnt[q]++; }
+            for (let q = 0; q < nl; q++) if (cnt[q]) { const w = pvDec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); ecMap.set(w, (ecMap.get(w) || 0) + cnt[q]); }
+            ecRows += ch.n;
+            if (ecMap.size > 12) { ecK = -1; send('earlyChart', null, { off: true }); return; }
+          }
+          ecSent = now; send('earlyChart', null, { key: colHeaders[ecK], rows: ecRows, bars: [...ecMap].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 8) });
+        };
         const pvTick = () => {
           const total = pvStarts[pvStarts.length - 1], now = performance.now();
           if (!pvKind) {
@@ -2320,6 +2336,7 @@ async function importOnce(m) {
             view = { name, preview: true, pv, total, columns, R: null, f: null, rows: null, indices: null, filtered: false, cols: new Map(), flat: true, cache: new Map() };
             send('preview', m.id, { name, total, columns }); pvSent = now; return;
           }
+          try { ecTick(now); } catch { ecK = -1; }
           if (view && view.preview && now - pvSent >= 250) { view.total = total; send('previewGrow', m.id, { total }); pvSent = now; }
         };
         // A wide live table that meets a text-like cell in a number column does not start over: the column becomes text in every chunk read so far (the number's text is exactly the file's text, see typedCell

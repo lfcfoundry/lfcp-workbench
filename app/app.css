@@ -16,3 +16,10 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 .gr{display:flex;height:28px;line-height:28px;padding-left:var(--pad,0)}.gc{flex:0 0 11rem;padding:0 .5rem;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:1px solid var(--line);font-size:.9rem}
 .gc.num{color:var(--mut);text-align:right}.hint{color:var(--mut);font-size:.85rem}
 .nowrap{white-space:nowrap}#fmts{color:var(--mut);font-size:.9rem}#fmts summary{cursor:pointer}#fmts p{margin:.3rem 0 0}
+
+#earlychart{--ecbar:#8a8f94}#earlychart.final{--ecbar:var(--acc)}
+@media(prefers-color-scheme:dark){#earlychart{--ecbar:#7b8187}#earlychart.final{--ecbar:var(--acc)}}
+.ecrow{display:grid;grid-template-columns:minmax(5rem,12rem) 1fr 6rem;align-items:center;gap:.5rem;font-size:.9rem}
+.ecrow span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ecrow div{min-width:0}.ecrow i{display:block;height:1rem;background:var(--ecbar);border-radius:2px;min-width:2px}
+.ecrow b{font-weight:400;color:var(--mut);text-align:right}
+.ecbadge{display:inline-block;padding:0 .4rem;border:1px solid var(--bad);border-radius:3px;font-weight:700;font-size:.75rem;letter-spacing:.05em;color:var(--bad);margin-right:.4rem}
