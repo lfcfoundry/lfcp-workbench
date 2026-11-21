@@ -23,7 +23,7 @@
     if (m.type === 'previewGrow') { if (G.preview) previewGrow(m); return; }
     if (m.type === 'live') ecLive();
     if (m.type === 'live' && G.preview && !liveHook) { liveSeen = performance.now(); liveDone = finishPreview(m); return; }
-    if (m.type === 'live') { liveSeen = performance.now(); liveDone = (liveHook || ((x) => { status('Reading while the file is saved…'); return openGrid(x.name); }))(m); return; }   // the worker has parsed the file and keeps the columns: the grid can open before the save ends
+    if (m.type === 'live') { liveSeen = performance.now(); liveDone = (liveHook || ((x) => { status('Ready to use. Storing a copy in this browser…'); return openGrid(x.name); }))(m); return; }   // the worker has parsed the file and keeps the columns: the grid can open before the save ends
     if (m.type === 'liveclosed') { G.preview = false; $('gridbox').hidden = true; return; }
     const w = waiters.get(m.id); if (w) { waiters.delete(m.id); w(m); }
   };
@@ -110,7 +110,7 @@
   }
   async function finishPreview(m) {   // the file is read: the same grid, now with all rows, sort and filter; the place in the list is kept
     G.preview = false; Object.assign(G, { cols: m.columns, count: m.total, total: m.total, start: -1 });
-    fillTools(); buildHead(); $('gridspace').style.height = spaceHeight() + 'px'; gridInfo(); status('Reading while the file is saved…'); await loadWindow();
+    fillTools(); buildHead(); $('gridspace').style.height = spaceHeight() + 'px'; gridInfo(); status('Ready to use. Storing a copy in this browser…'); await loadWindow();
   }
   function gridInfo() { $('gridinfo').textContent = G.count.toLocaleString() + ' of ' + G.total.toLocaleString() + ' rows' + (G.preview ? ' so far (still reading the file)' : '') + (G.sort ? ', sorted by ' + G.sort.col + (G.sort.dir === 'desc' ? ' (high to low)' : ' (low to high)') : ''); }
   async function applyQuery() {
@@ -484,7 +484,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.1044 (LFC-pack 0.14.10)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.1526 (LFC-pack 0.14.10)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }
