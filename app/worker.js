@@ -2067,31 +2067,42 @@ function makeNormalizer(o) {
   return { feed, end: () => take(true), stats: st };
 }
 const NORMALIZE_ERR = /^(Line \d+: )?(Row has \d+ fields|Unexpected text after a closing quote|A quote may only start|The header has more)/;
-// Space-separated lists where a quote mark is only a character (pageview dumps): rows without a quote pass through as slices of the original file; only rows with a quote are rewritten (the field is quoted, its quotes doubled).
-async function quoteRewrite(file, D) {
-  const parts = []; let ob = new Uint8Array(1 << 20), op = 0, got = 0, pending = null;
+// Space-separated lists where a quote mark is only a character (pageview dumps): lines that are already regular (no quote, no CR, the right number of fields) pass through as slices of the original
+// file; only the other lines are rewritten (blank lines dropped, short rows filled, extra cells cut, fields with a quote quoted with the quotes doubled), the same result as the thorough tidy.
+// Returns null when the header is not a regular line (the thorough tidy handles that).
+async function quoteRewrite(file, D, width) {
+  const parts = []; let ob = new Uint8Array(1 << 20), op = 0, got = 0, pending = null, first = true;
+  const cnt = { padded: 0, truncated: 0 };
   const flushOb = () => { if (op) { parts.push(ob.slice(0, op)); op = 0; } };
   const ensure = (n) => { if (op + n > ob.length) { flushOb(); if (n > ob.length) ob = new Uint8Array(n * 2); } };
-  const fix = (b, ls, le, nl) => {   // one line, b[ls..le) without its newline
-    ensure((le - ls) * 2 + 8); const e2 = le > ls && b[le - 1] === 13 ? le - 1 : le; let fs = ls;
+  const fix = (b, ls, le) => {   // one line b[ls..le) without its newline
+    const e2 = le > ls && b[le - 1] === 13 ? le - 1 : le; if (e2 === ls) return;   // blank line: dropped
+    ensure((e2 - ls) * 2 + width + 16); let fs = ls, k = 0;
     for (let j = ls; j <= e2; j++) {
       if (j === e2 || b[j] === D) {
-        let q = false; for (let x = fs; x < j; x++) if (b[x] === 34) { q = true; break; }
-        if (q) { ob[op++] = 34; for (let x = fs; x < j; x++) { const c = b[x]; ob[op++] = c; if (c === 34) ob[op++] = 34; } ob[op++] = 34; } else { ob.set(b.subarray(fs, j), op); op += j - fs; }
-        if (j < e2) ob[op++] = D; fs = j + 1;
+        if (k < width) {
+          if (k) ob[op++] = D;
+          let q = false; for (let x = fs; x < j; x++) if (b[x] === 34) { q = true; break; }
+          if (q) { ob[op++] = 34; for (let x = fs; x < j; x++) { const c = b[x]; ob[op++] = c; if (c === 34) ob[op++] = 34; } ob[op++] = 34; } else { ob.set(b.subarray(fs, j), op); op += j - fs; }
+        }
+        k++; fs = j + 1;
       }
     }
-    if (e2 < le) ob[op++] = 13; if (nl) ob[op++] = 10;
+    if (k < width) { for (let x = k; x < width; x++) ob[op++] = D; cnt.padded++; } else if (k > width) cnt.truncated++;
+    ob[op++] = 10;
   };
   const run = (b, a, z, base) => { const n = z - a; if (n >= 262144) { flushOb(); parts.push(file.slice(base + a, base + z)); } else if (n > 0) { ensure(n); ob.set(b.subarray(a, z), op); op += n; } };
-  const region = (b, cut, base, last) => {
-    let rs = 0, pos = 0;
-    for (;;) {
-      const p = pos < cut ? b.indexOf(34, pos) : -1; if (p < 0 || p >= cut) break;
-      const ls = p === 0 ? 0 : b.lastIndexOf(10, p - 1) + 1; let le = b.indexOf(10, p); if (le < 0 || le >= cut) le = cut - (last ? 0 : 1);
-      run(b, rs, ls, base); fix(b, ls, le, !last || le < cut); rs = Math.min(le + 1, cut); pos = rs;
-    }
-    run(b, rs, cut, base);
+  const scan = (b, cut, base, last) => {
+    let rs = 0, ls = 0, n = 0, q = false, cr = false;
+    const end = (i) => {
+      const clean = i > ls && !q && !cr && n + 1 === width;
+      if (first && i > ls) { if (!clean) return false; first = false; }
+      if (!clean) { run(b, rs, ls, base); fix(b, ls, i); rs = i + 1; }
+      ls = i + 1; n = 0; q = false; cr = false; return true;
+    };
+    for (let i = 0; i < cut; i++) { const c = b[i]; if (c === D) n++; else if (c === 10) { if (!end(i)) return false; } else if (c === 34) q = true; else if (c === 13) cr = true; }
+    if (last && ls < cut && !end(cut)) return false;
+    run(b, rs, cut, base); return true;
   };
   const rd = file.stream().getReader();
   for (;;) {
@@ -2099,24 +2110,31 @@ async function quoteRewrite(file, D) {
     let b = value; if (pending) { b = new Uint8Array(pending.length + value.length); b.set(pending, 0); b.set(value, pending.length); }
     got += value.length; const base = got - b.length, cut = b.lastIndexOf(10) + 1;
     if (cut === 0) { pending = b; continue; }
-    region(b, cut, base, false); pending = cut < b.length ? b.slice(cut) : null;
+    if (!scan(b, cut, base, false)) { rd.cancel().catch(() => {}); return null; }
+    pending = cut < b.length ? b.slice(cut) : null;
   }
-  if (pending) region(pending, pending.length, got - pending.length, true);
-  flushOb(); return parts;
+  if (pending && !scan(pending, pending.length, got - pending.length, true)) return null;
+  flushOb(); return { parts, cnt };
 }
 async function normalizeFile(file, delimiter, slow) {
   const sample = new Uint8Array(await file.slice(0, 4 << 20).arrayBuffer()); let s0 = 0; if (sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF) s0 = 3;
   const comments = sample[s0] === 35, text = new TextDecoder().decode(sample);
-  const bs = /\\["\\,;\t|]/.test(text.slice(0, 4 << 20));
+  let bs = /\\["\\,;\t|]/.test(text.slice(0, 4 << 20));
   let dch = delimiter && delimiter !== 'auto' ? delimiter : null;
   if (!dch) { await loadCore(); dch = core.detectDelimiter(comments ? text.split(/\r?\n/).filter((l) => l && l[0] !== '#').join('\n') : text); }
   const D = dch.charCodeAt(0); let dry = makeNormalizer({ delim: D, comments, backslash: bs }); dry.feed(sample.subarray(0, sample.length)); dry.end();
   const wfQuoted = D === 32 && /(?:^|\x20)"[^"\n]*\x20[^"\n]*"(?=\x20|\r?$)/m.test(text);   // a quoted field that holds a space and closes on its own line; a stray opening quote ("Foo ...) is not one
-  let noQuote = false; if (D === 32 && (dry.stats.quotedDelim === 0 || !wfQuoted)) { noQuote = true; dry = makeNormalizer({ delim: D, comments, backslash: bs, noQuote }); dry.feed(sample.subarray(0, sample.length)); dry.end(); }   // space-separated text (pageview lists): when no quoted field holds a space, a quote is just a character
+  let noQuote = false; if (D === 32 && (dry.stats.quotedDelim === 0 || !wfQuoted)) { bs = false;   // backslashes are plain characters in such lists (titles can hold them)
+    noQuote = true; dry = makeNormalizer({ delim: D, comments, backslash: bs, noQuote }); dry.feed(sample.subarray(0, sample.length)); dry.end(); }   // space-separated text (pageview lists): when no quoted field holds a space, a quote is just a character
   const ds = dry.stats; if (!ds.rows || (!comments && !bs && ds.rows >= 20 && ds.padded + ds.truncated > 0.3 * ds.rows)) return null;   // too irregular to be a tidy-able table: report the original error
-  if (noQuote && !slow && !comments && !bs && ds.padded <= (sample.length >= (4 << 20) ? 1 : 0) && !ds.truncated && !ds.blank && !ds.escapes && !ds.headerPad) {
-    const fp = await quoteRewrite(file, D);
-    return { file: new File(fp, String(file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), delimiter: dch, text: 'This file had irregular rows, so it was tidied first: blank lines removed.', fast: true };
+  if (noQuote && !slow && !comments && ds.maxFields > 1 && !(sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF)) {
+    const qr = await quoteRewrite(file, D, ds.maxFields);
+    if (qr) {
+      const bits = [], st = qr.cnt;
+      if (st.padded) bits.push(st.padded + ' short row' + (st.padded === 1 ? '' : 's') + ' filled with empty cells');
+      if (st.truncated) bits.push(st.truncated + ' row' + (st.truncated === 1 ? ' had' : 's had') + ' more cells than the widest rows seen early in the file, and the extra cells were left out');
+      return { file: new File(qr.parts, String(file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), delimiter: dch, text: 'This file had irregular rows, so it was tidied first: ' + (bits.join(', ') || 'blank lines removed') + '.', fast: true };
+    }
   }
   const nz = makeNormalizer({ delim: D, comments, backslash: bs, noQuote, width: ds.maxFields }), parts = []; let acc = [], accN = 0;
   const put = (b) => { if (!b) return; acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
