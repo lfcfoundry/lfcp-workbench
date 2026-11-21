@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>packWorkers sweep tester</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+:root{--bg:#fff;--fg:#1b1b1b;--mut:#666;--line:#ddd;--acc:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#161616;--fg:#eee;--mut:#aaa;--line:#333}}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,sans-serif;margin:0 auto;max-width:760px;padding:16px}
+h1{font-size:20px;margin:0 0 6px}p{margin:6px 0}
+button{font:inherit;padding:8px 14px;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:6px;cursor:pointer;margin:4px 6px 4px 0}
+button.go{border-color:var(--acc);color:var(--acc);font-weight:600}
+#panel{border:1px solid var(--line);border-radius:6px;padding:10px;margin:12px 0;font-variant-numeric:tabular-nums}
+pre{white-space:pre-wrap;border:1px solid var(--line);border-radius:6px;padding:10px;font-size:13px}
+.mut{color:var(--mut)}
+</style></head><body>
+<h1>packWorkers sweep tester</h1>
+<p class="mut">Times the Workbench CSV import (main 1f0f958, live import) with the option <b>packWorkers</b> set to 1, 2, 3, 4, 6 and 8, everything else default. Cells: taxi-shaped CSV (1,500,000 rows, about 160 MB, made in this page, synthetic) and the same CSV as a one-entry zip (made in this page). 3 runs per value and cell, the order of the values rotates each run. The results include your core count and memory. Takes about 5 to 8 minutes. Close other tabs and keep this one in front. Nothing leaves your computer.</p>
+<p>Optional: pick your own real files instead. CSV: <input type="file" id="fcsv"> zip (single entry): <input type="file" id="fzip"></p>
+<p><button class="go" id="run">Run test</button><button id="copy" disabled>Copy results</button></p>
+<div id="panel">Ready.</div>
+<pre id="out"></pre>
+<script>
+'use strict';
+const Q = new URLSearchParams(location.search), ROWS = +(Q.get('rows') || 1500000), VALS = [1, 2, 3, 4, 6, 8], RUNS = +(Q.get('runs') || 3), NROWS = ROWS;
+const $ = (id) => document.getElementById(id);
+const log = []; let finished = 0, last = '', t0 = 0, tEnd = 0, section = '', step = '';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function panel() { $('panel').textContent = 'Section ' + section + '\nStep: ' + step + '\nElapsed: ' + (((tEnd || performance.now()) - t0) / 1000).toFixed(0) + ' s   Timings finished: ' + finished + '\nLast timing: ' + (last || 'none yet'); }
+const tick = setInterval(() => { if (t0 && !tEnd) panel(); }, 500);
+function rng(seed) { let s = seed >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function pad(n) { return n < 10 ? '0' + n : '' + n; }
+let NROWS = 0;
+const HDR = 'VendorID,tpep_pickup_datetime,tpep_dropoff_datetime,passenger_count,trip_distance,RatecodeID,store_and_fwd_flag,PULocationID,DOLocationID,payment_type,fare_amount,extra,mta_tax,tip_amount,tolls_amount,improvement_surcharge,total_amount,congestion_surcharge,Airport_fee';
+function* rows() {
+  const r = rng(12345); let ts = Date.UTC(2024, 0, 1);
+  for (let i = 0; i < NROWS; i++) {
+    ts += Math.floor(r() * 4000); const d = new Date(ts), dur = 120000 + Math.floor(r() * 2400000), e = new Date(ts + dur);
+    const f = (x) => x.getUTCFullYear() + '-' + pad(x.getUTCMonth() + 1) + '-' + pad(x.getUTCDate()) + ' ' + pad(x.getUTCHours()) + ':' + pad(x.getUTCMinutes()) + ':' + pad(x.getUTCSeconds()) + '.000000';
+    const dist = Math.round(r() * r() * 2500) / 100, fare = Math.round((3 + dist * 2.6 + r() * 4) * 10) / 10;
+    const pay = r() < 0.75 ? 1 : (r() < 0.8 ? 2 : (r() < 0.5 ? 3 : 4)), tip = pay === 1 ? Math.round(fare * r() * 0.3 * 100) / 100 : 0;
+    yield { VendorID: r() < 0.7 ? 2 : 1, tpep_pickup_datetime: f(d), tpep_dropoff_datetime: f(e), passenger_count: 1 + Math.floor(r() * r() * 5), trip_distance: dist, RatecodeID: r() < 0.9 ? 1 : 2 + Math.floor(r() * 4), store_and_fwd_flag: r() < 0.97 ? 'N' : 'Y', PULocationID: 1 + Math.floor(r() * 263), DOLocationID: 1 + Math.floor(r() * 263), payment_type: pay, fare_amount: fare, extra: r() < 0.5 ? 1 : 0, mta_tax: 0.5, tip_amount: tip, tolls_amount: r() < 0.95 ? 0 : Math.round(r() * 1500) / 100, improvement_surcharge: 1, total_amount: Math.round((fare + tip + 2.5) * 100) / 100, congestion_surcharge: r() < 0.9 ? 2.5 : 0, Airport_fee: r() < 0.93 ? 0 : 1.75 };
+  }
+}
+async function makeFileX(name, array, csv) {
+
+  const dir = await navigator.storage.getDirectory(); const fh = await dir.getFileHandle(name, { create: true }); const w = await fh.createWritable();
+  let buf = [], n = 0; if (array) buf.push('['); if (csv) buf.push(HDR + '\n');
+  for (const row of rows()) { buf.push(csv ? Object.values(row).join(',') + '\n' : (array && n ? ',' : '') + JSON.stringify(row) + (array ? '' : '\n')); n++; if (buf.length >= 20000) { await w.write(buf.join('')); buf = []; step = 'making ' + name + ' (' + n + ' of ' + NROWS + ' rows)'; await sleep(0); } }
+  if (array) buf.push(']'); await w.write(buf.join('')); await w.close(); return fh.getFile();
+}
+async function wipeWorkbench() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }); } catch (e) { /* none yet */ } }
+
+const CT = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crcUpdate(c, b) { for (let i = 0; i < b.length; i++) c = CT[(c ^ b[i]) & 255] ^ (c >>> 8); return c; }
+async function makeZip(csvFile, zname) {
+  step = 'making zip (checksum pass)'; let crc = 0xFFFFFFFF; const rd = csvFile.stream().getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; crc = crcUpdate(crc, value); } crc = (crc ^ 0xFFFFFFFF) >>> 0;
+  step = 'making zip (compressing)'; const cs = csvFile.stream().pipeThrough(new CompressionStream('deflate-raw')); const parts = []; let csz = 0; const rd2 = cs.getReader(); for (;;) { const { done, value } = await rd2.read(); if (done) break; parts.push(value); csz += value.length; }
+  const name = new TextEncoder().encode('taxi.csv'), usz = csvFile.size, big = usz > 0xFFFFFFFE || csz > 0xFFFFFFFE; if (big) throw new Error('zip too large for this simple writer');
+  const lh = new DataView(new ArrayBuffer(30)); lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(8, 8, true); lh.setUint32(14, crc, true); lh.setUint32(18, csz, true); lh.setUint32(22, usz, true); lh.setUint16(26, name.length, true);
+  const cd = new DataView(new ArrayBuffer(46)); cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true); cd.setUint16(10, 8, true); cd.setUint32(16, crc, true); cd.setUint32(20, csz, true); cd.setUint32(24, usz, true); cd.setUint16(28, name.length, true);
+  const cdOff = 30 + name.length + csz, eo = new DataView(new ArrayBuffer(22)); eo.setUint32(0, 0x06054b50, true); eo.setUint16(8, 1, true); eo.setUint16(10, 1, true); eo.setUint32(12, 46 + name.length, true); eo.setUint32(16, cdOff, true);
+  const blob = new Blob([lh, name, ...parts, cd, name, eo]); const dir = await navigator.storage.getDirectory(); const fh = await dir.getFileHandle(zname, { create: true }); const w = await fh.createWritable(); await w.write(blob); await w.close(); return fh.getFile();
+}
+async function makeCsv(name) { NROWS = ROWS; return makeFile(name, false, true); }
+async function wipeWorkbench() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }); } catch (e) { /* none yet */ } }
+function importOnce(pw, file) {
+  return new Promise((resolve) => {
+    const w = new Worker('build/app/worker.js'); const T0 = performance.now(); let done = false;
+    const fin = (r) => { if (done) return; done = true; w.terminate(); resolve(r); };
+    w.onmessage = (e) => { const m = e.data || {}; if (m.id !== 'j1') return; if (m.type === 'done') fin({ ms: Math.round(performance.now() - T0), rows: m.dataset && m.dataset.rows, timing: m.dataset && m.dataset.timing }); else if (m.type === 'error' || m.type === 'cancelled') fin({ err: m.message || m.type }); };
+    w.onerror = (e) => fin({ err: 'worker error: ' + (e.message || e.filename || '?') });
+    w.postMessage({ id: 'j1', type: 'import', file, delimiter: 'auto', live: true, packWorkers: pw });
+  });
+}
+const med = (a) => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+async function run() {
+  $('run').disabled = true; t0 = performance.now(); tEnd = 0; log.length = 0; finished = 0; last = '';
+  const res = {};
+  try {
+    await wipeWorkbench(); section = '1 of 2 (CSV)'; step = 'preparing the CSV';
+    const csv = $('fcsv').files[0] || await makeCsv('e2e-input.csv'); const made = !$('fcsv').files[0];
+    let zip = $('fzip').files[0]; const cells = [['CSV', csv]];
+    for (let c = 0; c < 2; c++) {
+      if (c === 1) { section = '2 of 2 (zip)'; if (!zip) zip = await makeZip(csv, 'e2e-input.zip'); cells.length = 0; cells.push(['zip', zip]); }
+      const [label, file] = cells[0]; res[label] = {}; for (const v of VALS) res[label][v] = []; const marks = {};
+      for (let r = 0; r < RUNS; r++) for (let k = 0; k < VALS.length; k++) {
+        const pw = VALS[(k + r * 2) % VALS.length]; step = 'run ' + (r + 1) + ' of ' + RUNS + ', packWorkers ' + pw + ' (' + (k + 1) + ' of ' + VALS.length + ')'; await wipeWorkbench(); await sleep(300);
+        const x = await importOnce(pw, file);
+        if (x.err) { log.push(label + ' pw' + pw + ' run ' + (r + 1) + ': ERROR ' + x.err); last = 'error ' + x.err; continue; }
+        res[label][pw].push(x.ms); finished++; last = label + ' packWorkers ' + pw + ' ' + x.ms + ' ms (' + x.rows + ' rows)'; log.push(last + ' timing ' + JSON.stringify(x.timing));
+      }
+    }
+    const d = await navigator.storage.getDirectory(); for (const n of ['e2e-input.csv', 'e2e-input.zip']) { try { await d.removeEntry(n); } catch (e) {} } await wipeWorkbench();
+  } catch (e) { log.push('FAILED: ' + (e && e.message || e)); }
+  const lines = ['packWorkers sweep (Workbench main 1f0f958, live import)', 'Browser: ' + navigator.userAgent, 'Cores: ' + navigator.hardwareConcurrency + '   deviceMemory: ' + (navigator.deviceMemory || 'n/a'), 'Rows: ' + ROWS + ' (when made here)   Runs per value: ' + RUNS, 'Detroit time: ' + new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }), ''];
+  for (const label of Object.keys(res)) { const r = res[label], base = r[1].length ? med(r[1]) : 0;
+    for (const v of VALS) if (r[v].length) lines.push(label + ' packWorkers ' + v + ': median ' + med(r[v]) + ' ms (mean ' + Math.round(mean(r[v])) + ')' + (base ? '  ' + (((med(r[v]) / base - 1) * 100) >= 0 ? '+' : '') + ((med(r[v]) / base - 1) * 100).toFixed(1) + '% vs 1' : '') + '  runs: ' + r[v].join(', '));
+    lines.push(''); }
+  lines.push('Raw:'); for (const l of log) lines.push('  ' + l);
+  $('out').textContent = lines.join('\n'); tEnd = performance.now(); clearInterval(tick); step = 'finished'; $('copy').disabled = false; $('run').disabled = false; panel();
+}
+$('run').onclick = run;
+$('copy').onclick = async () => { const t = $('out').textContent; try { await navigator.clipboard.writeText(t); } catch (e) { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy results'; }, 1500); };
+</script></body></html>
