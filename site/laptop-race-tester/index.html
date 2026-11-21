@@ -37,11 +37,13 @@ svg{display:block;width:100%;height:auto}svg text{font-family:var(--font)}
 details{margin:0 0 14px}summary{cursor:pointer;font-weight:600;padding:6px 0}
 textarea{width:100%;font:12.5px/1.45 var(--mono);padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--soft);color:var(--fg);margin:8px 0 0}
 label{display:block;margin:4px 0}
+.verbar{margin-top:12px;display:inline-block;padding:8px 14px;border-radius:10px;background:rgba(255,255,255,.12);font-weight:600}
+.verbar.old{background:var(--bad);color:#fff;display:block;font-size:18px;padding:14px 16px}.verbar button{margin:8px 0 0;min-height:44px;background:#fff;color:#1b2433}
 .key{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted);margin:0 0 8px}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.1554, a fresh page for every run</span></p></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.1615, a fresh page for every run</span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -273,6 +275,15 @@ $('stop').onclick = () => { if (ST) { ST.stopped = true; saveState(); } $('stop'
 $('copy').onclick = () => copyText($('out').value);
 $('save').onclick = () => downloadText($('out').value);
 // threaded DuckDB needs shared memory: a small service worker adds the two headers, then the page reloads once
+try { localStorage.removeItem('ltReport'); } catch (e) { /* earlier versions kept the last results here */ }
+(async () => {   // is this the newest page? A tab left open from an older version, or an old cached copy, shows up here
+  const vb = $('verbar'), mine = (/version ([\d.]+)/.exec($('ver').textContent) || [])[1] || '?';
+  try {
+    const t = await (await fetch('./index.html?fresh=' + Date.now(), { cache: 'no-store' })).text(), m = /id="ver">version ([\d.]+)/.exec(t);
+    if (m && m[1] !== mine) { vb.className = 'verbar old'; vb.innerHTML = 'OLD PAGE: you are on version ' + mine + ', the newest is ' + m[1] + '. Do not run this one.<br><button id="newer">Load the newest version</button>'; $('newer').onclick = () => { location.href = location.pathname + '?v=' + m[1] + '&t=' + Date.now(); }; busy(true); }
+    else vb.textContent = 'Version ' + mine + (m ? ' (the newest)' : '');
+  } catch (e) { vb.textContent = 'Version ' + mine + ' (could not check for a newer one)'; }
+})();
 (async () => {
   threadedOk = !!self.crossOriginIsolated;
   if (!threadedOk && 'serviceWorker' in navigator && !Q.get('nothreads')) {
