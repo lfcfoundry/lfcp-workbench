@@ -22,4 +22,4 @@ table{border-collapse:collapse;font-size:.9rem;width:100%}th,td{border-bottom:1p
 .ecrow{display:grid;grid-template-columns:minmax(5rem,12rem) 1fr 6rem;align-items:center;gap:.5rem;font-size:.9rem}
 .ecrow span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ecrow div{min-width:0}.ecrow i{display:block;height:1rem;background:var(--ecbar);border-radius:2px;min-width:2px}
 .ecrow b{font-weight:400;color:var(--mut);text-align:right}
-.ecbadge{display:inline-block;padding:0 .4rem;border:1px solid var(--ecbar);border-radius:3px;font-weight:600;font-size:.75rem;letter-spacing:.05em;color:var(--mut);margin-right:.4rem}
+.ecbadge{display:inline-block;padding:0 .4rem;border:1px solid var(--bad);border-radius:3px;font-weight:700;font-size:.75rem;letter-spacing:.05em;color:var(--bad);margin-right:.4rem}
