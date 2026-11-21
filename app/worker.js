@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.14.2/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.14.6/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -250,8 +250,18 @@ function slowRows(headers, plan, trackers, typedCell, typedDecimal, sink, dictOn
   };
 }
 const dupText = (x) => { if (x.start.buffer === x.end.buffer) { const b = x.start.buffer.slice(0); return { bytes: x.bytes.slice(), start: new Int32Array(b, 0, x.start.length), end: new Int32Array(b, 4, x.end.length) }; } return { bytes: x.bytes.slice(), start: x.start.slice(), end: x.end.slice() }; };   // a text chunk shares one offsets array between start and end: the copy does too
+// One buffer for a whole chunk: a wide file makes chunks of 100+ columns, each with 2 or 3 small arrays; handing 700 small buffers to postMessage costs about 9 microseconds each in Chromium
+// (36,000 buffers per 8 MiB piece, 13 s of the helpers' time on a 116-column file), so the arrays of a chunk are copied into one slab and travel as views of it.
+const slabChunk = (c) => {
+  let tot = 0; const add = (a) => { tot += (a.byteLength + 7) & ~7; };
+  for (const x of c.cols) { if (x.codes) { add(x.codes); add(x.lb.bytes); add(x.lb.start); add(x.lb.end); } else if (x.bytes) { add(x.bytes); add(x.start); add(x.end); } else add(x); }
+  const slab = new ArrayBuffer(tot); let off = 0;
+  const mv = (a) => { const v = new a.constructor(slab, off, a.length); v.set(a); off += (a.byteLength + 7) & ~7; return v; };
+  const cols = c.cols.map((x) => (x.codes ? { codes: mv(x.codes), lb: { bytes: mv(x.lb.bytes), start: mv(x.lb.start), end: mv(x.lb.end) } } : x.bytes ? Object.assign({}, x, { bytes: mv(x.bytes), start: mv(x.start), end: mv(x.end) }) : mv(x)));
+  return Object.assign({}, c, { cols, slab });
+};
 const dupChunk = (c) => ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.codes ? { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } } : x.bytes ? dupText(x) : x.slice())) });
-const chunkBuffers = (c) => { const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
+const chunkBuffers = (c) => { if (c.slab) return [c.slab]; const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
 // Dictionary chunk column to the text shape (a code per row to start and end offsets into joined bytes).
 function expandDict(x, n) {
   const lb = x.lb; let tb = 0; for (let r = 0; r < n; r++) { const q = x.codes[r]; tb += lb.end[q] - lb.start[q]; }
@@ -329,7 +339,7 @@ async function packColsJob(m) {
         for (const c of ch) {
           const x = c.cols[k], lb = x.lb, nl = lb.start.length, remap = new Uint32Array(nl);
           for (let q = 0; q < nl; q++) {
-            const sub = lb.bytes.subarray(lb.start[q], lb.end[q]), key = lat.decode(sub); let id = map.get(key);
+            const sub = lb.bytes.subarray(lb.start[q], lb.end[q]), key = sub.length <= 32 ? String.fromCharCode.apply(null, sub) : lat.decode(sub); let id = map.get(key);
             if (id === undefined) { id = map.size; map.set(key, id); parts.push(sub); st.push(tb); tb += sub.length; en.push(tb); }
             remap[q] = id;
           }
@@ -529,6 +539,7 @@ async function segJob(m) {
   try {
     const r = await parseSegment(m);
     if (m.dup) r.chunks2 = r.chunks.map(dupChunk);   // live columns: a second copy made here, in parallel, so the import worker keeps one and forwards the other to the pack workers
+    if (r.chunks && r.chunks.length) { r.chunks = r.chunks.map(slabChunk); if (r.chunks2) r.chunks2 = r.chunks2.map(slabChunk); }
     self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer).concat(...r.chunks.map(chunkBuffers), ...(r.chunks2 || []).map(chunkBuffers)));
   } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed), col: err && err.col != null ? err.col : -1 } }); }
 }
@@ -536,11 +547,12 @@ async function segJob(m) {
 
 // Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
-async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict) {
+async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict, nh) {
+  nh = Math.max(2, Math.min(8, nh | 0 || 2));   // parse helpers: 2 by default; the page option parseHelpers tries more on machines with spare cores
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
-  try { for (let i = 0; i < 2; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; }
+  try { for (let i = 0; i < nh; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; }
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   for (const h of helpers) {
     h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); p.res(d.r); } } };
@@ -569,7 +581,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
     const wait = () => new Promise((r) => waiters.add(r));
     const run = async (h) => {
       while (!quit && nextD < total) {
-        if (nextD >= nextP + SEG_WINDOW) { await wait(); continue; }
+        if (nextD >= nextP + SEG_WINDOW + nh - 2) { await wait(); continue; }
         const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
         done.set(k, await rpc(h, { file, delimiter, headers, plan, dict, cols, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
         signal();
@@ -873,6 +885,7 @@ async function fixedWidthStage(m) {
   else {
     if (m.delimiter && m.delimiter !== 'auto' && !forced) return null;
     const ls = sample.split(/\r?\n/); ls.pop(); const probe = ls.filter((l) => l.trim()).slice(0, 12);
+    if (!forced) { await loadCore(); if (core.spaceDelimited(sample)) return null; }   // single-space separated fields with the same count on every line are a delimited file, not fixed-width
     if (probe.length < 5) { if (forced) throw new Error('Could not find fixed-width columns in this file. Type the column widths, such as 5,12,10,9.'); return null; }
     if (!forced) for (const d of [',', '\t', ';', '|']) { let tot = 0; for (const l of probe) { let q = false, k = 1; for (const c of l) { if (c === '"') q = !q; else if (c === d && !q) k++; } tot += k; } if (tot / probe.length >= 1.5) return null; }
     const g = guessWidths(ls); if (!g) { if (forced) throw new Error('Could not find fixed-width columns in this file. Type the column widths, such as 5,12,10,9.'); return null; } lay = layoutFromGuess(g); guessed = g.starts.slice(1).map((x, i) => x - (i ? g.starts[i] : 0)).join(',');
@@ -1984,7 +1997,7 @@ const columnsOk = (m) => !m.noColumns && typeof WebAssembly !== 'undefined' && (
 // o: delim (byte), comments (bool), backslash (bool), width (0 = take it from the first row)
 function makeNormalizer(o) {
   const D = o.delim, Q = 34, BS = 92, NL = 10, CR = 13;
-  const st = { comments: 0, headerPad: 0, padded: 0, truncated: 0, escapes: 0, blank: 0, rows: 0, maxFields: 0, width: o.width || 0 };
+  const st = { comments: 0, headerPad: 0, padded: 0, truncated: 0, escapes: 0, blank: 0, rows: 0, maxFields: 0, width: o.width || 0, quotedDelim: 0 };
   let fb = new Uint8Array(1 << 16), fn = 0, ob = new Uint8Array(1 << 20), on = 0, doneEnd = 0;
   let needQ = false, fields = 0, rowStart = true, inQ = false, justClosed = false, quoted = false, pendBS = false, bomChecked = false, sawCR = false, skipLine = false, firstRow = true, cutPos = -1;
   const growF = () => { const n = new Uint8Array(fb.length * 2); n.set(fb); fb = n; };
@@ -2031,14 +2044,15 @@ function makeNormalizer(o) {
       if (inQ) {
         if (o.backslash && c === BS) { pendBS = true; continue; }
         if (c === Q) { inQ = false; justClosed = true; continue; }
-        needQ = true; let j = i + 1; while (j < n && !spQ[b[j]]) j++; pushRun(b, i, j); i = j - 1; continue;
+        needQ = true; let j = i + 1; while (j < n && !spQ[b[j]]) j++; if (c === D) st.quotedDelim++; else for (let x = i + 1; x < j; x++) if (b[x] === D) { st.quotedDelim++; break; } pushRun(b, i, j); i = j - 1; continue;
       }
       if (justClosed) { if (c === Q) { inQ = true; justClosed = false; pushF(Q); continue; } justClosed = false; }
       if (c === NL || c === CR) { if (c === NL && sawCR) { sawCR = false; continue; } sawCR = c === CR; finishRow(); continue; }
       sawCR = false;
       if (rowStart) { rowStart = false; if (o.comments && c === 35) { st.comments++; skipLine = true; rowStart = true; continue; } }
       if (c === D) { emit(); continue; }
-      if (c === Q && fn === 0 && !quoted) { inQ = true; quoted = true; continue; }
+      if (c === Q && fn === 0 && !quoted && !o.noQuote) { inQ = true; quoted = true; continue; }
+      if (c === Q) { pushF(c); continue; }   // a quote in the middle of a field is plain text; pushF marks the field for quoting on output
       if (o.backslash && c === BS) { pendBS = true; continue; }
       { let j = i + 1; while (j < n && !spPlain[b[j]]) j++; pushRun(b, i, j); i = j - 1; }
     }
@@ -2058,9 +2072,10 @@ async function normalizeFile(file, delimiter) {
   const bs = /\\["\\,;\t|]/.test(text.slice(0, 4 << 20));
   let dch = delimiter && delimiter !== 'auto' ? delimiter : null;
   if (!dch) { await loadCore(); dch = core.detectDelimiter(comments ? text.split(/\r?\n/).filter((l) => l && l[0] !== '#').join('\n') : text); }
-  const D = dch.charCodeAt(0), dry = makeNormalizer({ delim: D, comments, backslash: bs }); dry.feed(sample.subarray(0, sample.length)); dry.end();
+  const D = dch.charCodeAt(0); let dry = makeNormalizer({ delim: D, comments, backslash: bs }); dry.feed(sample.subarray(0, sample.length)); dry.end();
+  let noQuote = false; if (D === 32 && dry.stats.quotedDelim === 0) { noQuote = true; dry = makeNormalizer({ delim: D, comments, backslash: bs, noQuote }); dry.feed(sample.subarray(0, sample.length)); dry.end(); }   // space-separated text (pageview lists): when no quoted field holds a space, a quote is just a character
   const ds = dry.stats; if (!ds.rows || (!comments && !bs && ds.rows >= 20 && ds.padded + ds.truncated > 0.3 * ds.rows)) return null;   // too irregular to be a tidy-able table: report the original error
-  const nz = makeNormalizer({ delim: D, comments, backslash: bs, width: ds.maxFields }), parts = []; let acc = [], accN = 0;
+  const nz = makeNormalizer({ delim: D, comments, backslash: bs, noQuote, width: ds.maxFields }), parts = []; let acc = [], accN = 0;
   const put = (b) => { if (!b) return; acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
   const rd = file.stream().getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; put(nz.feed(value)); }
   put(nz.end()); if (acc.length) parts.push(new Blob(acc));
@@ -2083,7 +2098,11 @@ async function importOnce(m) {
     const { IngestError, detectDelimiter } = core;
     const file = m.file; if (!file) throw new IngestError('No file was provided.');
     let delimiter = m.delimiter || 'auto';
-    if (delimiter === 'auto') delimiter = detectDelimiter(new TextDecoder().decode(new Uint8Array(await file.slice(0, 65536).arrayBuffer())));
+    let head64 = null; if (delimiter === 'auto' || (!m.blockBytes && !m.parquet)) head64 = new TextDecoder().decode(new Uint8Array(await file.slice(0, 65536).arrayBuffer()));
+    if (delimiter === 'auto') delimiter = detectDelimiter(head64);
+    if (!m.blockBytes && !m.parquet && head64) {   // wide files (40 or more columns) pack in 8 MiB blocks: about 8% smaller and no slower, same first screen and memory
+      const nl = head64.indexOf('\n'), line = nl < 0 ? head64 : head64.slice(0, nl); if (line.split(delimiter).length >= 40) m = Object.assign({}, m, { blockBytes: 8388608 });
+    }
     name = safe(file.name) + '-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: m.parquet ? 'parquet' : delimiter === '\t' ? 'tsv' : 'csv', sourceName: String(file.name).slice(0, 200), sourceBytes: file.size, tables: [{ name: 'rows', rows: 0, columns: [] }] };
@@ -2092,6 +2111,7 @@ async function importOnce(m) {
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     let inlScan = null, packBytes = async (bytes) => { stop(job); const s = performance.now(); if (t.scanPack && !t.flatPack) { inlScan ||= flatTransform(); const sc = inlScan.scan(bytes); for (const k of sc.keys) (t.keys ||= new Set()).add(k); if (sc.maybeBig) { inlScan.reset(0); const tb = inlScan(bytes), bg = inlScan.big(); if (bg) { t.big = (t.big || 0) + bg; bytes = tb; } } } const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
     let dkBlocks = null;
+    let tsJobs = null;
     let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
     const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? 1 : 2);   // live columns: Firefox packs with one worker while parsing (the cores go to the parse helpers) and gets three more when parsing is done; Chromium also packs with one while parsing and gets one more (measured: each is the best of the variants in its browser)   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
@@ -2164,7 +2184,7 @@ async function importOnce(m) {
     }
     let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
     let res = null;
-    if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null);
+    if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null, m.parseHelpers);
     if (!res && !m.ndjson && !m.parquet) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
         if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer, col, (p) => { plan = p; }, m.exact); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
@@ -2186,7 +2206,8 @@ async function importOnce(m) {
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
-    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) view.cols.set(c.name, view.live.column(c.name));   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ if (morePack && m.morePack !== 0) morePack(m.morePack || (isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 1 : 2)); }
+    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) { view.cols.set(c.name, view.live.column(c.name)); (tsJobs ||= []).push([view, c.name, view.live]); }   /* typed seconds for Save are made after 'done' (not on the import's critical path) */   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ const wide = ((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);   // owner laptop (16 cores): Chrome is best at 4 pack workers in all (2 before), Firefox keeps gaining to 6; 4-core machines keep the old counts
+    if (morePack && m.morePack !== 0) morePack(m.morePack || (wide ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 1 : 2)); }
     if (view && view.preview && view.name === name && !(view.live)) { view = null; send('liveclosed', m.id, {}); }
     if (file && file.lazy) await file.settle(); await finishPacking(); if (res.refine) { res.refine(types); for (let i = 0; i < headers.length; i++) { cols[i].type = types[i].type; if (meta.tables[0].columns[i]) meta.tables[0].columns[i].type = types[i].type; } }
     if (res.lateKeys) {   // keys that first appear after the sampled rows become columns too (text type; the packed blocks hold the real values)
@@ -2203,6 +2224,7 @@ async function importOnce(m) {
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
     if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: isFlatFile(R2), live: null }); liveChunks = null; textFromChunks(view); } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
+    if (tsJobs) { const jobs = tsJobs; setTimeout(async () => { for (const [v, nm, L] of jobs) { await yieldNow(); if (view !== v || (v.tsCache && v.tsCache.has(nm))) continue; try { (v.tsCache ||= new Map()).set(nm, L.tsColumn(nm)); } catch { /* Save parses the text instead */ } } }, 0); }
   } catch (err) {
     if (view && (view.live || view.preview) && view.name === name) { view = null; send('liveclosed', m.id, {}); }
     if (writable && !closed) { try { await writable.abort(); } catch {} }
@@ -2350,6 +2372,25 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
       return out;
     },
     column(nm) { const g = this.columnGen(nm); let r; while (!(r = g.next()).done); return r.value; },
+    tsColumn(nm) {   // a fixed-width 'YYYY-MM-DD HH:MM:SS[.000000]' text column as epoch seconds (UTC), read straight from the kept bytes; null when any cell does not fit (then Save uses the text path)
+      const k = headers.indexOf(nm), out = new Float64Array(rows); let at = 0, W = -1, lastKey = -1, lastDays = 0;
+      const days = (Y, M, D) => { const yy = M <= 2 ? Y - 1 : Y, era = Math.floor(yy / 400), yoe = yy - era * 400, doy = Math.floor((153 * (M + (M > 2 ? -3 : 9)) + 2) / 5) + D - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
+      const one = (b, a, e) => {
+        const w = e - a; if (w === 0) return NaN; if (W < 0) W = w; if (w !== W || w < 19 || b[a + 4] !== 45 || b[a + 10] !== 32) return undefined;
+        for (let q = 19; q < w; q++) { if (q === 19 ? b[a + q] !== 46 : b[a + q] !== 48) return undefined; }
+        const c0 = b[a] - 48, c1 = b[a + 1] - 48, c2 = b[a + 2] - 48, c3 = b[a + 3] - 48, c5 = b[a + 5] - 48, c6 = b[a + 6] - 48, c8 = b[a + 8] - 48, c9 = b[a + 9] - 48, c11 = b[a + 11] - 48, c12 = b[a + 12] - 48, c14 = b[a + 14] - 48, c15 = b[a + 15] - 48, c17 = b[a + 17] - 48, c18 = b[a + 18] - 48;
+        if ((c0 >>> 0) > 9 || (c1 >>> 0) > 9 || (c2 >>> 0) > 9 || (c3 >>> 0) > 9 || (c5 >>> 0) > 9 || (c6 >>> 0) > 9 || (c8 >>> 0) > 9 || (c9 >>> 0) > 9 || (c11 >>> 0) > 9 || (c12 >>> 0) > 9 || (c14 >>> 0) > 9 || (c15 >>> 0) > 9 || (c17 >>> 0) > 9 || (c18 >>> 0) > 9) return undefined;
+        const key = (((c0 * 10 + c1) * 10 + c2) * 10 + c3) * 10000 + (c5 * 10 + c6) * 100 + c8 * 10 + c9; if (key !== lastKey) { lastKey = key; lastDays = days(c0 * 1000 + c1 * 100 + c2 * 10 + c3, c5 * 10 + c6, c8 * 10 + c9); }
+        return (lastDays * 24 + c11 * 10 + c12) * 3600 + (c14 * 10 + c15) * 60 + c17 * 10 + c18;
+      };
+      for (const ch of chunks) {
+        const x = ch.cols[k];
+        if (x.codes) { const lb = x.lb, v = new Float64Array(lb.start.length); for (let q = 0; q < v.length; q++) { const r = one(lb.bytes, lb.start[q], lb.end[q]); if (r === undefined) return null; v[q] = r; } for (let r = 0; r < ch.n; r++) out[at++] = v[x.codes[r]]; continue; }
+        const b = x.bytes, st = x.start, en = x.end; for (let r = 0; r < ch.n; r++) { const v = one(b, st[r], en[r]); if (v === undefined) return null; out[at++] = v; }
+      }
+      out.fmt = W < 0 ? null : 'YYYY-MM-DD HH:MM:SS' + (W > 19 ? '.' + 'f'.repeat(W - 20) : '');
+      return out;
+    },
   };
   view = { name, R: null, f: null, total: rows, rows: null, columns: colsMeta, indices: null, filtered: false, cols: nums, flat: true, cache: new Map(), live: L };
   send('live', id, { name, total: rows, columns: colsMeta });
@@ -2685,7 +2726,7 @@ async function groupView(m) {
 // Decode every file column that is not decoded yet in two parallel calls (numbers as typed arrays, text as strings), so a filtered export reads its rows from memory instead of from 450 scattered blocks.
 // Decodes the wanted columns that are not in memory yet, all in one pass (two parallel calls: number columns as typed arrays, text columns as strings; a dictionary column kept from the import costs
 // one lookup per row and no decode). A column another call is already decoding is waited for, never decoded twice (a Save right after the background warm used to start the same decode again).
-const yieldNow = (() => { const mc = new MessageChannel(); let res = null; mc.port1.onmessage = () => { const r = res; res = null; if (r) r(); }; return () => new Promise((r) => { res = r; mc.port2.postMessage(0); }); })();   // a turn for queued messages without the timer delay
+const yieldNow = (() => { const mc = new MessageChannel(), waiting = []; mc.port1.onmessage = () => { const r = waiting.shift(); if (r) r(); }; return () => new Promise((r) => { waiting.push(r); mc.port2.postMessage(0); }); })();   // one queue slot per caller: two callers at once used to overwrite each other and the first never resumed (a Save or sort waiting on a kept column hung)   // a turn for queued messages without the timer delay
 const EARLY_TEXT = true;
 function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
@@ -2774,11 +2815,22 @@ async function exportLfcp(m) {
     for (let start = 0; start < count; start += BATCH) {
       const end = Math.min(count, start + BATCH); let ts = performance.now();
       if (allWarm && LfcPack.packBlock) {   // every column is in memory: gather the batch column by column and pack it as columns (no row objects, no JSON text)
-        const out = {}, n = end - start;
+        const out = {}, n = end - start, fx = view.filtered ? view.indices.subarray(start, end) : null;   // the batch's row numbers are cut out once, not looked up per cell
         for (const c of cols) {
-          const src = view.cols.get(c.name), a = new Array(n);
-          if (ArrayBuffer.isView(src)) { for (let i = 0; i < n; i++) { const x = src[view.filtered ? view.indices[start + i] : start + i]; a[i] = x !== x ? null : x; } }
-          else for (let i = 0; i < n; i++) a[i] = src[view.filtered ? view.indices[start + i] : start + i];
+          const src = view.cols.get(c.name);
+          if (!m.noTs && c.type === 'date' && Array.isArray(src)) {   // date text of a fixed width ('YYYY-MM-DD HH:MM:SS[.000000]') goes to packBlock as { kind: 'ts' } epoch seconds: parsed once for all rows (at the end of a live import from the kept bytes, otherwise here from the strings), the saved rows gathered as a typed copy
+            const tc = view.tsCache || (view.tsCache = new Map()); let col = tc.get(c.name);
+            if (col === undefined) { const t0p = performance.now(); col = new Float64Array(src.length); col.fmt = typeof src[0] === 'string' ? 'YYYY-MM-DD HH:MM:SS' + (src[0].length > 19 ? '.' + 'f'.repeat(src[0].length - 20) : '') : null; for (let r = 0; r < src.length; r++) { const v = src[r]; if (typeof v !== 'string' || v.length < 19 || v.charCodeAt(4) !== 45 || v.charCodeAt(10) !== 32 || v.length !== src[0].length || (v.length > 19 && !/^\.0+$/.test(v.slice(19)))) { col = null; break; }
+                const Y = (v.charCodeAt(0) - 48) * 1000 + (v.charCodeAt(1) - 48) * 100 + (v.charCodeAt(2) - 48) * 10 + v.charCodeAt(3) - 48, M = (v.charCodeAt(5) - 48) * 10 + v.charCodeAt(6) - 48, D = (v.charCodeAt(8) - 48) * 10 + v.charCodeAt(9) - 48, h = (v.charCodeAt(11) - 48) * 10 + v.charCodeAt(12) - 48, mi = (v.charCodeAt(14) - 48) * 10 + v.charCodeAt(15) - 48, se = (v.charCodeAt(17) - 48) * 10 + v.charCodeAt(18) - 48;
+                const yy = M <= 2 ? Y - 1 : Y, era = Math.floor(yy / 400), yoe = yy - era * 400, doy = Math.floor((153 * (M + (M > 2 ? -3 : 9)) + 2) / 5) + D - 1, doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy; col[r] = ((era * 146097 + doe - 719468) * 24 + h) * 3600 + mi * 60 + se; }
+              tc.set(c.name, col); }
+            if (col) { const t = new Float64Array(n); if (fx) { for (let i = 0; i < n; i++) t[i] = col[fx[i]]; } else t.set(col.subarray(start, end)); out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: col.fmt }; continue; }
+          }
+          if (ArrayBuffer.isView(src)) {   // a number column goes to LFC-pack as a typed array, NaN for an empty cell (lfc-pack 0.14.6: 0.86 to 0.91x the time of a plain array with nulls in Chromium, Firefox and WebKitGTK, same bytes)
+            const t = new Float64Array(n); if (fx) { for (let i = 0; i < n; i++) t[i] = src[fx[i]]; } else t.set(src.subarray(start, end));
+            out[c.name] = t; continue;
+          }
+          const a = new Array(n); if (fx) { for (let i = 0; i < n; i++) a[i] = src[fx[i]]; } else for (let i = 0; i < n; i++) a[i] = src[start + i];
           out[c.name] = a;
         }
         tm.rows += performance.now() - ts; ts = performance.now();
@@ -3337,14 +3389,17 @@ async function parseParquet(file, job, progress, t, write, packer, col, setPlan,
   const closeAll = () => { helpers.forEach((h) => h.terminate()); ph.forEach((h) => h.terminate()); };
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   try { for (let i = 0; i < nw; i++) helpers.push(mkWorker()); } catch { closeAll(); throw new Error('Parquet files need worker threads, and this page cannot start them.'); }
-  const spare = col ? 0 : (hw > 4 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8)) ? Math.min(8, hw - 1 - nw) : 0, PARTS = spare > 0 ? 1 + Math.ceil(spare / nw) : 1;
+  // Pack pool (owner laptop runs: taxi 16 cores k=4 best, SBA 16 cores k=8 best): a decoded group is cut into k row ranges, k = min(floor(workers / row groups), POOL_K_MAX), and no range may hold fewer than POOL_CELLS (about 2M after the SBA laptop run) cells (rows x columns). Constants, not settings.
+  const POOL_K_MAX = 8, POOL_CELLS = 2e6, canPool = !col && hw > 4 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);
+  const kBase = canPool ? Math.min(POOL_K_MAX, Math.floor((hw - 1) / groups.length)) : 1, partsFor = (g) => Math.max(1, Math.min(kBase, Math.floor(((g && g.rows) || 0) * cols.length / POOL_CELLS)));
+  const spare = kBase > 1 ? Math.min(hw - 1 - nw, nw * (kBase - 1)) : 0;
   const dispatch = () => { while (partQ.length && (idle.length || ph.length < spare)) { let h = idle.shift(); if (!h) { try { h = mkWorker(); } catch { return; } h.onmessage = (e) => { const d = e.data || {}; if (d.type !== 'pqpartdone') return; if (d.error) failAll(new Error(d.error)); else { (partsIn.get(d.grp) || partsIn.set(d.grp, new Map()).get(d.grp)).set(d.p, d); idle.push(h); dispatch(); } signal(); }; h.onerror = (e) => { failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); signal(); }; ph.push(h); } const q = partQ.shift(), trf = []; for (const nm in q.named) { const c = q.named[nm]; if (c instanceof Float64Array) trf.push(c.buffer); else if (c.kind === 'ts') trf.push(c.values.buffer); else if (c.kind === 'dict') trf.push(c.ids.buffer); else trf.push(c.bytes.buffer, c.start.buffer, c.end.buffer); } h.postMessage({ type: 'pqPackPart', grp: q.grp, p: q.p, rows: q.rows, named: q.named, o: q.o }, trf); } };
   for (const h of helpers) { h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'pqPart') { partQ.push(d); dispatch(); return; } if (d.type === 'pqdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); if (d.error) p.rej(Object.assign(new Error(d.error), { pqExact: d.exactCol })); else p.res(d); } } }; h.onerror = (e) => failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); }
   job.abort = () => { closeAll(); failAll(Object.assign(new Error('Import cancelled.'), { cancelled: true })); };
   const rpc = (h, msg) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'pqGroup', rid: id }, msg)); });
   let rows = 0, sample = [], next = 0, nextW = 0; const done = new Map(), waiters = new Set(); const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } }, wait = () => new Promise((r) => waiters.add(r));
   const WINDOW = nw * 2; let quit = false, bytes = 0;
-  const run = async (h) => { while (!quit && next < groups.length) { if (next >= nextW + WINDOW) { await wait(); continue; } const k = next++; done.set(k, await rpc(h, { file, cols, exact, group: groups[k], grp: k, parts: PARTS, first: k === 0, level: 3, chunk: !!col, dup: !!(col && col.dup) }).catch((err) => ({ error: err }))); signal(); } };
+  const run = async (h) => { while (!quit && next < groups.length) { if (next >= nextW + WINDOW) { await wait(); continue; } const k = next++; done.set(k, await rpc(h, { file, cols, exact, group: groups[k], grp: k, parts: partsFor(groups[k]), first: k === 0, level: 3, chunk: !!col, dup: !!(col && col.dup) }).catch((err) => ({ error: err }))); signal(); } };
   try {
     const loops = helpers.map(run);
     for (let k = 0; k < groups.length; k++) {
