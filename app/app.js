@@ -19,12 +19,28 @@
     if (m.type === 'progress') { $('prog').value = m.total ? m.bytes / m.total : 0; status(m.rows.toLocaleString() + ' rows · ' + fmt(m.bytes) + ' of ' + fmt(m.total)); return; }
     if (m.type === 'preview') { if (!liveHook) previewOpen(m); return; }   // the first rows are in: the grid opens now, the row count grows until the file is read
     if (m.type === 'notice') { encNote = m.text || ''; if (m.widths) fwGuess = m.widths; return; }
+    if (m.type === 'earlyChart') { if (m.off) ecHide(); else if (!ecFinal) ecDraw(m.key, m.bars, m.rows, false); return; }
     if (m.type === 'previewGrow') { if (G.preview) previewGrow(m); return; }
+    if (m.type === 'live') ecLive();
     if (m.type === 'live' && G.preview && !liveHook) { liveSeen = performance.now(); liveDone = finishPreview(m); return; }
     if (m.type === 'live') { liveSeen = performance.now(); liveDone = (liveHook || ((x) => { status('Reading while the file is saved…'); return openGrid(x.name); }))(m); return; }   // the worker has parsed the file and keeps the columns: the grid can open before the save ends
     if (m.type === 'liveclosed') { G.preview = false; $('gridbox').hidden = true; return; }
     const w = waiters.get(m.id); if (w) { waiters.delete(m.id); w(m); }
   };
+  // Early chart: a grey DRAFT of the most common values in the first rows while the file is read, then the same chart in blue with the counts of every row.
+  let ecFinal = false, ecKey = '';
+  function ecHide() { $('earlychart').hidden = true; ecFinal = false; ecKey = ''; }
+  function ecDraw(key, bars, rows, final) {
+    ecKey = key; const sec = $('earlychart'); sec.hidden = false; sec.className = final ? 'final' : '';
+    const mx = Math.max(1, ...bars.map((b) => b[1]));
+    $('ecnote').innerHTML = (final ? '' : '<span class="ecbadge">DRAFT</span>') + 'Most common values in <b>' + esc(key) + '</b>, ' + (final ? 'all ' + rows.toLocaleString() + ' rows.' : 'first ' + rows.toLocaleString() + ' rows so far. It turns blue when the whole file is read.');
+    $('ecbars').innerHTML = bars.map((b) => '<div class="ecrow"><span title="' + esc(b[0]) + '">' + esc(b[0] || '(empty)') + '</span><div><i></i></div><b>' + b[1].toLocaleString() + '</b></div>').join('');
+    $('ecbars').querySelectorAll('i').forEach((el, j) => { el.style.width = (100 * bars[j][1] / mx).toFixed(1) + '%'; });   // set from script: the page's style rules forbid inline style attributes
+  }
+  async function ecLive() {
+    if (!ecKey || ecFinal) return; const key = ecKey; ecFinal = true;
+    try { const r = await call({ type: 'groupby', key, aggs: [{ fn: 'count' }], filters: {} }); if (r.type === 'grouped') ecDraw(key, r.rows.slice(0, 8).map((x) => [x[0], +x[1]]), r.rowsUsed, true); else ecHide(); } catch { ecHide(); }
+  }
   let fwGuess = '', fwAuto = false, liveHook = null, liveDone = null, liveSeen = 0, encNote = '';
   worker.onerror = (e) => status('Worker stopped: ' + (e.message || 'unknown error'), true);
 
@@ -47,7 +63,7 @@
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => { await call({ type: 'delete', name: b.dataset.del }); refresh(); }));
   }
   async function runImport(file, inline, opts) {
-    $('go').disabled = true; $('selftest').disabled = true; $('cancel').hidden = false; $('prog').hidden = false; $('prog').value = 0;
+    ecHide();     $('go').disabled = true; $('selftest').disabled = true; $('cancel').hidden = false; $('prog').hidden = false; $('prog').value = 0;
     const id = 'j' + (++seq); active = id;
     const res = await new Promise((resolve) => { waiters.set(id, resolve); worker.postMessage(Object.assign({ type: 'import', id, file, delimiter: $('delim').value, widths: ($('fwbox') && !$('fwbox').hidden && $('fwidths').value) || '', inline: !!inline || /[?&]inline=1/.test(location.search) }, opts || {})); });
     active = null; $('cancel').hidden = true; $('prog').hidden = true; $('selftest').disabled = false; $('go').disabled = !$('file').files.length;
@@ -271,6 +287,35 @@
       }
       const short1 = await runImport(new File(['a,b\r\n1,2\r\n3\r\n'], 'short.csv', { type: 'text/csv' }));
       add('a file with one short row is tidied and imported', short1.type === 'done' && short1.dataset.rows === 2, short1.type === 'done' ? short1.dataset.rows + ' rows' : short1.message);
+      {   // space-separated pageview lists: quotes are ordinary characters (balanced, stray, and a short row far down that sends the quick tidy to the thorough one)
+        const pv = []; for (let i = 0; i < 3000; i++) pv.push('en ' + (i % 50 === 0 ? '"Foo_' + i + '"_Bar' : i % 70 === 0 ? '"Stray_' + i : 'Page_' + i) + ' ' + (i % 900) + ' ' + (i % 7));
+        const pq = await runImport(new File([pv.join('\n') + '\n'], 'views.txt', { type: 'text/plain' }));
+        add('space-separated rows with quote marks in the titles import every row', pq.type === 'done' && pq.dataset.rows === 3000 - 1, pq.type === 'done' ? pq.dataset.rows + ' rows' : pq.message);
+        const pq2 = await runImport(new File([pv.join('\n') + '\nen Short 5\n'], 'views2.txt', { type: 'text/plain' }));
+        add('the same list with a short row at the end is tidied the thorough way and imports', pq2.type === 'done' && pq2.dataset.rows === 3000, pq2.type === 'done' ? pq2.dataset.rows + ' rows' : pq2.message);
+        {   // a big list is read as it is (a quote mark is an ordinary character, a short row is filled, a blank line is skipped), with no tidy pass: forced here with small pieces
+          const sv = ['project title views bytes']; for (let i = 0; i < 4000; i++) sv.push('en ' + (i % 40 === 0 ? '"Foo_' + i : i % 55 === 0 ? 'Bar_' + i + '"' : 'Page_' + i) + ' ' + (i % 900) + ' ' + (i % 7));
+          sv.splice(2000, 0, 'en Short', '');
+          const sr = await runImport(new File([sv.join('\n') + '\n'], 'views3.txt', { type: 'text/plain' }), false, { segBytes: 65536 });
+          let sok = sr.type === 'done' && sr.dataset.rows === 4001, sdet = sr.type === 'done' ? sr.dataset.rows + ' rows' : sr.message;
+          if (sok) { await openGrid(sr.dataset.name); const pg = await call({ type: 'page', start: 0, count: 4001 }); const r0 = pg.rows[0], rs = pg.rows[1999], re = pg.rows[4000]; sok = r0[1] === '"Foo_0' && rs[1] === 'Short' && String(re[1]) === 'Page_3999' && pg.rows.some((r) => r[1] === 'Bar_55"'); if (!sok) sdet = JSON.stringify([r0, rs, re]); }
+          add('a big space-separated list with plain quote marks, a short row and a blank line is read as it is', sok, sdet);
+        }
+      }
+      {   // first letter and length of a text column straight from the stored bytes: the same answers as on strings (ASCII, accents, CJK, a 4-byte character, empty cells)
+        const ws = ['Zo\u00eb', '\u65e5\u672c\u8a9e', '\ud83d\ude00 smile', 'abc', '', '\u00e9clair', 'x'], dl = ['id,title'];
+        for (let i = 0; i < 400; i++) dl.push(i + ',' + ws[i % ws.length]);
+        const dr = await runImport(new File([dl.join('\n') + '\n'], 'derive-bytes.csv', { type: 'text/csv' }), false, { blockBytes: 1500 });
+        let ok = dr.type === 'done', det = dr.type === 'done' ? '' : dr.message;
+        if (ok) {
+          await openGrid(dr.dataset.name);
+          const d1 = await call({ type: 'derive', source: 'title', fn: 'first', name: 'f1' }), d2 = await call({ type: 'derive', source: 'title', fn: 'length', name: 'n1' });
+          const pg = await call({ type: 'page', start: 0, count: 400 });
+          for (let i = 0; i < 400 && ok; i++) { const t = ws[i % ws.length], row = pg.rows[i]; if (String(row[2]) !== t.charAt(0) || String(row[3]) !== String(t.length)) { ok = false; det = 'row ' + i + ': ' + JSON.stringify(row) + ' for ' + JSON.stringify(t); } }
+          if (d1.type === 'error' || d2.type === 'error') { ok = false; det = d1.message || d2.message; }
+        }
+        add('first letter and length come out the same from stored bytes as from strings', ok, det);
+      }
       const fwLines = ['id   name        score', '1    Ann Lee     10.5', '2    Bob         7', '3    Cy Young    8.25', '4    Di          9', '5    Ed Norton   6'].join('\n') + '\n';
       const fwg = await runImport(new File([fwLines], 'fw.txt', { type: 'text/plain' }));
       add('fixed-width text is guessed, and the Column widths box then shows the widths', fwg.type === 'done' && fwg.dataset.rows === 5 && !$('fwbox').hidden && $('delim').value === 'fixed' && $('fwidths').value === '5,12', fwg.type === 'done' ? fwg.dataset.rows + ' rows, widths ' + $('fwidths').value : fwg.message);
@@ -439,7 +484,7 @@
   }
 
   function report() {
-    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.0003 (LFC-pack 0.14.6)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
+    const L = ['LFCP Workbench results', 'Workbench version: 2026.11.21.1044 (LFC-pack 0.14.10)', 'Browser: ' + navigator.userAgent, 'Secure context: ' + window.isSecureContext + ', OPFS: ' + !!(navigator.storage && navigator.storage.getDirectory) + (last && last.dataset ? ', stored in: ' + last.dataset.storage : ''), 'Time: ' + new Date().toISOString()];
     if (last && last.selfTest) { L.push('', 'Self-test: ' + (last.selfTest.ok ? 'PASS' : 'FAIL') + ' (' + last.selfTest.ms + ' ms)'); last.selfTest.checks.forEach((c) => L.push((c.ok ? '  ok   ' : '  FAIL ') + c.name + (c.detail ? ' - ' + c.detail : ''))); }
     if (last && last.big) L.push('Big file: ' + last.big.mb + ' MB target, ' + last.big.rows + ' rows, ' + last.big.bytes + ' bytes' + (last.big.onDisk ? ', generated on disk (OPFS)' : ', generated in memory') + ', phase ms ' + JSON.stringify(last.big.T));
     if (last && last.dataset) { const d = last.dataset; L.push('', `Import: ${d.source}, ${d.rows} rows, ${d.columns.length} columns, ${d.bytes} bytes stored, ${d.ms} ms`, 'Timing ms: ' + JSON.stringify(d.timing), 'Check: ' + d.validation.level, 'Columns: ' + d.columns.map((c) => c.name + ':' + c.type + (c.nullable ? '?' : '')).join(', ')); }

@@ -3,16 +3,18 @@
 #include <wasm_simd128.h>
 typedef unsigned char u8; typedef unsigned int u32; typedef unsigned long long u64;
 #define EXPORT(n) __attribute__((export_name(n)))
-#define MAXC 128
+#define MAXC 1024
 #define DSL 40
 #define DCAP 4096
 #define DSLOTS 8
-static u8 keybuf[8192]; static u32 keyoff[MAXC], keylen[MAXC];
+static u8 keybuf[131072]; static u32 keyoff[MAXC], keylen[MAXC];
 static u8 isplan[MAXC], flags[MAXC], dslot[MAXC];
 static u32 cnt_n[MAXC], cnt_e[MAXC];
 static u32 ncols, extra; static u8 D;
 static u8 dtab[DSLOTS][DCAP][DSL + 1];   // len byte then bytes; len 0 = empty slot
 static u32 g_out, g_rows, g_bail, g_nl;
+static u32 g_tcap;   // wide tables: bytes of text a column may hold in one chunk (0 = a whole chunk); a row that would pass it ends the chunk, so 700 text columns do not each need a chunk-sized area
+EXPORT("set_tcap") void set_tcap(u32 t){ g_tcap = t; }
 // ---- Dictionary mode (parse-research prototype): a text column in dict mode writes a u16 code per row (colA[c] is a u16 array) instead of text; the labels (distinct values, first-seen order in this chunk)
 // go to dbytes[c] with dstart[c] / dend[c] offsets. More than DMAX labels or no room in dbytes: g_bail = 4 and g_bailcol = the column (JS switches that column to text and calls again from the returned position).
 #define DMAX 4096
@@ -24,6 +26,12 @@ EXPORT("dict_reset") void dict_reset(u32 c){ for (u32 k = 0; k < DHS; k++) dhash
 EXPORT("dict_n") u32 dict_n(u32 c){ return dn[c]; }
 EXPORT("dict_blen") u32 dict_blen(u32 c){ return dlen_[c]; }
 EXPORT("bailcol") u32 bailcol(void){ return g_bailcol; }
+static u8 g_lenient;   // text right after a closing quote is kept as plain text of the same cell, the way the tidy pass reads it (set only when that pass would use its plain options)
+EXPORT("set_lenient") void set_lenient(u32 on){ g_lenient = (u8)on; }
+static u8 g_noq;   // space-separated lists whose quote marks are ordinary characters: a quote never opens or closes a cell
+EXPORT("set_noq") void set_noq(u32 on){ g_noq = (u8)on; }
+static u32 g_stray;   // lines of the last build that held a quote mark inside an unquoted cell (kept as plain text, as the tidy pass does)
+EXPORT("stray") u32 stray(void){ return g_stray; }
 static u32 hashb2(const u8* p, u32 l);
 static int dict_code(u32 c, const u8* p, u32 l, u32* out){
   u32 h = hashb2(p, l) ^ l;
@@ -163,11 +171,11 @@ static int utf8_ok(const u8* p, u32 l){
   return 1;
 }
 EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
-  u32 i = 0, nrows = 0; g_bail = 0; g_nl = 0;
+  u32 i = 0, nrows = 0; g_bail = 0; g_nl = 0; g_stray = 0;
   u32 n = ncols; u8 D0 = D;
   for (u32 c = 0; c < n; c++) { cnt_n[c] = 0; cnt_e[c] = 0; }
   while (i < len) {
-    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC], esc[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; esc[0] = 0; int ok = 1, inq = 0, hi8 = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
+    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC], esc[MAXC]; u32 acl[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; esc[0] = 0; int ok = 1, inq = 0, hi8 = 0, sq = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
     {
       v128_t vd = wasm_i8x16_splat((int8_t)D0), vnl = wasm_i8x16_splat(10), vq = wasm_i8x16_splat(34), vbs = wasm_i8x16_splat(92), v31 = wasm_i8x16_splat(31), v126 = wasm_i8x16_splat(126);
       int done = 0;
@@ -187,17 +195,19 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
               if (q + 1 >= len) { done = 1; break; }   // cannot tell yet: wait for more bytes
               u8 nb = in[q + 1];
               if (nb == 34) { esc[col] = 1; skipq = q + 1; continue; }   // an escaped quote (""): the cell is unescaped in place below
-              if (nb != D0 && nb != 10 && !(nb == 13 && q + 2 < len && in[q + 2] == 10)) { if (q + 2 >= len && nb == 13) { done = 1; break; } ok = 0; done = 1; break; }
+              if (nb != D0 && nb != 10 && !(nb == 13 && q + 2 < len && in[q + 2] == 10)) { if (q + 2 >= len && nb == 13) { done = 1; break; } if (g_lenient && nb != 13 && D0 != 32) { inq = 0; acl[col] = q; fq[col] = 2; sq = 1; continue; }   /* the quoted part ends here; what follows up to the delimiter is plain text of the same cell */ ok = 0; done = 1; break; }
               inq = 0; fe[col] = q; qend = 1;
             } else if (c == 10) nl++;   // a line break inside quotes is part of the cell
             continue;   // a delimiter, tab or other control character inside quotes is cell text
           }
           if (c == 34) {
+            if (g_noq) { sq = 1; continue; }
+            if ((fq[col] == 2 || (q != fs[col] && !fq[col])) && D0 != 32) { sq = 1; continue; }   // a quote mark inside an unquoted cell is plain text (not in space-separated lists: the tidy pass has its own quote rules for those)
             if (q != fs[col] || fq[col]) { ok = 0; done = 1; break; }
             if (q + 2 < len && in[q + 1] == 34) { u8 a = in[q + 2]; if (a == D0 || a == 10 || (a == 13 && q + 3 < len && in[q + 2 + 1] == 10)) { fq[col] = 1; fs[col] = fe[col] = q + 1; skipq = q + 1; continue; } }   // "" followed by a delimiter or line end: an empty quoted cell
             inq = 1; fq[col] = 1; fs[col] = q + 1; continue;
           }   // an opening quote must start the cell
-          if (c == D0) { if (col + 1 >= n) { ok = 0; done = 1; break; } if (!fq[col]) fe[col] = q; col++; fs[col] = q + 1; fq[col] = 0; esc[col] = 0; }
+          if (c == D0) { if (col + 1 >= n) { ok = 0; done = 1; break; } if (fq[col] != 1) fe[col] = q; col++; fs[col] = q + 1; fq[col] = 0; esc[col] = 0; }
           else if (c == 10) { e = q; nl++; done = 1; break; }
           else if (c == 13 && q + 1 < len && in[q + 1] == 10) continue;   // CRLF: the line break comes next
           else { ok = 0; done = 1; break; }
@@ -208,11 +218,13 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
     if (e > len) break;
     u32 end = e; if (end > i && in[end-1] == 13) end--;
     if (col != n - 1 || end == i) { g_bail = 1; break; }
-    if (!fq[n-1]) fe[n-1] = end;
+    if (fq[n-1] != 1) fe[n-1] = end;
     (void)qend;
     if (hi8 && !utf8_ok(in + i, end - i)) { g_bail = 1; break; }
-    for (u32 c = 0; c < n; c++) if (esc[c]) { u32 w = fs[c], r = fs[c], z = fe[c]; while (r < z) { u8 ch = in[r++]; ((u8*)in)[w++] = ch; if (ch == 34) r++; } fe[c] = w; }
+    for (u32 c = 0; c < n; c++) if (fq[c] == 2) { u32 w = fs[c], r = fs[c], a = acl[c], z = fe[c]; u8 es = esc[c]; while (r < a) { u8 ch = in[r++]; ((u8*)in)[w++] = ch; if (es && ch == 34) r++; } r = a + 1; while (r < z) ((u8*)in)[w++] = in[r++]; fe[c] = w; }
+    else if (esc[c]) { u32 w = fs[c], r = fs[c], z = fe[c]; while (r < z) { u8 ch = in[r++]; ((u8*)in)[w++] = ch; if (ch == 34) r++; } fe[c] = w; }
     if (nrows >= cap) break;
+    if (g_tcap) { int full = 0; for (u32 c = 0; c < n; c++) if (!isplan[c] && !dmode[c] && !dtmode[c] && tlen[c] + (fe[c] - fs[c]) > g_tcap) { full = 1; break; } if (full) { if (nrows == 0) g_bail = 1; break; } }   // no room in a text area: the chunk ends here (a single row that cannot fit goes to JavaScript)
     // check every cell against the type flags before writing anything for the row
     for (u32 c = 0; c < n; c++) {
       u32 s0 = fs[c], l = fe[c] - s0; if (l == 0) continue;
@@ -249,7 +261,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
       }
       ((f64*)colA[c])[nrows] = v;
     }
-    nrows++; g_nl += nl; i = e + 1;
+    nrows++; g_nl += nl; g_stray += (u32)sq; i = e + 1;
   }
 stop:
   g_rows = nrows; return i;

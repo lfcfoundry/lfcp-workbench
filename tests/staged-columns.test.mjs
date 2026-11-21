@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { buildColumns } from '../src/ingest/columns.mjs';
 import { typedCell, typedDecimal } from '../src/ingest/infer.mjs';
-const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.14.6/lfc-pack.js')); await lib.init();
+const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.14.10/lfc-pack.js')); await lib.init();
 const enc = new TextEncoder();
 let seed = 4242; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296, ri = (n) => Math.floor(rnd() * n);
 const headers = ['id', 'name', 'score', 'when', 'note'], plan = [true, false, 2, false, false];
@@ -77,6 +77,61 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
   console.log(`ok: wasm column builder equals the JavaScript reference (${chunks} chunks, bail rules)`);
 }
 
+// A quote mark inside an unquoted cell is plain text for the wasm builder (comma and tab files), and the line is counted; a space-separated list still leaves such a line to the character parser
+{
+  const { readFileSync } = await import('node:fs');
+  const wasmQ = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../wasm/colbuild.wasm'));
+  const { make } = await import('../src/ingest/colbuild.mjs');
+  const dq = new TextDecoder(), eq = new TextEncoder();
+  const B = await make(wasmQ, ['a', 'b', 'c'], [true, false, false], ',');
+  const r = B.build(eq.encode('1,5" pipe,x\n2,"q,1",say "hi" now\n3,plain,y\n'));
+  assert.equal(r.n, 3); assert.equal(r.bail, null); assert.equal(r.stray, 2);
+  const tx = (col, i) => dq.decode(col.bytes.subarray(col.start[i], col.end[i]));
+  assert.deepEqual([0, 1, 2].map((i) => tx(r.cols.b, i)), ['5" pipe', 'q,1', 'plain']);
+  assert.deepEqual([0, 1, 2].map((i) => tx(r.cols.c, i)), ['x', 'say "hi" now', 'y']);
+  const r2 = B.build(eq.encode('1,"closed"tail,x\n'));
+  assert.equal(r2.n, 0); assert.equal(r2.bail, 'line');   // text after a closing quote is not this case
+  // text right after a closing quote joins the cell when the lenient switch is on (the tidy pass's reading): "<a href="u" x="v">t</a>" is <a href=u" x="v">t</a>"
+  B.exports.set_lenient(1);
+  const r4 = B.build(eq.encode('1,"<a href="u" x="v">t</a>",z\n2,"a ""b"" c"d,"q"\n3,""tail,y\n'));
+  assert.equal(r4.n, 3); assert.equal(r4.bail, null);
+  assert.deepEqual([0, 1, 2].map((i) => tx(r4.cols.b, i)), ['<a href=u" x="v">t</a>"', 'a "b" cd', 'tail']);
+  assert.deepEqual([0, 1, 2].map((i) => tx(r4.cols.c, i)), ['z', 'q', 'y']);
+  B.exports.set_lenient(0);
+  assert.equal(B.build(eq.encode('1,"closed"tail,x\n')).bail, 'line');
+  const S = await make(wasmQ, ['a', 'b'], [true, false], ' ');
+  const r3 = S.build(eq.encode('1 5"pipe\n'));
+  assert.equal(r3.n, 0); assert.equal(r3.bail, 'line');
+  console.log('ok: wasm column builder keeps a quote mark inside an unquoted cell as text (not for space-separated lists)');
+}
+// Wide tables: 700 columns go through the wasm builder (it took 128 at most before), as one buffer per chunk, and a small text area per column ends a chunk early instead of overflowing
+{
+  const { make } = await import('../src/ingest/colbuild.mjs');
+  const { readFileSync } = await import('node:fs');
+  const wasm = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../wasm/colbuild.wasm'));
+  const W = 700, wh = Array.from({ length: W }, (_, c) => 'c' + c), wplan = wh.map((_, c) => (c % 4 === 0 ? true : c % 4 === 1 ? 2 : false));
+  const cell = (r, c) => (c % 7 === 3 || (r + c) % 5 === 0 ? '' : c % 4 === 0 ? String((r * 31 + c) % 5000 - 100) : c % 4 === 1 ? ((r * 17 + c) % 9000 / 100 - 20).toFixed(2).replace(/^-0\.00$/, '0.00') : c % 4 === 2 ? 'text ' + r + ' in column ' + c : 'k' + (r + c) % 13);
+  const lines = []; for (let r = 0; r < 400; r++) { const f = new Array(W); for (let c = 0; c < W; c++) f[c] = cell(r, c); lines.push(f.join(',')); }
+  const data = enc.encode(lines.join('\n') + '\n');
+  const ref = buildColumns(data, wh, wplan, ',');
+  assert.equal(ref.bail, null); assert.equal(ref.n, 400);
+  for (const textCap of [0, 4096]) {   // 4096 bytes of text per column: the chunk ends early several times
+    const B = await make(wasm, wh, wplan, ',', { capRows: 4096, chunkBytes: 4194304, textCap });
+    let at = 0, row = 0, calls = 0;
+    while (at < data.length) {
+      const w = B.build(data.subarray(at)); assert.equal(w.bail, null); assert.ok(w.n > 0); assert.ok(w.arr.slab instanceof ArrayBuffer, 'one buffer per chunk');
+      for (let c = 0; c < W; c++) {
+        const a = w.arr[c], b = ref.cols[wh[c]];
+        if (a instanceof Float64Array) { for (let i = 0; i < w.n; i++) assert.ok(Object.is(a[i], b[row + i]), 'number cell ' + (row + i) + ',' + c); }
+        else for (let i = 0; i < w.n; i++) assert.equal(new TextDecoder().decode(a.bytes.subarray(a.start[i], a.end[i])), new TextDecoder().decode(b.bytes.subarray(b.start[row + i], b.end[row + i])), 'text cell ' + (row + i) + ',' + c);
+      }
+      at += w.used; row += w.n; calls++;
+    }
+    assert.equal(row, 400); if (textCap) assert.ok(calls > 1, 'the text cap cut the chunk');
+  }
+  console.log('ok: wasm column builder takes 700 columns (one buffer per chunk, text cap ends a chunk early)');
+}
+
 // Quoted cells in the wasm builder: quoted cells (also with delimiters, line breaks and CRLF inside) land in the same columns as the character parser makes;
 // cells with an escaped quote (""), a backslash, non-ASCII text or a wrong field count stop the chunk at that record (bail 'line') for the character parser.
 {
@@ -101,14 +156,14 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
       default: return [id, q('a'), sc, q('b') + 'x'].join(',');   // weird: text after the closing quote
     }
   };
-  const weird = new Set([5, 7, 8, 9]);   // escaped quotes (4) and valid UTF-8 (6) are built by the wasm builder now
+  const weird = new Set([5, 7, 9]);   // escaped quotes (4), valid UTF-8 (6) and a quote inside an unquoted cell (8, kept as plain text) are built by the wasm builder now
   let seed2 = 99; const r2 = () => (seed2 = (seed2 * 1103515245 + 12345) >>> 0) / 4294967296;
   for (const eol of ['\n', '\r\n']) {
     const recs = [], kinds = []; for (let i = 0; i < 4000; i++) { const k = r2() < 0.08 ? 4 + Math.floor(r2() * 6) : Math.floor(r2() * 4); kinds.push(k); recs.push(rec(i, k)); }
     const offs = [0]; const text = recs.map((r) => r + eol).join(''); for (const r of recs) offs.push(offs[offs.length - 1] + enc.encode(r).length + eol.length);
     const bytes = enc.encode(text);
     // oracle: the character parser's cells, one well-formed record at a time
-    const oracle = new Map(); for (let k = 0; k < recs.length; k++) if (!weird.has(kinds[k])) { const out = []; new DelimitedParser(',', (f) => out.push(f)).feed(recs[k] + eol, true); assert.equal(out.length, 1); oracle.set(k, out[0]); }
+    const oracle = new Map(); for (let k = 0; k < recs.length; k++) if (kinds[k] === 8) oracle.set(k, recs[k].split(',')); else if (!weird.has(kinds[k])) { const out = []; new DelimitedParser(',', (f) => out.push(f)).feed(recs[k] + eol, true); assert.equal(out.length, 1); oracle.set(k, out[0]); }
     const B = await make(wasm, hs, pl, ',', { capRows: 512, chunkBytes: 1 << 20 });
     let pos = 0, idx = 0, built = 0, bails = 0;
     while (pos < bytes.length) {

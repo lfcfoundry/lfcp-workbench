@@ -1,10 +1,11 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.14.6/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.14.10/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
 let core = null;
+let NOQ = false;   // this import reads a space-separated list whose quote marks are ordinary characters (see spaceNoQuote)
 const MODS = () => self.__M || null; // set by the single-file build, which inlines the ES modules
 const send = (type, id, data) => self.postMessage(Object.assign({ type, id }, data));
 const loadCore = async () => (core ||= MODS() || Object.assign({}, await import('../src/ingest/delimited.mjs'), await import('../src/ingest/infer.mjs'), await import('../src/ingest/colbuild.mjs')));
@@ -185,16 +186,50 @@ function makeFastW(headers, plan, trackers, delimiter) {
 // The wasm builder takes the lines that keep every column's type flags (the same rules as the row builder above) and stops at any other line; that line goes through
 // the character parser (slow rows, below) and lands in the same columns, so the result does not depend on which path a line took.
 // A cell that stays text in a number column (for example "007") cannot live in a Float64Array: the import stops with err.mixed and starts again on the JSON-lines path.
+// A line with a quote mark inside an unquoted cell (5" pipe), otherwise well formed: the same line with those cells quoted and their quotes doubled, which is what the tidy pass writes for it.
+// null when the line has no such cell, holds a backslash, or is not well formed on its own (an open quoted cell, text after a closing quote): those go on as before.
+// One line that holds quote marks, read the way the tidy pass reads it (makeNormalizer with its plain options) and written the way it would write it: a quote mark inside a plain cell stays text, and text
+// right after a closing quote joins the cell. Used for single lines on their way to the character parser, when the tidy pass would use its plain options for this file (no comment lines, no backslash
+// escapes). null when the line has no quote mark, holds a backslash, does not end its row, or does not have the header's number of cells: those go on as before.
+let LT = null;
+function lineTidy(b, i, k, D, n) {
+  let has = false; for (let p = i; p < k; p++) { const c = b[p]; if (c === 92) return null; if (c === 34) has = true; }
+  if (!has) return null;
+  if (!LT || LT.D !== D || LT.n !== n) LT = { nz: makeNormalizer({ delim: D, comments: false, backslash: false, width: n }), D, n, primed: false };
+  if (!LT.primed) { LT.primed = true; const hd = new Uint8Array(2 * n); for (let c = 0; c < n; c++) { hd[2 * c] = 97; hd[2 * c + 1] = c === n - 1 ? 10 : D; } LT.nz.feed(hd); }   // a first row of n cells, so the next lines are not taken for a header
+  const st = LT.nz.stats, r0 = st.rows, out = LT.nz.feed(b.subarray(i, k + 1));
+  if (!out || st.rows !== r0 + 1 || st.padded || st.truncated || st.headerPad) { LT = null; return null; }
+  return out;
+}
+function strayFix(b, i, k, D) {
+  let e = k; if (e > i && b[e - 1] === 13) e--;
+  let p = i, stray = 0, fields = 1;
+  for (;;) {
+    if (p < e && b[p] === 34) {
+      p++; for (;;) { while (p < e && b[p] !== 34) { if (b[p] === 92) return null; p++; } if (p >= e) return null; if (p + 1 < e && b[p + 1] === 34) { p += 2; continue; } p++; break; }
+      if (p < e && b[p] !== D) return null;
+    } else { let q = false; while (p < e && b[p] !== D) { const c = b[p]; if (c === 34) q = true; else if (c === 92) return null; p++; } if (q) stray++; }
+    if (p >= e) break; p++; fields++;
+  }
+  if (!stray) return null;
+  const out = new Uint8Array((e - i) * 2 + 2 * fields + 1); let o = 0; p = i;
+  for (;;) {
+    if (p < e && b[p] === 34) { out[o++] = b[p++]; for (;;) { while (p < e && b[p] !== 34) out[o++] = b[p++]; if (p + 1 < e && b[p + 1] === 34) { out[o++] = 34; out[o++] = 34; p += 2; continue; } out[o++] = b[p++]; break; } }
+    else { let q = false; for (let x = p; x < e && b[x] !== D; x++) if (b[x] === 34) { q = true; break; } if (q) out[o++] = 34; while (p < e && b[p] !== D) { const c = b[p++]; if (c === 34) out[o++] = 34; out[o++] = c; } if (q) out[o++] = 34; }
+    if (p >= e) break; out[o++] = b[p++];
+  }
+  out[o++] = 10; return out.subarray(0, o);
+}
 const mixedErr = (col) => Object.assign(new Error('A number column holds a text-like cell; the file is imported on the text path.'), { mixed: true, col: col == null ? -1 : col });   // col: the number column that held the cell (-1 when not known)
 const COLB = 1048576;   // bytes of CSV per wasm call and per chunk
 let C = null;
-const loadC = () => { if (C === null) { try { const s = atob('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'), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); C = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch { C = false; } } return C; };
-function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn) {
+const loadC = () => { if (C === null) { try { const s = atob('AGFzbQEAAAABMglgAX8AYAJ/fwBgBX9/f39/AGABfwF/YAABf2AEf39/fwBgAABgA39/fwBgA39/fwF/AxwbAAECAAMDBAAABAUDBgQEBAQHAgEEBAQBBAcIBAUBcAEBAQUEAQCACAYRAn8BQdCw7QgLfwBB0LDtCAsHtgIdBm1lbW9yeQIACHNldF90Y2FwAAAIc2V0X2RpY3QAAQxzZXRfZGljdF9vdXQAAgpkaWN0X3Jlc2V0AAMGZGljdF9uAAQJZGljdF9ibGVuAAUHYmFpbGNvbAAGC3NldF9sZW5pZW50AAcHc2V0X25vcQAIBXN0cmF5AAkHc2V0X291dAAKBHRsZW4ACwpyZXNldF90ZXh0AAwIa2V5c19wdHIADQlmbGFnc19wdHIADgljbnRfbl9wdHIADwljbnRfZV9wdHIAEAVzZXR1cAARB3NldF9jb2wAEghzZXRfc2xvdAATB291dF9sZW4AFARyb3dzABUEYmFpbAAWC3NldF9kYXRlbnVtABcGbmxpbmVzABgJY2FjaGVfYWRkABkFYnVpbGQAGgtfX2hlYXBfYmFzZQMBCvJHGw0AQQAgADYCgIiAgAALEAAgAEGQiICAAGogAToAAAs/ACAAQQJ0IgBBkLCAgABqIAI2AgAgAEGQkICAAGogATYCACAAQZDQgIAAaiADNgIAIABBkPCAgABqIAQ2AgALOAAgAEEOdEGQkIGAAGpBAEGAgAH8CwAgAEECdCIAQZCwgYgAakEANgIAIABBkJCBiABqQQA2AgALEQAgAEECdEGQkIGIAGooAgALEQAgAEECdEGQsIGIAGooAgALCwBBACgCkNCBiAALDQBBACAAOgCU0IGIAAsNAEEAIAA6AJXQgYgACwsAQQAoApjQgYgACz8AIABBAnQiAEGg8IGIAGogAjYCACAAQaDQgYgAaiABNgIAIABBoJCCiABqIAM2AgAgAEGgsIKIAGpBADYCAAsRACAAQQJ0QaCwgogAaigCAAsQAEGgsIKIAEEAQYAg/AsACwgAQaDQgogACwgAQaDQiogACwgAQaDYiogACwgAQaD4iogACycAQQAgAToApJiLiABBACAANgKgmIuIAEGwmIuIAEH/AUGACPwLAAseACAAQbCYi4gAaiAEOgAAIABBsKCLiABqIAM6AAALEAAgAEGwmIuIAGogAToAAAsEAEEACwsAQQAoArCoi4gACwsAQQAoArSoi4gACxAAIABBwKiLiABqIAE6AAALCwBBACgCwLCLiAAL7QMBDH8CQCACQVdqQVhJDQAgAkEDcSEDAkACQCACQX9qQQNPDQBBxbvyiHghBEEAIQUMAQsgAkE8cSEGQcW78oh4IQRBACEFA0AgBCABIAVqIgctAABzQZODgAhsIAdBAWotAABzQZODgAhsIAdBAmotAABzQZODgAhsIAdBA2otAABzIghBk4OACGwhBCAGIAVBBGoiBUcNAAsLAkAgA0UNACABIAVqIQcDQCAEIActAABzIghBk4OACGwhBCAHQQFqIQcgA0F/aiIDDQALCwJAAkAgAEGAoApsIgkgBEH/H3FBKWxqQdCwi4gAaiIFLQAAIgcNAEEAIQoMAQsgAkEBaiELIAlB0bCLiABqIQxBACEKIAQhDQNAAkACQCAHQf8BcSACRw0AIAwgDUH/H3FBKWxqIQUgASEDIAshBwNAIAdBAUYNBSAHQX9qIQcgAy0AACEGIAUtAAAhDiADQQFqIQMgBUEBaiEFIA4gBkYNAAsgB0UNBCAKQf8fSQ0BDAQLIApB/h9LDQMLIA1BAWohDSAJIApBAWoiCiAEakH/H3FBKWxqQdCwi4gAaiIFLQAAIgcNAAsLIAUgAjoAACACRQ0AIAhBkwNsIApqQf8fcUEpbCAAQYCgCmxqQdGwi4gAaiABIAL8CgAADwsL9z8HEH8Bewp/AXsOfwF8An4jgICAgABBgNABayIDJICAgIAAQQAhBEEAQQA2AsCwi4gAQQBBADYCtKiLiABBAEEANgKY0IGIAEEALQCkmIuIACEFAkBBACgCoJiLiAAiBkUNAEGg2IqIAEEAIAZBAnQiB/wLAEGg+IqIAEEAIAf8CwALAkACQCABDQBBACEIDAELQQAtAJTQgYgAQQBHIAVB/wFxIglBIEciCnEhCyABQQFqIQwgAEF/aiENQQAoAoCIgIAAIg5FIAZFciEPIANBgIgBaiAGQX9qIhBqIREgA0GAkAFqIBBBAnRqIRIgBf0PIRMgAEEBaiEUQQAtAJXQgYgAQf8BcSEVQQAhCEEAIQQDQCADIAg2AoCwASADQQA6AICIASADQQA6AICAAUF/IRZBASEXQQAhGCAIIRlBACEaQQAhG0EAIRxBACEdAkACQAJAAkACQANAIAAgGWr9AAAAIh4gE/0jIB79DCIiIiIiIiIiIiIiIiIiIiL9I/1QIB79DFxcXFxcXFxcXFxcXFxcXFz9I/1QIB79DIGBgYGBgYGBgYGBgYGBgYH9bv0MoaGhoaGhoaGhoaGhoaGhof0m/VD9ZCEFQQAhHwJAAkADQCAFRQ0BIAVoIBlqIiAgAU8NAkEAIQcCQCAgIBZGDQACQCAAICBqIiEtAAAiIkHcAEcNAEEBISMMBwsCQCAiQf4ATQ0AQQEhGwwBCwJAAkACQCAaRQ0AAkAgIkEKRg0AQQEhGiAiQSJHDQQgIEEBaiIiIAFPDQcCQAJAAkAgACAiai0AACIaQSJHDQBBASEhIANBgIABaiEgICIhFkEBIRoMAQsgGiAJRg0BIBpBCkYNAQJAIBpBDUcNAEEBIQcgIEECaiIiIAFPDQYgACAiai0AAEEKRg0CDAULIAtFDQRBAiEhIANBgOAAaiAYQQJ0aiAgNgIAQQAhGkEBIRwgA0GAiAFqISALICAgGGogIToAAAwFCyADQYCQAWogGEECdGogIDYCAEEAIQdBACEaDAQLQQEhGiAdQQFqIR0MAwsCQAJAAkAgIkEiRw0AQQAhByAVDQIgA0GAiAFqIBhqIiQtAAAiIkECRg0BAkAgICADQYCwAWogGEECdCIlaiImKAIAIhpGDQAgIg0AQQAhByAKDQMLQQEhIyAiDQsgICAaRw0LICBBAWohIgJAICBBAmoiByABTw0AIAAgImotAABBIkcNAAJAIAAgB2otAAAiByAJRg0AIAdBCkYNACAgQQNqIAFPDQEgB0ENRw0BICFBA2otAABBCkcNAQsgJEEBOgAAICYgIjYCACADQYCQAWogJWogIjYCAEEAIQcgIiEWQQAhGgwGCyAmICI2AgBBASEaICRBAToAAEEAIQcMBQsCQCAiIAlHDQBBASEjIBhBAWoiIiAGTw0LAkAgA0GAiAFqIBhqLQAAQQFGDQAgA0GAkAFqIBhBAnRqICA2AgALQQAhByADQYCIAWogImpBADoAACADQYCAAWogImpBADoAACADQYCwAWogIkECdGogIEEBajYCAEEAIRogIiEYDAULAkAgIkENRg0AQQEhIyAiQQpHDQsgHUEBaiEdDAoLQQEhIyAgQQFqIiIgAU8NCkEAIQdBACEaIAAgImotAABBCkcNCgwEC0EAIQdBASEcQQAhGkEBISMgCUEgRw0DDAkLQQEhHEEAIRoMAgtBACEXQQEhBwtBASEfQQEhGgsgBUF/aiAFcSEFIAdFDQALCyAZQRBqIhkgAU8NACAfRQ0BCwsgDCEgCwJAIBcNAEEBISMMAQsgICABSw0FICAhBQJAICAgCE0NACAgIA0gIGotAABBDUZrIQULAkAgGCAQRg0AQQEhIwwBCwJAIAUgCEcNAEEBISMMAQsCQCARLQAAQQFGDQAgEiAFNgIACwJAIBtFDQAgBSAIayEiIAAgCGohB0EAIQUDQAJAAkAgByAFaiwAACIZQQBIDQAgBUEBaiEFDAELQQEhI0EAIR8CQAJAIBlB/wFxIhlB4AFxQcABRiIhRQ0AQYABIRtBHyEaQQEhGAwBCwJAIBlB8AFxQeABRw0AQYAQIRtBAiEYQQEhH0EPIRoMAQsCQCAZQfgBcUHwAUYNAEEBISMMBQtBgIAEIRtBAyEYQQchGgsgBUEBaiIWICJPDQMgByAWai0AACIWQcABcUGAAUcNAyAWQT9xIBogGXEiGUEGdHIhGgJAAkAgIUUNACAaIRYMAQsgBUECaiIZICJPDQQgByAZai0AACIZQcABcUGAAUcNBCAZQT9xIBpBBnRyIRkCQCAfRQ0AIBkhFiAaIRkMAQsgBUEDaiIWICJPDQQgByAWai0AACIWQcABcUGAAUcNBCAWQT9xIBlBBnRyIRYLIBlB4P8HcUHgBkYNAyAWIBtJDQMgFkH//8MASw0DIAUgGGpBAWohBQsgBSAiSQ0ACwsCQCAGRQ0AQQAhGgNAAkACQAJAAkAgA0GAiAFqIBpqLQAAQQJHDQAgA0GAkAFqIBpBAnQiBWoiIygCACEhAkAgA0GAsAFqIAVqKAIAIgcgA0GA4ABqIAVqKAIAIhZJDQAgByEFDAMLIBYhBSAHISIgA0GAgAFqIBpqLQAADQEMAgsgA0GAgAFqIBpqLQAARQ0CAkACQCADQYCwAWogGkECdCIHaigCACIFIANBgJABaiAHaiIWKAIAIhlJDQAgBSEHDAELIAUhBwNAIAAgB2ogACAFai0AACIiOgAAIAdBAWohB0ECQQEgIkEiRhsgBWoiBSAZSQ0ACwsgFiAHNgIADAILA0AgACAHaiAAICJqLQAAIhk6AAAgB0EBaiIFIQdBAkEBIBlBIkYbICJqIiIgFkkNAAsLAkAgFkEBaiIbICFPDQACQCAhIBZBf3NqIhhBEEkNACAWIAVrQW9LDQAgACAFaiEHIAAgG2ohIiAFIBhBcHEiFmohBSAbIBZqIRsgFiEZA0AgByAi/QAAAP0LAAAgIkEQaiEiIAdBEGohByAZQXBqIhkNAAsgGCAWRg0BCwJAAkAgISAba0EDcSIiDQAgGyEHDAELIBshBwNAIAAgBWogACAHai0AADoAACAHQQFqIQcgBUEBaiEFICJBf2oiIg0ACwsgGyAha0F8Sw0AIAAgBWohFiAhIAdrISEgACAHaiEbQQAhBwNAIBYgB2oiIiAbIAdqIhktAAA6AAAgIkEBaiAZQQFqLQAAOgAAICJBAmogGUECai0AADoAACAiQQNqIBlBA2otAAA6AAAgISAHQQRqIgdHDQALIAUgB2ohBQsgIyAFNgIACyAaQQFqIhogBkcNAAsLIAQgAk8NBQJAAkAgDw0AQQAhB0EAIQUCQANAAkAgBUGwoIuIAGotAAANACAFQZCIgIAAai0AAA0AIAVBwKiLiABqLQAADQAgA0GAkAFqIAdqKAIAIAdBoLCCiABqKAIAaiADQYCwAWogB2ooAgBrIA5LDQILIAdBBGohByAGIAVBAWoiBUcNAAwDCwtBASEjIARFDQIMBwsgBkUNBAtBACEhA0ACQCADQYCQAWogIUECdCIFaigCACIHIANBgLABaiAFaigCACIZRg0AICFBoNCKiABqLQAAIhtFDQAgByAZayEYIAAgGWohIwJAAkAgG0EDcQ0AQQAhHwwBC0EAIRYCQCAYICMtAAAiJEEtRiIXTSImDQACQCAjIBdqLQAAIgVBMEcNAEECQQEgJEEtRhsgGEYhFgwBCyAFQUZqQf8BcUH3AUkNACAYIBdrQQ9LDQAgFCAZIBdqIgVqISIgBSAHa0EBaiEFA0AgBUUhFiAFRQ0BIAVBAWohBSAiLQAAIRogIkEBaiEiIBpBRmpB/wFxQfUBSw0ACwsgGyAWcSEfIBtBAnFFDQACQCAWDQAgJg0BAkACQCAjIBdqLQAAIgVBMEcNAEECQQEgJEEtRhshBQwBCyAFQU9qQf8BcUEISw0CIBQgGWohGiAYQX9qIRYDQCAWIBdGDQIgGiAXaiEiIBdBAWoiBSEXICItAABBUGpB/wFxQQpJDQALCwJAIAUgGE8NACAjIAVqLQAAQS5HDQAgBUEBaiIiIBhPDQIgIiEFAkADQCAjIAVqLQAAQVBqQf8BcUEJSw0BIBggBUEBaiIFRw0ACyAYIQULIAUgIkYNAgsCQCAFIBhPDQAgIyAFai0AAEEgckHlAEcNAAJAIAVBAWoiIiAYTw0AAkAgIyAiai0AAEFVag4DAAEAAQsgBUECaiEiCyAiIBhPDQIgIiEFAkADQCAjIAVqLQAAQVBqQf8BcUEJSw0BIBggBUEBaiIFRw0ACyAYIQULIAUgIkYNAgsgBSAYRw0BCyAfQQJyIR8LAkAgG0EEcUUNAAJAAkACQCAYQXxqDgIAAQMLICMtAABB3wFxQdQARw0CICMtAAFB3wFxQdIARw0CQQMhBSAjLQACQd8BcUHVAEYNAQwCCyAjLQAAQd8BcUHGAEcNASAjLQABQd8BcUHBAEcNASAjLQACQd8BcUHMAEcNAUEEIQUgIy0AA0HfAXFB0wBHDQELICMgBWotAABB3wFxQcUARw0AIB9BBHIhHwsCQCAbQQhxRQ0AAkACQAJAAkACQCAYQQpJDQAgIy0ABEEtRw0AICMtAAdBLUcNAEF/IQVBfyEiAkAgIy0AACIWQVBqQf8BcUEJSw0AQX8hIiAjQQFqLQAAIhpBUGpB/wFxQQlLDQBBfyEiICNBAmotAAAiF0FQakH/AXFBCUsNAEF/ISIgI0EDai0AACIkQVBqQf8BcUEJSw0AIBZBCmwgGmpBCmwgF2pBCmwgJGpBsN98aiEiCwJAICNBBWotAAAiFkFQakH/AXFBCUsNACAjQQZqLQAAIhpBUGpB/wFxQQlLDQAgFkEKbCAaakHwe2ohBQtBfyEWAkAgI0EIai0AACIaQVBqQf8BcUEJSw0AICNBCWotAAAiF0FQakH/AXFBCUsNACAaQQpsIBdqQfB7aiEWCyAiQegHSA0AIAVBAUgNACAFQQxKDQAgFkEBSA0AQR8hGgJAIAVBC0sNAAJAQQEgBXRB0BRxDQAgBUECRw0BQRwhGiAiQQNxDQFBHUEcQR0gIkGQA3AbICJB5ABwGyEaDAELQR4hGgsgFiAaSw0AIBhBCkYNBCAYQRBJDQACQCAjLQAKIgVB1ABGDQAgBUEgRw0BCyAjLQANQTpHDQBBASEFAkAgI0ELai0AACIiQVBqQf8BcUEJSw0AICNBDGotAAAiFkFQakH/AXFBCUsNACAiQQpsIBZqQfB7akEXSyEFCyAjQQ5qLQAAIiJBUGpB/wFxQQlLDQAgI0EPai0AACIWQVBqQf8BcUEJSw0AIAUgIkEKbCAWakHwe2pBO0tyDQAgGEEQRg0EIBhBE0kNACAjLQAQQTpHDQAgI0ERai0AACIFQVBqQf8BcUEJSw0AICNBEmotAAAiIkFQakH/AXFBCUsNACAFQQpsICJqQfB7akE7Sw0AIBhBE0YNBEETIQUCQCAjLQATQS5HDQAgGEEVSQ0CQRQhBQJAA0AgIyAFai0AAEFQakH/AXFBCUsNASAYIAVBAWoiBUcNAAsgGCEFCyAFQRRGDQELIAUgGEYNBCAFQQFqIBhHDQAgIyAFai0AAEHaAEYNBAsgGEEoSw0EICFBsJiLiABqLQAAIhdB/wFGDQQgGA0BQcW78oh4IRoMAgsgIUGwmIuIAGotAAAiF0H/AUYNAwsgGEEDcSEiAkACQCAZIAdrQXxNDQBBxbvyiHghGkEAIQcMAQsgGEF8cSEWQcW78oh4IRpBACEHA0AgGiAjIAdqIgUtAABzQZODgAhsIAVBAWotAABzQZODgAhsIAVBAmotAABzQZODgAhsIAVBA2otAABzQZODgAhsIRogFiAHQQRqIgdHDQALCyAiRQ0AIAAgByAZamohBQNAIBogBS0AAHNBk4OACGwhGiAFQQFqIQUgIkF/aiIiDQALCyAXQYCgCmwiJkHRsIuIAGohJUEAIRcgGiEkA0AgJiAXIBpqQf8fcUEpbGpB0LCLiABqLQAAIgVFDQICQCAYIAVHDQAgJSAkQf8fcUEpbGohByAYIQUgIyEiA0AgBUUNAyAFQX9qIQUgIi0AACEZIActAAAhFiAHQQFqIQcgIkEBaiEiIBYgGUYNAAsLICRBAWohJCAXQQFqIhdBgCBHDQAMAgsLIB9BCHIhHwsgHyAbRg0AQQEhIwwCCyAhQQFqIiEgBkcNAAtBACEWA0ACQCAWQbCgi4gAai0AACIHRQ0AIANBgJABaiAWQQJ0IgVqKAIAIiEgA0GAsAFqIAVqKAIAIiJGDQAgISAiayEaAkAgB0EBRw0AQQIhIyAaIAAgImoiBy0AAEEtRiIFTQ0DAkAgByAFai0AACIHQTBGDQAgB0FGakH/AXFB9wFJDQQgGiAFa0EPSw0EQQJBASAFGyIFIBpPDQIgACAFICJqIgdqIQUgByAhayEHA0AgBS0AAEFGakH/AXFB9gFJDQUgBUEBaiEFIAdBAWoiB0UNAwwACwsgGkEBRg0BDAMLQQIhIyAHIAAgImoiGS0AACIXQS1GIgVqIh9BcmogGksNAiAaIAdrQQ9qIgcgBU0NAiAZIAdqLQAAQS5HDQIgBSAaa0FwSQ0CIBkgBWotAABBMEYgByAFa0EBS3ENAgJAAkAgBSAaSQ0AQQEhGEEAIQUMAQsgIiAhayEHQQAhGEEBISJBACEhAkADQAJAIB8gB2pBD0YNACAZIAVqLQAAIhtBUGpB/wFxQQlLDQIgIUEBIBtBMEYbISELIBlBAWohGSAFICJqIBpPIRggIkEBaiEiIAUgB0EBaiIHag0ACwsgIUEARyEFCyAYQQFxRQ0CIBdBLUcgBXJFDQILIBZBAWoiFiAGRw0ACyADQYAgaiEZQQAhIkEAIQcCQANAAkAgB0HAqIuIAGotAABFDQAgB0GwoIuIAGotAAANACADQYCQAWogImooAgAgA0GAsAFqICJqKAIAIgVrQRdHDQIgACAFaiIFLQAEQS1HDQIgBS0AB0EtRw0CIAUtAApB1ABHDQIgBS0ADUE6Rw0CIAUtABBBOkcNAiAFLQATQS5HDQIgBS0AACIWQVBqQf8BcUEJSw0CIAUtAAEiGkFQakH/AXFBCUsNAiAFLQACIiFBUGpB/wFxQQlLDQIgBS0AAyIbQVBqQf8BcUEJSw0CIAUtAAUiI0FQakH/AXFBCUsNAiAFLQAGIhhBUGpB/wFxQQlLDQIgBS0ACCIfQVBqQf8BcUEJSw0CIAUtAAkiF0FQakH/AXFBCUsNAiAFLQALIiRBUGpB/wFxQQlLDQIgBS0ADCImQVBqQf8BcUEJSw0CIAUtAA4iJUFQakH/AXFBCUsNAiAFLQAPIidBUGpB/wFxQQlLDQIgBS0AESIoQVBqQf8BcUEJSw0CIAUtABIiKUFQakH/AXFBCUsNAiAFLQAUIipBUGpB/wFxQQlLDQIgBS0AFSIrQVBqQf8BcUEJSw0CIAUtABYiLEFQakH/AXFBCUsNAiAWQQpsIBpqQQpsICFqQQpsIBtqQbDffGoiIUHoB0kNAiAjQQpsIBhqQfB7aiIFRQ0CIAVBDEsNAiAfQQpsIBdqQfB7aiIWRQ0CICRBCmwgJmpB8HtqIhtBF0sNAiAlQQpsICdqQfB7aiIjQTtLDQIgKEEKbCApakHwe2oiGEE7Sw0CQR4hGgJAAkACQCAFQX5qDggAAQIBAgEBAgELQRwhGiAhQQNxDQFBHSEaICFB//8DcSIfQeQAcA0BQRxBHSAfQZADcBshGgwBC0EeQR8gBUELRhshGgsgFiAaSw0CIBkgISAFQQNJayIaQZADbiIhrUKx9Qh+ICFB8HxsIBpqIhpB7QJsIBpBBG1qIBpBnH9takH9/wNBCSAFQQJLGyAFakGZAWxBAmrBQQVtQX9qwWogFmqsfEIYfiAbrXxCPH4gI618Qjx+IBitfEKAvOq2mH58uUQAAAAAAECPQKIgKkEKbCArakEKbCAsakGwVmq3oDkDAAsgIkEEaiEiIBlBCGohGSAGIAdBAWoiB0cNAAtBACEZQQEhFwNAAkAgGUGQiICAAGotAABFDQAgGUGwoIuIAGotAAANACADQYCQAWogGUECdCIjaigCACImIANBgLABaiAjaigCACIkayEfIAAgJGohGgJAAkACQCAmICRGIigNACAfQQNxIRYCQAJAICQgJmtBfE0NAEHFu/KIeCEFQQAhIgwBCyAfQXxxISFBxbvyiHghBUEAISIDQCAFIBogImoiBy0AAHNBk4OACGwgB0EBai0AAHNBk4OACGwgB0ECai0AAHNBk4OACGwgB0EDai0AAHNBk4OACGwhBSAhICJBBGoiIkcNAAsLAkAgFkUNACAAICIgJGpqIQcDQCAFIActAABzQZODgAhsIQUgB0EBaiEHIBZBf2oiFg0ACwsgI0GQkICAAGohJyAjQZDwgIAAaiEhICNBkNCAgABqIRsgHyAFQQ92cyAFcyElQQAhGANAIBlBDnQgGCAlakH/P3FBAXRyQZCQgYAAaiIiLwEAIgVFDQICQCAhKAIAIAVBf2oiFkECdCIFaigCACAbKAIAIAVqKAIAIgVrIB9HDQAgJygCACAFaiEFIBohByAfISIDQAJAIAUtAAAgBy0AAEYNACAiRQ0GDAILIAVBAWohBSAHQQFqIQcgIkF/aiIiDQAMBQsLIBhBAWoiGEGAwABHDQAMCAsLICNBkJCAgABqIScgI0GQ8ICAAGohISAjQZDQgIAAaiEbQfw/IQUgGUEOdCEYA0AgGCAFQf8/cUEBdHJBkJCBgABqIiIvAQAiB0UNASAhKAIAIAdBf2oiFkECdCIHaigCACAbKAIAIAdqKAIARg0CIAVBAWoiBUH8/wBGDQcMAAsLICNBkJCBiABqIgUoAgAiFkH/H0sNBSAjQZCwgYgAaiIqKAIAIikgH2oiJSAjQZCwgIAAaigCAEsNBSAFIBZBAWoiFzYCACAbKAIAIBZBAnQiK2ogKTYCAAJAICgNACAnKAIAIiggKWohG0EAIScCQCAfQRBJDQAgKCApaiAAICRqa0EQSQ0AIB9BcHEiJyEYIBshBSAaIQcDQCAFIAf9AAAA/QsAACAFQRBqIQUgB0EQaiEHIBhBcGoiGA0ACyAfICdGDQELICchBwJAICYgJGtBA3EiBUUNACAnIQcDQCAbIAdqIBogB2otAAA6AAAgB0EBaiEHIAVBf2oiBQ0ACwsgJyAmayAkakF8Sw0AICggByApamohBSAAIAcgJGoiGmohByAaICZrIRoDQCAFIActAAA6AAAgBUEBaiAHQQFqLQAAOgAAIAVBAmogB0ECai0AADoAACAFQQNqIAdBA2otAAA6AAAgBUEEaiEFIAdBBGohByAaQQRqIhoNAAsLICogJTYCACAiIBc7AQAgISgCACAraiAlNgIACyADICNqIBY2AgALIBlBAWoiGSAGSSEXIBkgBkcNAAwECwtBACAHNgKQ0IGIAEEAQQU2ArSoi4gADAULQQAgIzYCtKiLiAAMBAtBACAZNgKQ0IGIAEEAQQQ2ArSoi4gAIBdBAXENAyAGRQ0BC0EAIRkDQCAZQQJ0IhZBoNiKiABqIgUgBSgCAEEBajYCAAJAAkACQAJAAkAgA0GAkAFqIBZqKAIAIhogA0GAsAFqIBZqKAIAIgdHDQAgFkGg+IqIAGoiBSAFKAIAQQFqNgIARAAAAAAAAPh/IS0gGUGwoIuIAGotAABFDQEMAwsgGUGwoIuIAGotAAANAQsCQCAZQcCoi4gAai0AAEUNACAWQaDQgYgAaigCACAEQQN0aiADQYAgaiAZQQN0aisDADkDAAwDCwJAIBlBkIiAgABqLQAARQ0AIBZBoNCBiABqKAIAIARBAXRqIAMgFmooAgA7AQAMAwsgGiAHayEIIBZBoLCCiABqIh8oAgAhGAJAIBogB0YNACAAIAdqISEgFkGgkIKIAGooAgAiJCAYaiEbQQAhFwJAIAhBEEkNACAkIBhqIAAgB2prQRBJDQAgCEFwcSIXISMgGyEFICEhIgNAIAUgIv0AAAD9CwAAIAVBEGohBSAiQRBqISIgI0FwaiIjDQALIAggF0YNAQsgFyEiAkAgCEEDcSIFRQ0AIBchIgNAIBsgImogISAiai0AADoAACAiQQFqISIgBUF/aiIFDQALCyAXIBprIAdqQXxLDQAgACAiIAdqIiFqIQUgJCAiIBhqaiEHICEgGmshIgNAIAcgBS0AADoAACAHQQFqIAVBAWotAAA6AAAgB0ECaiAFQQJqLQAAOgAAIAdBA2ogBUEDai0AADoAACAFQQRqIQUgB0EEaiEHICJBBGoiIg0ACwsgFkGg0IGIAGooAgAgBEECdCIFaiAYNgIAIBZBoPCBiABqKAIAIAVqIBggCGoiBTYCACAfIAU2AgAMAgtCACEuAkAgByAAIAdqLQAAQS1GIiFqIgUgGk8NACAaIAcgIWprIiJBAXEhG0IAIS4CQCAaIAdBf3NqICFGDQAgIkF+cSEHQgAhLgNAIC4gLkIKfiAAIAVqIiIxAAAiL3xCUHwgL0IuURsiLiAuQgp+ICJBAWoxAAAiLnxCUHwgLkIuURshLiAFQQJqIQUgB0F+aiIHDQALCyAbRQ0AIC4gLkIKfiAAIAVqMQAAIi98QlB8IC9CLlEbIS4LIC66Ii2aIC0gIRshLQsgFkGg0IGIAGooAgAgBEEDdGogLTkDAAsgGUEBaiIZIAZHDQALC0EAQQAoAsCwi4gAIB1qNgLAsIuIAEEAQQAoApjQgYgAIBxqNgKY0IGIACAEQQFqIQQgIEEBaiIIIAFJDQALC0EAIAQ2ArCoi4gAIANBgNABaiSAgICAACAICw=='), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); C = new WebAssembly.Instance(new WebAssembly.Module(u)).exports; } catch { C = false; } } return C; };
+function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn, lenient, noq) {
   const n = headers.length, D = delimiter.charCodeAt(0);
-  if (n === 0 || n > 128 || D > 126 || typeof WebAssembly === 'undefined' || !core.placeColumns || !loadC()) return null;
-  const CB = COLB;   // wide files: smaller chunks, so the text areas of 100+ columns stay small
-  const B = core.placeColumns(C, headers, plan, delimiter, { capRows: 32768, chunkBytes: CB, dict }); if (dictOn) for (let c = 0; c < n; c++) dictOn[c] = B.isDict(c);
-  const flagsP = B.exports.flags_ptr(), cn = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 128), ce = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 128);
+  if (n === 0 || n > 1024 || D > 126 || typeof WebAssembly === 'undefined' || !core.placeColumns || !loadC()) return null;
+  const CB = COLB;
+  const B = core.placeColumns(C, headers, plan, delimiter, n > 128 ? { capRows: Math.ceil(CB / n) + 64, chunkBytes: CB, dict, textCap: Math.max(65536, Math.ceil(8 * CB / n)) } : { capRows: 32768, chunkBytes: CB, dict }); if (C.set_lenient) C.set_lenient(lenient ? 1 : 0); if (C.set_noq) C.set_noq(noq ? 1 : 0); if (dictOn) for (let c = 0; c < n; c++) dictOn[c] = B.isDict(c);
+  const flagsP = B.exports.flags_ptr(), cn = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 1024), ce = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 1024);
   const slot = new Uint8Array(n).fill(255), synced = new Int32Array(n); let slotNo = 0; const SLOTS = 8;
   const F = { off: false, rows: 0, miss: 0 };
   // Same contract as makeFastW's run: takes the plain lines of b[i..) whose line break is before lim, returns where it stopped.
@@ -207,7 +242,7 @@ function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn) {
     const end = Math.min(b.length, lim);
     while (i < end && !F.off) {
       const r = B.build(b.subarray(i, i + Math.min(end - i, CB)));
-      if (r.n) { const m = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 128), e = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 128); for (let c = 0; c < n; c++) { trackers[c].n += m[c]; trackers[c].empty += e[c]; } parser.line += C.nlines(); parser.startLine = parser.line; F.rows += r.n; F.miss = 0; sink({ n: r.n, bytes: r.used, cols: r.arr }); }
+      if (r.n) { const m = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 1024), e = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 1024); for (let c = 0; c < n; c++) { trackers[c].n += m[c]; trackers[c].empty += e[c]; } parser.line += C.nlines(); parser.startLine = parser.line; F.rows += r.n; F.miss = 0; if (r.stray) F.stray = (F.stray || 0) + r.stray; sink(r.arr.slab ? { n: r.n, bytes: r.used, cols: r.arr, slab: r.arr.slab } : { n: r.n, bytes: r.used, cols: r.arr }); }
       i += r.used;
       if (r.bail === 'mixed') { if (++F.miss >= 64) F.off = true; break; }   // the character parser reads this line next and names the column if the cell really is text-like
       if (r.bail === 'dict') { B.undict(r.bailcol); if (dictOn) dictOn[r.bailcol] = false; continue; }   // more than 4096 distinct values in a chunk: this column is text from here on
@@ -253,6 +288,7 @@ const dupText = (x) => { if (x.start.buffer === x.end.buffer) { const b = x.star
 // One buffer for a whole chunk: a wide file makes chunks of 100+ columns, each with 2 or 3 small arrays; handing 700 small buffers to postMessage costs about 9 microseconds each in Chromium
 // (36,000 buffers per 8 MiB piece, 13 s of the helpers' time on a 116-column file), so the arrays of a chunk are copied into one slab and travel as views of it.
 const slabChunk = (c) => {
+  if (c.slab) return c;   // built as one buffer already
   let tot = 0; const add = (a) => { tot += (a.byteLength + 7) & ~7; };
   for (const x of c.cols) { if (x.codes) { add(x.codes); add(x.lb.bytes); add(x.lb.start); add(x.lb.end); } else if (x.bytes) { add(x.bytes); add(x.start); add(x.end); } else add(x); }
   const slab = new ArrayBuffer(tot); let off = 0;
@@ -260,8 +296,11 @@ const slabChunk = (c) => {
   const cols = c.cols.map((x) => (x.codes ? { codes: mv(x.codes), lb: { bytes: mv(x.lb.bytes), start: mv(x.lb.start), end: mv(x.lb.end) } } : x.bytes ? Object.assign({}, x, { bytes: mv(x.bytes), start: mv(x.start), end: mv(x.end) }) : mv(x)));
   return Object.assign({}, c, { cols, slab });
 };
-const dupChunk = (c) => ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.codes ? { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } } : x.bytes ? dupText(x) : x.slice())) });
-const chunkBuffers = (c) => { if (c.slab) return [c.slab]; const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
+const reView = (a, buf) => new a.constructor(buf, a.byteOffset, a.length);
+const ownDup = (x, extra) => { const y = dupText(x); y.own = true; extra.push(y.bytes.buffer, y.start.buffer); return y; };   // a column that was turned to text after the chunk was built has its own buffers
+const dupSlab = (c) => { const b = c.slab.slice(0), extra = [], o = { n: c.n, bytes: c.bytes, slab: b, cols: c.cols.map((x) => (x.own ? ownDup(x, extra) : x.codes ? { codes: reView(x.codes, b), lb: { bytes: reView(x.lb.bytes, b), start: reView(x.lb.start, b), end: reView(x.lb.end, b) } } : x.bytes ? { bytes: reView(x.bytes, b), start: reView(x.start, b), end: reView(x.end, b) } : reView(x, b))) }; if (extra.length) o.extra = extra; return o; };   // one copy of the buffer, the columns are views at the same places
+const dupChunk = (c) => c.slab ? dupSlab(c) : ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.codes ? { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } } : x.bytes ? dupText(x) : x.slice())) });
+const chunkBuffers = (c) => { if (c.slab) return c.extra ? [c.slab].concat(c.extra) : [c.slab]; const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
 // Dictionary chunk column to the text shape (a code per row to start and end offsets into joined bytes).
 function expandDict(x, n) {
   const lb = x.lb; let tb = 0; for (let r = 0; r < n; r++) { const q = x.codes[r]; tb += lb.end[q] - lb.start[q]; }
@@ -362,8 +401,7 @@ async function packColsJob(m) {
         cols[m.headers[k]] = nv ? nv : tv ? { kind: 'ts', unit: tv.unit, values: tv.values, fmt: tv.fmt } : { bytes, start, end };
       } else {   // a number column with empty cells goes to LFC-pack as an array with nulls: its Float64Array form with NaN is 4-5 times slower to pack
         const a = new Float64Array(rows); let ro = 0, nan = false; for (const c of ch) { a.set(c.cols[k], ro); ro += c.n; }
-        for (let r = 0; r < rows; r++) if (a[r] !== a[r]) { nan = true; break; }
-        cols[m.headers[k]] = nan ? Array.from(a, (x) => (x !== x ? null : x)) : a;
+        cols[m.headers[k]] = a;
       }
     }
     const r = await LfcPack.packBlock(cols, m.o), tr = [r.buffer]; for (const x of Object.values(dk)) tr.push(x.ids.buffer, x.bytes.buffer, x.start.buffer, x.end.buffer);
@@ -454,11 +492,11 @@ const cleanState = (p) => p.mode === 0 && !p.seen && p.row.length === 0 && p.fie
 // m: file, delimiter, headers (null for the header scan), headerOnly, first, hdrEnd, s (cut), e (next cut), startAt, lineBase, trackers, emit, stopFn.
 // Piece start guess: the first line break after the cut that is followed by a whole record with the right number of fields when read as outside quotes.
 // A break inside a quoted cell (a multi-line address, say) gives a wrong field count, so it is skipped; the later check of every piece still decides. -1: no pick.
-function pickStart(b, ncols, dl) {
+function pickStart(b, ncols, dl, nq) {
   let nl = b.indexOf(10);
   for (let tries = 0; nl >= 0 && tries < 24; tries++) {
     const st = nl + 1; let q = false, f = 1, ok = false;
-    for (let j = st; j < b.length; j++) { const c = b[j]; if (c === 34) q = !q; else if (!q) { if (c === dl) f++; else if (c === 10) { ok = true; break; } } }
+    for (let j = st; j < b.length; j++) { const c = b[j]; if (c === 34 && !nq) q = !q; else if (!q) { if (c === dl) f++; else if (c === 10) { ok = true; break; } } }
     if (!ok) return -1;
     if (f === ncols) return st;
     nl = b.indexOf(10, st);
@@ -474,41 +512,55 @@ async function parseSegment(m) {
   if (m.startAt != null) start = m.startAt;
   else if (m.headerOnly) start = 0;
   else if (m.first) start = m.hdrEnd;
-  else if (m.headers && m.s < size && (start = pickStart(new Uint8Array(await file.slice(m.s, Math.min(size, m.s + 262144)).arrayBuffer()), m.headers.length, m.delimiter.charCodeAt(0))) >= 0) start += m.s;
+  else if (m.headers && m.s < size && (start = pickStart(new Uint8Array(await file.slice(m.s, Math.min(size, m.s + 262144)).arrayBuffer()), m.headers.length, m.delimiter.charCodeAt(0), !!m.noQuote)) >= 0) start += m.s;
   else { start = size; for (let o = m.s; o < size; o += 65536) { const b = new Uint8Array(await file.slice(o, Math.min(size, o + 65536)).arrayBuffer()); const k = b.indexOf(10); if (k >= 0) { start = o + k + 1; break; } } }
   const limit = Math.max(m.e, start), headers = m.headers, plan = m.plan;
-  const trackers = m.trackers || (headers ? headers.map(() => new TypeTracker()) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
+  const trackers = m.trackers || (headers ? headers.map((_, c) => { const x = new TypeTracker(), sd = m.noSample && m.seed && m.seed.length === headers.length ? m.seed[c] : 15; if (!(sd & 1)) x.int = false; if (!(sd & 2)) x.num = false; if (!(sd & 4)) x.bool = false; if (!(sd & 8)) x.date = false; return x; }) : null), build = headers ? lineBuilder(headers, plan, trackers, typedCell) : null;
   let header = null, rows = 0, pos = 0, acc = '', accN = 0; const sample = [], pieces = [];
   const colMode = !!(m.cols && headers && !m.headerOnly), chunks = [];
   const dictOn = headers ? headers.map(() => false) : null;   // which columns are in dictionary shape right now
-  const slow = colMode ? slowRows(headers, plan, trackers, typedCell, core.typedDecimal, (c) => chunks.push(c), dictOn) : null;
-  const F = headers && !m.headerOnly ? (colMode ? makeColW(headers, plan, trackers, m.delimiter, (c) => { slow.flush(); chunks.push(c); }, m.dict, dictOn) : ((m.wasmRows !== false && makeFastW(headers, plan, trackers, m.delimiter)) || makeFast(headers, plan, trackers, m.delimiter))) : null;
+  // Survey (m.survey): nothing is kept; the piece is read only to list every number column that holds a text-like cell, so the import can start again once with all of them as text.
+  // A column found this way is read as text for the rest of the piece, so it costs one slow line, not one per row.
+  const survey = !!(m.survey && colMode), mixedCols = survey ? new Set() : null;
+  const slow = !colMode ? null : survey ? (() => { const pl = plan ? plan.slice() : [], n = headers.length, isInt = pl.map((x) => x === true); const S = { n: 0, changed: false, plan: pl, flush() {}, add(f) { for (let c = 0; c < n; c++) { const p = pl[c]; if (p !== true && !(typeof p === "number" && p > 0)) continue; const v = isInt[c] ? typedCell(f[c]) : core.typedDecimal(f[c], p); if (v !== null && typeof v !== "number") { mixedCols.add(c); pl[c] = false; S.changed = true; } } } }; return S; })() : slowRows(headers, plan, trackers, typedCell, core.typedDecimal, (c) => chunks.push(c), dictOn);
+  let F = headers && !m.headerOnly ? (colMode ? makeColW(headers, plan, trackers, m.delimiter, survey ? () => {} : (c) => { slow.flush(); chunks.push(c); }, m.dict, dictOn, !!m.plainTidy, !!m.noQuote) : ((m.wasmRows !== false && makeFastW(headers, plan, trackers, m.delimiter)) || makeFast(headers, plan, trackers, m.delimiter))) : null;
   let buf = new Uint8Array(1 << 20);
   const drain = () => { if (colMode) { slow.flush(); accN = 0; return; } if (!accN) return; if (buf.length - pos < acc.length * 3) { const n = new Uint8Array(Math.max(buf.length * 2, pos + acc.length * 3)); n.set(buf.subarray(0, pos)); buf = n; } pos += enc.encodeInto(acc, buf.subarray(pos)).written; acc = ''; accN = 0; };
   const flushOut = async () => { drain(); if (colMode) { if (m.emit) while (chunks.length) await m.emit(chunks.shift()); return; } if (!pos) return; const b = buf.slice(0, pos); pos = 0; if (m.emit) await m.emit(b); else pieces.push(b); };
+  let padN = 0, truN = 0;
   const parser = new DelimitedParser(m.delimiter, (f, line) => {
     if (m.headerOnly) { if (!header) header = cleanHeaders(f); return; }
-    if (f.length !== headers.length) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
+    if (f.length !== headers.length) {
+      if (!m.noQuote) throw new IngestError(`Row has ${f.length} fields but the header has ${headers.length}.`, line);
+      if (f.length < headers.length) { padN++; while (f.length < headers.length) f.push(''); } else { truN++; f.length = headers.length; }   // a list read with plain quote marks: short rows are filled and extra cells left out, as the tidy pass does
+    }
     if (colMode) slow.add(f); else acc += build(f);
     rows++; if (sample.length < 20) sample.push(sampleRecord(headers, plan, f, typedCell)); if (++accN >= 64) drain();
-  });
+  }, { noQuote: !!m.noQuote });
   if (m.lineBase) parser.line = parser.startLine = m.lineBase;
   const dec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: !m.headerOnly && start > 0 });
   const ready = () => cleanState(parser) && (!m.headerOnly || header);
+  const DD = m.delimiter ? m.delimiter.charCodeAt(0) : 0, strayOn = !m.headerOnly && !!headers && DD !== 32 && DD !== 34 && m.stray !== false; let strayN = 0;   // not for space-separated lists: the tidy pass has its own quote rules for those
+  const needSample = m.noSample ? 0 : 20;   // the sample rows come from the first piece; a later piece only reads its first rows the slow way when the first piece may hold fewer than 20
+  const carryOn = !m.headerOnly && !!headers && !!F && m.carry !== false; let carry = null;
   let at = start, end = size, finished = false, pre = at < size ? file.slice(at, Math.min(size, at + SL)).arrayBuffer() : null;
   while (at < size && !finished) {
     if (m.stopFn) m.stopFn();
     if (m.headerOnly && at - start > 8 * SL) throw new Error('No line break found near the start of the file.');
-    const to = Math.min(size, at + SL), b = new Uint8Array(await pre); pre = to < size ? file.slice(to, Math.min(size, to + SL)).arrayBuffer() : null;   // the next slice loads while this one is parsed
-    let i = 0; const from = Math.max(0, limit - at);
+    const to = Math.min(size, at + SL); let b = new Uint8Array(await pre), base = at; pre = to < size ? file.slice(to, Math.min(size, to + SL)).arrayBuffer() : null;   // the next slice loads while this one is parsed
+    if (carry) { const nb = new Uint8Array(carry.length + b.length); nb.set(carry); nb.set(b, carry.length); b = nb; base = at - carry.length; carry = null; }
+    let i = 0; const from = Math.max(0, limit - base);
     while (i < b.length) {
-      if (F && !F.off && sample.length >= 20 && cleanState(parser)) { drain(); const io = { buf, pos }; i = F.run(b, i, from, parser, io); buf = io.buf; pos = io.pos; if (i >= b.length) break; }
+      if (F && !F.off && sample.length >= needSample && cleanState(parser)) { drain(); const io = { buf, pos }; i = F.run(b, i, from, parser, io); buf = io.buf; pos = io.pos; if (i >= b.length) break; }
       const k1 = F && !F.off ? b.indexOf(10, i) : -1;   // one line by the character parser, then the byte path may take over again
-      if (k1 >= 0 && k1 < from) { parser.feed(dec.decode(b.subarray(i, k1 + 1), { stream: true }), false); i = k1 + 1; continue; }
+      if (k1 >= 0 && k1 < from) { const fx = strayOn && cleanState(parser) ? (m.plainTidy ? lineTidy(b, i, k1, DD, headers.length) : strayFix(b, i, k1, DD)) : null; if (fx) strayN++; parser.feed(dec.decode(fx || b.subarray(i, k1 + 1), { stream: true }), false); i = k1 + 1; if (survey && slow.changed) { slow.changed = false; F = makeColW(headers, slow.plan, trackers, m.delimiter, () => {}, m.dict, dictOn, !!m.plainTidy, !!m.noQuote); } continue; }
       const k = from < b.length ? b.indexOf(10, Math.max(from, i)) : -1;
+      // The unfinished line at the end of a slice waits for the next slice and is read whole with it: by the fast reader when it can take it (a 700-column line is about 1 in 90 at this slice size, and
+      // each line left to the character parser cuts the chunk in two), and as one line otherwise, so a quote mark inside a plain cell is seen with its whole line (strayFix).
+      if (k < 0 && carryOn && pre && i > 0 && cleanState(parser)) { carry = b.subarray(i); i = b.length; break; }
       if (k < 0) { parser.feed(dec.decode(b.subarray(i), { stream: true }), false); i = b.length; break; }
-      parser.feed(dec.decode(b.subarray(i, k + 1), { stream: true }), false); i = k + 1;
-      if (ready()) { end = at + i; finished = true; break; }
+      { const fx = strayOn && cleanState(parser) ? (m.plainTidy ? lineTidy(b, i, k, DD, headers.length) : strayFix(b, i, k, DD)) : null; if (fx) strayN++; parser.feed(dec.decode(fx || b.subarray(i, k + 1), { stream: true }), false); } i = k + 1;
+      if (ready()) { end = base + i; finished = true; break; }
     }
     at = to;
     if (pos >= (1 << 22) || acc.length > (1 << 20) || (colMode && m.emit && chunks.length)) await flushOut();
@@ -516,7 +568,7 @@ async function parseSegment(m) {
   if (!finished) { end = size; parser.feed(dec.decode(), true); }
   await flushOut();
   const snap = trackers ? trackers.map((x) => ({ n: x.n, empty: x.empty, int: x.int, num: x.num, bool: x.bool, date: x.date })) : null;
-  return { startPos: start, endPos: end, pieces, chunks, rows: rows + (F ? F.rows : 0), fast: F ? F.rows : 0, lines: parser.line - 1, header, sample, trackers: snap, eof: !finished };
+  return { pad: padN, tru: truN, stray: strayN + ((F && F.stray) || 0), mixedCols: mixedCols ? [...mixedCols] : null, startPos: start, endPos: end, pieces, chunks, rows: rows + (F ? F.rows : 0), fast: F ? F.rows : 0, lines: parser.line - 1, header, sample, trackers: snap, eof: !finished };
 }
 
 // Pack worker side (LFC-pack 0.7.0): pack one chunk of JSON lines into block bytes; the importer appends the results in order with pushPacked.
@@ -547,17 +599,21 @@ async function segJob(m) {
 
 // Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
-async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict, nh) {
+async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict, nh, survey) {
   nh = Math.max(2, Math.min(8, nh | 0 || 2));   // parse helpers: 2 by default; the page option parseHelpers tries more on machines with spare cores
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
   try { for (let i = 0; i < nh; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; }
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
-  for (const h of helpers) {
+  const wire = (h) => {
     h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); p.res(d.r); } } };
     h.onerror = (e) => failAll(new Error('The import helper failed: ' + (e && e.message || 'unknown error')));
-  }
+  };
+  for (const h of helpers) wire(h);
+  // Once a column has turned to text in place the pieces still being read use the old plan. A helper reads two pieces at once when a repeat lands on it, and its one builder cannot hold two plans,
+  // so from then on repeats go to a helper of their own.
+  let redoH = null; const redoOn = (k) => { if (!t.demotes) return helpers[k % nh]; if (!redoH) { redoH = mkWorker(); wire(redoH); helpers.push(redoH); } return redoH; };
   const rpc = async (h, msg) => {
     let tr = []; if (msg.file && msg.file.lazy) {   // a zip entry still being unpacked: hand the helper the bytes of its own window (segment plus 2 MiB past its end to finish the last row)
       const f = msg.file, lo = msg.headerOnly ? 0 : msg.startAt != null ? msg.startAt : msg.first ? msg.hdrEnd : msg.s, hi = Math.min(f.size, msg.headerOnly ? 4194304 : (msg.e || f.size) + 2097152);
@@ -571,11 +627,12 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
     let hdr; try { hdr = await rpc(helpers[0], { file, delimiter, headerOnly: true, e: 0 }); } catch { closeAll(); return null; }
     if (hdr.error || !hdr.header || hdr.eof) { closeAll(); return null; }
     const headers = hdr.header, hdrEnd = hdr.endPos, total = Math.ceil((file.size - hdrEnd) / SEGB);
-    if (col && headers.length > 128) col = null;   // the column builder takes up to 128 columns
+    if (col && headers.length > 1024) col = null;   // the column builder takes up to 1,024 columns
     if (col) await col.begin(headers);
-    const cols = !!col; t.cols = cols;
+    const cols = !!col; t.cols = cols; t.ncols = headers.length;
     const agg = headers.map(() => new TypeTracker());
     let rows = 0, expect = hdrEnd, lineBase = hdr.lines + 1; const sample = [];
+    const noSample = (t.headRows || 0) >= 20 && SEGB >= 8388608 && !survey;   // the first piece (8 MiB) holds the first 4 MB, whose 20 or more whole rows fill the sample
     let nextD = 0, nextP = 0, quit = false; const done = new Map(), waiters = new Set();
     const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } };
     const wait = () => new Promise((r) => waiters.add(r));
@@ -583,7 +640,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       while (!quit && nextD < total) {
         if (nextD >= nextP + SEG_WINDOW + nh - 2) { await wait(); continue; }
         const k = nextD++, s = hdrEnd + k * SEGB, e = Math.min(file.size, s + SEGB);
-        done.set(k, await rpc(h, { file, delimiter, headers, plan, dict, cols, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
+        done.set(k, await rpc(h, { file, delimiter, headers, plan, dict, cols, survey, plainTidy: !!t.plainTidy, noQuote: NOQ, noSample: k > 0 && noSample, seed: k > 0 && noSample ? t.seed : null, dup: !!(col && col.dup), first: k === 0, hdrEnd, s, e }).catch((err) => ({ error: String(err && err.message || err), cancelled: !!(err && err.cancelled) })));
         signal();
       }
     };
@@ -594,21 +651,23 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
       let r = done.get(k); done.delete(k); nextP = k + 1; signal(); stop(job);
       if (r.error || r.startPos !== expect) {   // a guessed start sat inside quotes: parse this piece again from the verified spot
         t.redos = (t.redos || 0) + 1;
-        r = await rpc(helpers[k % helpers.length], { file, delimiter, headers, plan, dict, cols, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
+        r = await rpc(redoOn(k), { file, delimiter, headers, plan, dict, cols, survey, plainTidy: !!t.plainTidy, noQuote: NOQ, noSample: k > 0 && noSample, seed: k > 0 && noSample ? t.seed : null, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) }));
         stop(job);
-        if (r.mixed) throw mixedErr(r.col);   // from a verified start: the file really has a text-like cell in a number column
+        // from a verified start: the file really has a text-like cell in a number column. A wide live table turns that column to text in place and reads the piece again; any other import starts over.
+        for (let g = 0; r.mixed && g < headers.length && col && col.demote && await col.demote(r.col); g++) { t.demotes = (t.demotes || 0) + 1; r = await rpc(redoOn(k), { file, delimiter, headers, plan, dict, cols, survey, plainTidy: !!t.plainTidy, noQuote: NOQ, noSample: k > 0 && noSample, seed: k > 0 && noSample ? t.seed : null, dup: !!col.dup, startAt: expect, hdrEnd, s: expect, e: Math.min(file.size, hdrEnd + (k + 1) * SEGB) }).catch((err) => ({ error: String(err && err.message || err) })); stop(job); }
+        if (r.mixed) throw mixedErr(r.col);
         if (r.error || r.startPos !== expect) { serial = true; t.segWhy = 'k=' + k + ' ' + (r.error || ('start ' + r.startPos + ' expected ' + expect)); break; }
       }
       for (const b of r.pieces) await packBytes(b);
       if (col) for (let q = 0; q < r.chunks.length; q++) await col.push(r.chunks[q], r.chunks2 && r.chunks2[q]);
-      rows += r.rows; t.fastRows = (t.fastRows || 0) + (r.fast || 0); r.trackers.forEach((x, i) => agg[i].merge(x)); for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
+      if (r.stray) t.stray = (t.stray || 0) + r.stray; if (r.pad) t.padN = (t.padN || 0) + r.pad; if (r.tru) t.truN = (t.truN || 0) + r.tru; if (r.mixedCols) for (const c of r.mixedCols) (t.mixedCols ||= new Set()).add(c); rows += r.rows; t.fastRows = (t.fastRows || 0) + (r.fast || 0); r.trackers.forEach((x, i) => agg[i].merge(x)); for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
       expect = r.endPos; lineBase += r.lines; progress(r.endPos, rows);
       if (r.eof) break;
     }
     quit = true; signal();
     if (serial || expect < file.size) {   // pieces did not fit together (or one failed): parse the rest in order, from the last verified spot
       closeAll();
-      const r = await parseSegment({ file, delimiter, headers, plan, dict, cols, startAt: expect, e: file.size, lineBase, trackers: agg, emit: col ? col.push : packBytes, stopFn: () => stop(job) });
+      const r = await parseSegment({ file, delimiter, headers, plan, dict, cols, survey, plainTidy: !!t.plainTidy, noQuote: NOQ, startAt: expect, e: file.size, lineBase, trackers: agg, emit: col ? col.push : packBytes, stopFn: () => stop(job) }); if (r.stray) t.stray = (t.stray || 0) + r.stray; if (r.pad) t.padN = (t.padN || 0) + r.pad; if (r.tru) t.truN = (t.truN || 0) + r.tru; if (r.mixedCols) for (const c of r.mixedCols) (t.mixedCols ||= new Set()).add(c);
       rows += r.rows; for (const rec of r.sample) if (sample.length < 20) sample.push(rec);
       t.serialTail = true;
     }
@@ -620,23 +679,35 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
 // Which columns are stored as numbers: those whose first 2,000 rows (from the first MB) are all plain whole numbers or empty, with at least one number.
 // Decided once from the sample so every piece and helper agrees; a later value that is not a plain whole number stays text in its cell.
 async function samplePlan(file, delimiter) {
-  samplePlan.dict = null; samplePlan.num = null;
+  samplePlan.dict = null; samplePlan.num = null; samplePlan.headRows = 0; samplePlan.seed = null; samplePlan.plainTidy = false;
   try {
     await loadCore(); const { DelimitedParser, TypeTracker } = core;
-    let text = new TextDecoder().decode(new Uint8Array(await file.slice(0, 4194304).arrayBuffer())); let cutAll = file.size <= 4194304;
+    const hb = new Uint8Array(await file.slice(0, 4194304).arrayBuffer()), DS = delimiter.charCodeAt(0); let text = new TextDecoder().decode(hb);
+    samplePlan.plainTidy = DS !== 32 && hb[hb[0] === 0xEF && hb[1] === 0xBB && hb[2] === 0xBF ? 3 : 0] !== 35 && !/\\["\\,;\t|]/.test(text);   // the tidy pass would read this file with its plain options (normalizeFile: no comment lines, no backslash escapes)
+ let cutAll = file.size <= 4194304, lenient = false;
+    // A sample with a quote mark inside an unquoted cell is read the way the tidy pass would write it (see strayFix), so the plan is made from all of its rows and not only from the rows before that cell.
+    const tidied = (bytes, final) => { try { const nz = makeNormalizer({ delim: DS, comments: false, backslash: false }), a = nz.feed(bytes), z = final ? nz.end() : null, st = nz.stats; return (!a && !z) || st.padded || st.truncated || st.headerPad ? null : new TextDecoder().decode(a || new Uint8Array(0)) + (z ? new TextDecoder().decode(z) : ''); } catch { return null; } };
     { let cut = 0, n = 0; while (n < 6003) { const k = text.indexOf('\n', cut); if (k < 0) { cut = text.length; break; } cut = k + 1; n++; } if (cut < text.length) { text = text.slice(0, cut); cutAll = false; } }
-    const rows = []; const parser = new DelimitedParser(delimiter, (f) => { if (rows.length < 6001) rows.push(f); });
-    try { parser.feed(text, cutAll); } catch { /* a bad row in the sample: use the rows before it */ }
+    const rows = []; const parser = new DelimitedParser(delimiter, (f) => { if (rows.length < 6001) rows.push(f); }, { noQuote: NOQ });
+    try { parser.feed(text, cutAll); } catch {   /* a bad row in the sample: use the rows before it, unless the tidy pass would read the sample cleanly */
+      const tx = DS !== 32 && hb.indexOf(34) >= 0 && hb.indexOf(92) < 0 && hb[0] !== 35 ? tidied(hb, cutAll) : null;
+      if (tx) { const r2 = [], p2 = new DelimitedParser(delimiter, (f) => { if (r2.length < 6001) r2.push(f); }); try { p2.feed(tx, cutAll); rows.length = 0; for (const f of r2) rows.push(f); lenient = true; } catch { /* keep the rows before the bad one */ } }
+    }
     if (rows.length < 2) return null;
     const cols = rows[0].length, tr = Array.from({ length: cols }, () => new TypeTracker());
     for (let r = 1; r < rows.length; r++) { if (rows[r].length !== cols) return null; for (let c = 0; c < cols; c++) tr[c].add(rows[r][c]); }
+    samplePlan.headRows = rows.length - 1;   // whole rows in the first 4 MB
+    // What those rows already rule out for each column (bit 1 whole number, 2 number, 4 true/false, 8 date). A later piece starts its type tally from this instead of learning it again from its own first
+    // rows, one slow line at a time. The answer cannot change: the tally of the whole file includes these rows.
+    samplePlan.seed = tr.map((x) => (x.int ? 1 : 0) | (x.num ? 2 : 0) | (x.bool ? 4 : 0) | (x.date ? 8 : 0));
     // Five 256 KB slices from later in the file feed the type tally and the decimal-digit check, so a column whose digits or number-ness change after the first MB is planned as text up front (saves the restart).
     const extra = [];
     if (file.size > 8 * 1048576) for (const frac of [0.2, 0.4, 0.6, 0.8, 0.97]) {
       const off = Math.floor(file.size * frac);
-      const t2 = new TextDecoder().decode(new Uint8Array(await file.slice(off, Math.min(file.size, off + 262144)).arrayBuffer()));
+      const b2 = new Uint8Array(await file.slice(off, Math.min(file.size, off + 262144)).arrayBuffer()), k2 = b2.indexOf(10); if (k2 < 0) continue;
+      const t2 = (lenient && b2.indexOf(92) < 0 && tidied(b2.subarray(k2))) || new TextDecoder().decode(b2);
       const k = t2.indexOf('\n'); if (k < 0) continue;
-      const got = []; const p2 = new DelimitedParser(delimiter, (f) => { if (f.length === cols) got.push(f); });
+      const got = []; const p2 = new DelimitedParser(delimiter, (f) => { if (f.length === cols) got.push(f); }, { noQuote: NOQ });
       try { p2.feed(t2.slice(k + 1), false); } catch { /* skip */ }
       for (const f of got.slice(0, -1)) extra.push(f);
     }
@@ -1975,18 +2046,31 @@ async function importFile(m) {
   const r = await importFile0(m);
   if (r && r.enc) { try { m = Object.assign({}, m, { file: await toUtf8File(m.file), reencoded: true }); } catch (err) { return send('error', m.id, { message: String(err && err.message || err) }); } send('notice', m.id, { text: 'This file is not UTF-8, so it was read as Windows-1252.' }); return importFile0(m); }
 }
+async function surveyMixed(m, demote) {
+  await loadCore(); const file = m.file; let delimiter = m.delimiter || 'auto';
+  if (delimiter === 'auto') delimiter = core.detectDelimiter(new TextDecoder().decode(new Uint8Array(await file.slice(0, 65536).arrayBuffer())));
+  let plan = await samplePlan(file, delimiter); if (!plan) return []; const plainT = !!samplePlan.plainTidy;
+  plan = plan.map((x, c) => (demote.has(c) ? false : x)); if (!plan.some(Boolean)) return [];
+  const t = { plainTidy: plainT }, job = jobs.get(m.id) || { cancelled: false }, none = async () => {};
+  const res = await runSegmented(file, delimiter, job, none, () => {}, t, m.segBytes || SEG_BYTES, plan, { begin: none, push: none, dup: false }, samplePlan.dict || null, m.parseHelpers, true);
+  return res && t.mixedCols ? [...t.mixedCols] : [];
+}
 async function importFile0(m) {
   if (m.file && isNdjson(m.file)) m = Object.assign({}, m, { ndjson: true, untyped: true, noColumns: true });
   const demote = new Set(); let mm = m;
   for (let tries = 0; tries < 4; tries++) {
     const r = await importOnce(mm); if (!r) return; if (r.enc) return r;
-    if (r === 'normalize') {   // tidy the file once, then import it the normal way; if it cannot be tidied the first error is reported
-      let nz = null; try { nz = await normalizeFile(m.file, m.delimiter); } catch { nz = null; }
+    if (r === 'normalize' || r === 'normalize2') {   // tidy the file once, then import it the normal way; if it cannot be tidied the first error is reported
+      if (r === 'normalize2') m = Object.assign({}, m, { slowNorm: true, file: m.origFile, fastNorm: false, normalized: false });
+      let nz = null; try { nz = await normalizeFile(m.file, m.delimiter, m.slowNorm); } catch { nz = null; }
       if (!nz) { send('error', m.id, { message: mm.firstError, line: mm.firstLine }); return; }
-      send('notice', m.id, { text: nz.text }); m = Object.assign({}, m, { file: nz.file, delimiter: nz.delimiter, normalized: true }); mm = Object.assign({}, m, { demote: [...demote] }); tries--; continue;
+      send('notice', m.id, { text: nz.text }); m = Object.assign({}, m, { origFile: m.file, file: nz.file, delimiter: nz.delimiter, normalized: true, fastNorm: !!nz.fast }); mm = Object.assign({}, m, { demote: [...demote] }); tries--; continue;
     }
     if (r === 'mixed' || tries === 3) break;
-    demote.add(r.col); mm = Object.assign({}, m, { demote: [...demote] });
+    demote.add(r.col);
+    // One more number column with a text-like cell would start the import again for each one (and give up after three). A wide table goes through a survey right away, any other table on its second
+    // surprise: every piece is read once more without keeping anything, only to list all such columns, and the next try has them all as text.
+    if (!m.noSurvey && (r.ncols > 128 || tries >= 1)) { try { const more = await surveyMixed(m, demote); for (const c of more) demote.add(c); } catch { /* the one-by-one way goes on */ } } mm = Object.assign({}, m, { demote: [...demote] });
   }
   const r2 = await importOnce(Object.assign({}, m, { noColumns: true })); if (r2 && r2.enc) return r2;
 }
@@ -2066,15 +2150,75 @@ function makeNormalizer(o) {
   return { feed, end: () => take(true), stats: st };
 }
 const NORMALIZE_ERR = /^(Line \d+: )?(Row has \d+ fields|Unexpected text after a closing quote|A quote may only start|The header has more)/;
-async function normalizeFile(file, delimiter) {
+// Space-separated lists where a quote mark is only a character (pageview dumps): lines that are already regular (no quote, no CR, the right number of fields) pass through as slices of the original
+// file; only the other lines are rewritten (blank lines dropped, short rows filled, extra cells cut, fields with a quote quoted with the quotes doubled), the same result as the thorough tidy.
+// Returns null when the header is not a regular line (the thorough tidy handles that).
+async function quoteRewrite(file, D, width) {
+  const parts = []; let ob = new Uint8Array(1 << 20), op = 0, got = 0, pending = null, first = true;
+  const cnt = { padded: 0, truncated: 0 };
+  const flushOb = () => { if (op) { parts.push(ob.slice(0, op)); op = 0; } };
+  const ensure = (n) => { if (op + n > ob.length) { flushOb(); if (n > ob.length) ob = new Uint8Array(n * 2); } };
+  const fix = (b, ls, le) => {   // one line b[ls..le) without its newline
+    const e2 = le > ls && b[le - 1] === 13 ? le - 1 : le; if (e2 === ls) return;   // blank line: dropped
+    ensure((e2 - ls) * 2 + width + 16); let fs = ls, k = 0;
+    for (let j = ls; j <= e2; j++) {
+      if (j === e2 || b[j] === D) {
+        if (k < width) {
+          if (k) ob[op++] = D;
+          let q = false; for (let x = fs; x < j; x++) if (b[x] === 34) { q = true; break; }
+          if (q) { ob[op++] = 34; for (let x = fs; x < j; x++) { const c = b[x]; ob[op++] = c; if (c === 34) ob[op++] = 34; } ob[op++] = 34; } else { ob.set(b.subarray(fs, j), op); op += j - fs; }
+        }
+        k++; fs = j + 1;
+      }
+    }
+    if (k < width) { for (let x = k; x < width; x++) ob[op++] = D; cnt.padded++; } else if (k > width) cnt.truncated++;
+    ob[op++] = 10;
+  };
+  const run = (b, a, z, base) => { const n = z - a; if (n >= 262144) { flushOb(); parts.push(file.slice(base + a, base + z)); } else if (n > 0) { ensure(n); ob.set(b.subarray(a, z), op); op += n; } };
+  const scan = (b, cut, base, last) => {
+    let rs = 0, ls = 0, n = 0, q = false, cr = false;
+    const end = (i) => {
+      const clean = i > ls && !q && !cr && n + 1 === width;
+      if (first && i > ls) { if (!clean) return false; first = false; }
+      if (!clean) { run(b, rs, ls, base); fix(b, ls, i); rs = i + 1; }
+      ls = i + 1; n = 0; q = false; cr = false; return true;
+    };
+    for (let i = 0; i < cut; i++) { const c = b[i]; if (c === D) n++; else if (c === 10) { if (!end(i)) return false; } else if (c === 34) q = true; else if (c === 13) cr = true; }
+    if (last && ls < cut && !end(cut)) return false;
+    run(b, rs, cut, base); return true;
+  };
+  const rd = file.stream().getReader();
+  for (;;) {
+    const { done, value } = await rd.read(); if (done) break;
+    let b = value; if (pending) { b = new Uint8Array(pending.length + value.length); b.set(pending, 0); b.set(value, pending.length); }
+    got += value.length; const base = got - b.length, cut = b.lastIndexOf(10) + 1;
+    if (cut === 0) { pending = b; continue; }
+    if (!scan(b, cut, base, false)) { rd.cancel().catch(() => {}); return null; }
+    pending = cut < b.length ? b.slice(cut) : null;
+  }
+  if (pending && !scan(pending, pending.length, got - pending.length, true)) return null;
+  flushOb(); return { parts, cnt };
+}
+async function normalizeFile(file, delimiter, slow) {
   const sample = new Uint8Array(await file.slice(0, 4 << 20).arrayBuffer()); let s0 = 0; if (sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF) s0 = 3;
   const comments = sample[s0] === 35, text = new TextDecoder().decode(sample);
-  const bs = /\\["\\,;\t|]/.test(text.slice(0, 4 << 20));
+  let bs = /\\["\\,;\t|]/.test(text.slice(0, 4 << 20));
   let dch = delimiter && delimiter !== 'auto' ? delimiter : null;
   if (!dch) { await loadCore(); dch = core.detectDelimiter(comments ? text.split(/\r?\n/).filter((l) => l && l[0] !== '#').join('\n') : text); }
   const D = dch.charCodeAt(0); let dry = makeNormalizer({ delim: D, comments, backslash: bs }); dry.feed(sample.subarray(0, sample.length)); dry.end();
-  let noQuote = false; if (D === 32 && dry.stats.quotedDelim === 0) { noQuote = true; dry = makeNormalizer({ delim: D, comments, backslash: bs, noQuote }); dry.feed(sample.subarray(0, sample.length)); dry.end(); }   // space-separated text (pageview lists): when no quoted field holds a space, a quote is just a character
+  const wfQuoted = D === 32 && /(?:^|\x20)"[^"\n]*\x20[^"\n]*"(?=\x20|\r?$)/m.test(text);   // a quoted field that holds a space and closes on its own line; a stray opening quote ("Foo ...) is not one
+  let noQuote = false; if (D === 32 && (dry.stats.quotedDelim === 0 || !wfQuoted)) { bs = false;   // backslashes are plain characters in such lists (titles can hold them)
+    noQuote = true; dry = makeNormalizer({ delim: D, comments, backslash: bs, noQuote }); dry.feed(sample.subarray(0, sample.length)); dry.end(); }   // space-separated text (pageview lists): when no quoted field holds a space, a quote is just a character
   const ds = dry.stats; if (!ds.rows || (!comments && !bs && ds.rows >= 20 && ds.padded + ds.truncated > 0.3 * ds.rows)) return null;   // too irregular to be a tidy-able table: report the original error
+  if (noQuote && !slow && !comments && ds.maxFields > 1 && !(sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF)) {
+    const qr = await quoteRewrite(file, D, ds.maxFields);
+    if (qr) {
+      const bits = [], st = qr.cnt;
+      if (st.padded) bits.push(st.padded + ' short row' + (st.padded === 1 ? '' : 's') + ' filled with empty cells');
+      if (st.truncated) bits.push(st.truncated + ' row' + (st.truncated === 1 ? ' had' : 's had') + ' more cells than the widest rows seen early in the file, and the extra cells were left out');
+      return { file: new File(qr.parts, String(file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), delimiter: dch, text: 'This file had irregular rows, so it was tidied first: ' + (bits.join(', ') || 'blank lines removed') + '.', fast: true };
+    }
+  }
   const nz = makeNormalizer({ delim: D, comments, backslash: bs, noQuote, width: ds.maxFields }), parts = []; let acc = [], accN = 0;
   const put = (b) => { if (!b) return; acc.push(b); accN += b.length; if (accN >= (4 << 20)) { parts.push(new Blob(acc)); acc = []; accN = 0; } };
   const rd = file.stream().getReader(); for (;;) { const { done, value } = await rd.read(); if (done) break; put(nz.feed(value)); }
@@ -2087,6 +2231,21 @@ async function normalizeFile(file, delimiter) {
   if (st.escapes) bits.push('backslash escapes read');
   if (st.maxFields > 0 && ds.maxFields > 0 && st.width > 0) { /* header widened by column_N names when rows were wider */ }
   return { file: new File(parts, String(file.name).replace(/\.[^.]*$/, '') + '.csv', { type: 'text/csv' }), delimiter: dch, text: 'This file had irregular rows, so it was tidied first: ' + (bits.join(', ') || 'blank lines removed') + '.' };
+}
+// A big space-separated list (pageview dumps) whose first 4 MB has quote marks that are plain characters (none opens a cell that holds a space): read it as it is, a quote mark being an ordinary character, short rows
+// filled and extra cells left out, which is what the tidy pass would produce, without the rewrite of the whole file. Returns false (the usual route, tidy included) for anything else: comment lines, a BOM, a header
+// that is not as wide as the widest row of the sample, a sample that is too ragged.
+async function spaceNoQuote(file) {
+  try {
+    const n = Math.min(file.size, 4 << 20), sample = new Uint8Array(await file.slice(0, n).arrayBuffer());
+    if (sample.indexOf(34) < 0 || sample[0] === 35 || (sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF)) return false;
+    const text = new TextDecoder().decode(sample);
+    if (/(?:^|\x20)"[^"\n]*\x20[^"\n]*"(?=\x20|\r?$)/m.test(text)) return false;   // a real quoted field with a space inside: the tidy pass decides
+    const nl = text.indexOf('\n'), head = (nl < 0 ? text : text.slice(0, nl)).replace(/\r$/, '');
+    const nz = makeNormalizer({ delim: 32, comments: false, backslash: false, noQuote: true }); nz.feed(sample); nz.end(); const ds = nz.stats;
+    if (!ds.rows || ds.headerPad || ds.maxFields < 2 || ds.maxFields !== head.split(' ').length || (ds.rows >= 20 && ds.padded + ds.truncated > 0.3 * ds.rows)) return false;
+    return true;
+  } catch { return false; }
 }
 async function importOnce(m) {
   let restart = false;
@@ -2103,6 +2262,7 @@ async function importOnce(m) {
     if (!m.blockBytes && !m.parquet && head64) {   // wide files (40 or more columns) pack in 8 MiB blocks: about 8% smaller and no slower, same first screen and memory
       const nl = head64.indexOf('\n'), line = nl < 0 ? head64 : head64.slice(0, nl); if (line.split(delimiter).length >= 40) m = Object.assign({}, m, { blockBytes: 8388608 });
     }
+    NOQ = delimiter === ' ' && !m.normalized && !m.strict && !m.parquet && !m.ndjson && !m.noQuoteOff && useSegments(m, file) && await spaceNoQuote(file);
     name = safe(file.name) + '-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: m.parquet ? 'parquet' : delimiter === '\t' ? 'tsv' : 'csv', sourceName: String(file.name).slice(0, 200), sourceBytes: file.size, tables: [{ name: 'rows', rows: 0, columns: [] }] };
@@ -2141,7 +2301,7 @@ async function importOnce(m) {
         return send1({ type: 'packBlock', c: chunk, o: popts, flat, chk: t.chk }, [chunk.buffer]);
       };
       if (columnsOk(m)) {   // staged columns: chunks of typed columns are grouped into blocks of about colBlock bytes of CSV and packed by the pack workers
-        const colBlock = m.colBlockBytes || 8388608; let cq = [], cqBytes = 0, cqRows = 0, colHeaders = null;
+        let colBlock = m.colBlockBytes || 8388608, cq = [], cqBytes = 0, cqRows = 0, colHeaders = null;
         // Live columns (desktop, file up to LIVE_MAX): the chunks are kept so the grid can read them as soon as parsing ends, while the pack workers still work through their queue.
         // Blocks wait in blockQ and go to the pack workers as copies (the kept chunks are not transferred), so parsing never waits for packing.
         liveChunks = m.live === true && file.size <= LIVE_MAX ? [] : null; let blockQ = [], pumping = null, pumpErr = null;
@@ -2150,6 +2310,22 @@ async function importOnce(m) {
         colFlush = async () => { if (cq.length) await sendCols(); while (pumping) await pumping; if (pumpErr) throw pumpErr; };
         // Early view: the grid opens on the first parsed chunks and the row count grows while the file is still being read (a preview: no sort or filter until the end).
         const pvStarts = [0], pvDec = new TextDecoder(); let pvSent = 0, pvKind = null, pvOn = liveChunks !== null && m.preview !== false;
+        // Early chart (draft): the first column with 2 to 12 different words is counted from the chunks read so far, at most every 250 ms, each chunk once. The page draws it grey and marks it DRAFT; the final counts come from the group-by when the file is read.
+        let ecK = m.noEarlyChart ? -1 : -2, ecDone = 0, ecRows = 0, ecSent = 0; const ecMap = new Map();
+        const ecTick = (now) => {
+          if (ecK === -1 || now - ecSent < 250) return;
+          const chunks = liveChunks;
+          if (ecK === -2) { for (let k = 0; k < colHeaders.length; k++) { const x = chunks[0].cols[k]; if (!pvKind[k] && x && x.codes && x.lb && x.lb.start.length >= 2 && x.lb.start.length <= 12) { ecK = k; break; } } if (ecK === -2) { ecK = -1; return; } }
+          for (; ecDone < chunks.length; ecDone++) {
+            const ch = chunks[ecDone], x = ch.cols[ecK]; if (!x || !x.codes) { ecK = -1; send('earlyChart', null, { off: true }); return; }
+            const lb = x.lb, nl = lb.start.length, cnt = new Uint32Array(nl), cd = x.codes;
+            for (let i = 0; i < ch.n; i++) { const q = cd[i]; if (q < nl) cnt[q]++; }
+            for (let q = 0; q < nl; q++) if (cnt[q]) { const w = pvDec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); ecMap.set(w, (ecMap.get(w) || 0) + cnt[q]); }
+            ecRows += ch.n;
+            if (ecMap.size > 12) { ecK = -1; send('earlyChart', null, { off: true }); return; }
+          }
+          ecSent = now; send('earlyChart', null, { key: colHeaders[ecK], rows: ecRows, bars: [...ecMap].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 8) });
+        };
         const pvTick = () => {
           const total = pvStarts[pvStarts.length - 1], now = performance.now();
           if (!pvKind) {
@@ -2160,9 +2336,32 @@ async function importOnce(m) {
             view = { name, preview: true, pv, total, columns, R: null, f: null, rows: null, indices: null, filtered: false, cols: new Map(), flat: true, cache: new Map() };
             send('preview', m.id, { name, total, columns }); pvSent = now; return;
           }
+          try { ecTick(now); } catch { ecK = -1; }
           if (view && view.preview && now - pvSent >= 250) { view.total = total; send('previewGrow', m.id, { total }); pvSent = now; }
         };
-        col = { begin: async (h) => { colHeaders = h; }, dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 4096) await sendCols(); } };
+        // A wide live table that meets a text-like cell in a number column does not start over: the column becomes text in every chunk read so far (the number's text is exactly the file's text, see typedCell
+        // and typedDecimal), the blocks packed so far are dropped, reading goes on, and everything is packed once from the kept chunks when reading ends.
+        // Wide tables: a block of at most 1,024 rows skips LFC-pack's size estimate pass (16 to 20% of its pack time on 703 columns), so a block ends before it would pass that, once it holds 4 MiB of CSV.
+        const WIDE_MIN = 4194304;
+        let held = false; const demoted = new Map();
+        const numText = (x, d) => { const n = x.length, off = new Int32Array(n + 1); let buf = new Uint8Array(n * 8 + 32), at = 0; for (let i = 0; i < n; i++) { const v = x[i]; off[i] = at; if (v === v) { const tx = d ? formatScaled(v, d) : String(v); if (at + tx.length > buf.length) { const nb = new Uint8Array(buf.length * 2 + tx.length); nb.set(buf.subarray(0, at)); buf = nb; } for (let q = 0; q < tx.length; q++) buf[at++] = tx.charCodeAt(q); } } off[n] = at; return { bytes: buf.slice(0, at), start: off.subarray(0, n), end: off.subarray(1, n + 1) }; };
+        const retext = (c) => { for (const [k, d] of demoted) if (ArrayBuffer.isView(c.cols[k])) { const y = numText(c.cols[k], d); y.own = true; c.cols[k] = y; } };
+        const demote = async (k) => {
+          if (!t.wide || !liveChunks || !plan || k < 0 || k >= colHeaders.length || demoted.has(k) || !(plan[k] === true || (typeof plan[k] === 'number' && plan[k] > 0))) return false;
+          demoted.set(k, plan[k] === true ? 0 : plan[k]); plan[k] = false; if (numPlan && samplePlan.num) numPlan[k] = !!samplePlan.num[k];
+          for (const c of liveChunks) retext(c);
+          if (pvKind) { pvKind[k] = false; if (view && view.preview && view.columns[k]) { view.columns[k].type = 'string'; delete view.columns[k].decimals; } }
+          if (!held) {
+            held = true; col.dup = false; cq = []; cqBytes = 0; cqRows = 0; blockQ.length = 0; while (pumping) await pumping;
+            while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
+            await wchain; if (failed) throw failed;
+            try { await writable.abort(); } catch { /* a new file replaces it */ } writable = await store.create(name); outBytes = 0;
+            packer = LfcPack.packStream(Object.assign({}, popts, { meta })); seq = 0; emit = 0; dkBlocks.clear();
+          }
+          return true;
+        };
+        const release = () => { if (!held) return; held = false; for (const c of liveChunks) { if (cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(list); } cq.push(dupChunk(c)); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 256) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(list); } } pump(); };
+        col = { demote, release, begin: async (h) => { colHeaders = h; if (h.length > 128) { t.wide = true; if (!m.colBlockBytes) colBlock = 16777216; } },   /* wide tables: LFC-pack has a fixed cost per column per block, so fewer, larger blocks (measured on a 703-column table) */ dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { if (demoted.size) retext(c); liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } if (held) return; if (t.wide && cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) await sendCols(); cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= (colHeaders.length > 128 ? 256 : 4096)) await sendCols(); } };
       }
       const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
       packBytes = async (bytes) => {
@@ -2178,13 +2377,14 @@ async function importOnce(m) {
         await colFlush(); if (plen) await dispatch(take(plen));
         while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
         await wchain; if (failed) throw failed;
-        keepWorkers(ws);
+        keepWorkers(ws, t.wide);
       };
       var packWorkersToStop = ws;
     }
-    let plan = m.untyped ? null : await samplePlan(file, delimiter); if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
+    let plan = m.untyped ? null : await samplePlan(file, delimiter); t.headRows = m.untyped ? 0 : samplePlan.headRows || 0; t.seed = m.untyped ? null : samplePlan.seed; t.plainTidy = !m.untyped && !!samplePlan.plainTidy; if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
     let res = null;
     if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null, m.parseHelpers);
+    if (res && col && col.release) col.release();   // chunks held back after a column turned to text: pack them now
     if (!res && !m.ndjson && !m.parquet) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
         if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer, col, (p) => { plan = p; }, m.exact); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
@@ -2207,7 +2407,7 @@ async function importOnce(m) {
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
     if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) { view.cols.set(c.name, view.live.column(c.name)); (tsJobs ||= []).push([view, c.name, view.live]); }   /* typed seconds for Save are made after 'done' (not on the import's critical path) */   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ const wide = ((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);   // owner laptop (16 cores): Chrome is best at 4 pack workers in all (2 before), Firefox keeps gaining to 6; 4-core machines keep the old counts
-    if (morePack && m.morePack !== 0) morePack(m.morePack || (wide ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 1 : 2)); }
+    if (morePack && m.morePack !== 0) morePack(m.morePack || (wide ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? (t.wide ? 3 : 1) : 2)); }   /* wide tables pack long after parsing ends, so Chromium gets three more pack workers there too */
     if (view && view.preview && view.name === name && !(view.live)) { view = null; send('liveclosed', m.id, {}); }
     if (file && file.lazy) await file.settle(); await finishPacking(); if (res.refine) { res.refine(types); for (let i = 0; i < headers.length; i++) { cols[i].type = types[i].type; if (meta.tables[0].columns[i]) meta.tables[0].columns[i].type = types[i].type; } }
     if (res.lateKeys) {   // keys that first appear after the sampled rows become columns too (text type; the packed blocks hold the real values)
@@ -2223,6 +2423,8 @@ async function importOnce(m) {
     if (!v.ok) throw new IngestError('The written file failed footer validation: ' + v.reason);
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
     if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: isFlatFile(R2), live: null }); liveChunks = null; textFromChunks(view); } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
+    if (NOQ && (t.stray || t.padN || t.truN)) { const bits = []; if (t.stray) bits.push('some cells held a quote mark inside plain text, so they were read as written'); if (t.padN) bits.push(t.padN + ' short row' + (t.padN === 1 ? ' was' : 's were') + ' filled with empty cells'); if (t.truN) bits.push(t.truN + ' row' + (t.truN === 1 ? ' had' : 's had') + ' more cells than the header, and the extra cells were left out'); send('notice', m.id, { text: bits[0].charAt(0).toUpperCase() + bits.join('; ').slice(1) + '.' }); }
+    else if (t.stray && !m.normalized) send('notice', m.id, { text: 'Some cells held a quote mark inside plain text, so they were read as written.' });   // nothing is rewritten on this path: the notice says only what happened
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
     if (tsJobs) { const jobs = tsJobs; setTimeout(async () => { for (const [v, nm, L] of jobs) { await yieldNow(); if (view !== v || (v.tsCache && v.tsCache.has(nm))) continue; try { (v.tsCache ||= new Map()).set(nm, L.tsColumn(nm)); } catch { /* Save parses the text instead */ } } }, 0); }
   } catch (err) {
@@ -2230,8 +2432,9 @@ async function importOnce(m) {
     if (writable && !closed) { try { await writable.abort(); } catch {} }
     if (name) await store.remove(name);
     if (err && err.pqExact != null && m.parquet) restart = { pqExact: err.pqExact };   // an INT64 column holds a value beyond 2^53: read that column as exact digit text and start again
-    else if (err && err.mixed && !m.noColumns) restart = err.col != null && err.col >= 0 ? { col: err.col } : true;
+    else if (err && err.mixed && !m.noColumns) restart = err.col != null && err.col >= 0 ? { col: err.col, ncols: t.ncols || 0 } : true;
     else if (!m.reencoded && !m.ndjson && /TextDecoder/.test(String(err && err.message)) && /not valid|decoding failed/i.test(String(err && err.message))) restart = { enc: true };   // a Windows-1252 byte past the sampled start: read the file again as Windows-1252 (valid UTF-8 files never pay for a whole-file check)
+    else if (m.normalized && m.fastNorm && !m.strict && NORMALIZE_ERR.test(String(err && err.message || ''))) restart = 'normalize2';   // the quick tidy missed a later irregular row: tidy the original the thorough way
     else if (!m.normalized && !m.strict && !m.ndjson && NORMALIZE_ERR.test(String(err && err.message || ''))) { restart = 'normalize'; m.firstError = String(err.message); m.firstLine = err.line || null; }
     else send(err && err.cancelled ? 'cancelled' : 'error', m.id, { message: String(err && err.message || err), line: err && err.line || null });
   } finally { if (helper) helper.terminate(); if (typeof packWorkersToStop !== 'undefined') packWorkersToStop.forEach((w) => { if (!(self.__keep && self.__keep.includes(w))) w.terminate(); }); jobs.delete(m.id); }
@@ -2286,6 +2489,7 @@ let view = null, queryMod = null, colMod = null;
 function scheduleWarm(m, total, delay) {
   // Warm the sort columns: whole-number, decimal and date columns are decoded on helper threads while the person looks at the first page,
   // so the first sort of one of them only has the selection scan left (the decode was most of a first sort).
+  if (view.liveL) return;   // wide table held as imported chunks: nothing to warm (decoding hundreds of columns here kept this thread busy for half a second right when a Save or sort arrived)
   if (!m.noWarm && view.flat && total <= MAX_WARM_ROWS && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory <= 4) && LfcPack.unpackColumnsParallel && view.f.size <= WHOLE_FILE_MAX) {
     // Text columns are warmed too when memory allows (about 40 bytes a cell): up to 3 million rows anywhere, up to 10 million on a desktop browser that does not report less than 8 GB.
     const warmText = !m.noWarmText && (total <= 3000000 || (total <= MAX_WARM_ROWS && !/Mobi|Android/.test(navigator.userAgent) && !(navigator.deviceMemory < 8)));
@@ -2372,6 +2576,33 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
       return out;
     },
     column(nm) { const g = this.columnGen(nm); let r; while (!(r = g.next()).done); return r.value; },
+    isText(nm) { const k = headers.indexOf(nm); return k >= 0 && !kindOf[k]; },
+    // Save for wide tables: where the rows start..end (or the row numbers fx) sit in the kept chunks, found once per batch
+    locate(start, end, fx) { const m = end - start, ci = new Uint32Array(m), li = new Uint32Array(m); if (fx) { for (let i = 0; i < m; i++) { const c = find(fx[i]); ci[i] = c; li[i] = fx[i] - starts[c]; } } else { let c = find(start); for (let i = 0; i < m; i++) { const r = start + i; while (r >= starts[c + 1]) c++; ci[i] = c; li[i] = r - starts[c]; } } if (!fx) { const ord = new Uint32Array(m); for (let i = 0; i < m; i++) ord[i] = i; return { ci, li, n: m, ord }; }
+      const cnt = new Uint32Array(chunks.length + 1); for (let i = 0; i < m; i++) cnt[ci[i] + 1]++; for (let c = 0; c < chunks.length; c++) cnt[c + 1] += cnt[c]; const ord = new Uint32Array(m), at = cnt.slice(0, chunks.length); for (let i = 0; i < m; i++) ord[at[ci[i]]++] = i;   // the batch's rows grouped by chunk, so each column is read chunk by chunk instead of hopping between chunks for every row (a sorted or filtered view)
+      return { ci, li, n: m, ord }; },
+    // a text column's cells for those rows as { bytes, start, end } (the shape LFC-pack takes without making strings), copied straight from the kept chunk bytes
+    gather(nm, loc, P) {
+      const k = headers.indexOf(nm), m = loc.n, ci = loc.ci, li = loc.li, off = new Int32Array(m + 1); let tot = 0, pc = -1, x = null, xs = null, xe = null, xc = null;
+      if (loc.ord) {
+        const ord = loc.ord, len = loc.len || (loc.len = new Int32Array(m)), src = loc.src || (loc.src = new Int32Array(m));
+        for (let j = 0; j < m; j++) { const i = ord[j], c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xc = x.codes || null; xs = xc ? x.lb.start : x.start; xe = xc ? x.lb.end : x.end; } const q = xc ? xc[li[i]] : li[i], a = xs[q]; src[i] = a; len[i] = xe[q] - a; }
+        if (P) {   // pieces of P rows, each with its own bytes (packed side by side by Save)
+          const np = Math.ceil(m / P), out = new Array(np), dst = loc.dst || (loc.dst = new Int32Array(m));
+          for (let g = 0; g < np; g++) { const a = g * P, b = Math.min(m, a + P), of2 = new Int32Array(b - a + 1); let t2 = 0; for (let i = a; i < b; i++) { of2[i - a] = t2; dst[i] = t2; t2 += len[i]; } of2[b - a] = t2; out[g] = { bytes: new Uint8Array(t2), start: of2.subarray(0, b - a), end: of2.subarray(1, b - a + 1) }; }
+          let xb = null; pc = -1;
+          for (let j = 0; j < m; j++) { const i = ord[j], c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xb = x.codes ? x.lb.bytes : x.bytes; } const a = src[i], e = a + len[i], bytes = out[(i / P) | 0].bytes; let o = dst[i]; if (e - a > 48) bytes.set(xb.subarray(a, e), o); else for (let p = a; p < e; p++) bytes[o++] = xb[p]; }
+          return out;
+        }
+        for (let i = 0; i < m; i++) { off[i] = tot; tot += len[i]; } off[m] = tot; const bytes = new Uint8Array(tot); let xb = null; pc = -1;
+        for (let j = 0; j < m; j++) { const i = ord[j], c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xb = x.codes ? x.lb.bytes : x.bytes; } const a = src[i], e = a + len[i]; let o = off[i]; if (e - a > 48) bytes.set(xb.subarray(a, e), o); else for (let p = a; p < e; p++) bytes[o++] = xb[p]; }
+        return { bytes, start: off.subarray(0, m), end: off.subarray(1, m + 1) };
+      }
+      for (let i = 0; i < m; i++) { const c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xc = x.codes || null; xs = xc ? x.lb.start : x.start; xe = xc ? x.lb.end : x.end; } const q = xc ? xc[li[i]] : li[i]; off[i] = tot; tot += xe[q] - xs[q]; }
+      off[m] = tot; const bytes = new Uint8Array(tot); let o = 0, xb = null; pc = -1;
+      for (let i = 0; i < m; i++) { const c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xc = x.codes || null; xs = xc ? x.lb.start : x.start; xe = xc ? x.lb.end : x.end; xb = xc ? x.lb.bytes : x.bytes; } const q = xc ? xc[li[i]] : li[i], a = xs[q], e = xe[q]; if (e - a > 48) { bytes.set(xb.subarray(a, e), o); o += e - a; } else for (let p = a; p < e; p++) bytes[o++] = xb[p]; }
+      return { bytes, start: off.subarray(0, m), end: off.subarray(1, m + 1) };
+    },
     tsColumn(nm) {   // a fixed-width 'YYYY-MM-DD HH:MM:SS[.000000]' text column as epoch seconds (UTC), read straight from the kept bytes; null when any cell does not fit (then Save uses the text path)
       const k = headers.indexOf(nm), out = new Float64Array(rows); let at = 0, W = -1, lastKey = -1, lastDays = 0;
       const days = (Y, M, D) => { const yy = M <= 2 ? Y - 1 : Y, era = Math.floor(yy / 400), yoe = yy - era * 400, doy = Math.floor((153 * (M + (M > 2 ? -3 : 9)) + 2) / 5) + D - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
@@ -2397,8 +2628,15 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   setTimeout(() => { if (colMod.primeTopN) for (const a of nums.values()) colMod.primeTopN(a); }, 0);
   // The text columns the import does not keep as dictionary ids are made from the kept chunks as soon as the import has finished (see textFromChunks): a Save as LFCP or a text sort
   // right after the import finds them in memory instead of decoding them from the file (6 columns: 0.7-0.9 s). Done after, not during, the import so the import time does not change.
-  view.liveRest = { names: headers.filter((h, k) => !kindOf[k] && !chunks.every((c) => c.cols[k].codes)), L };
-  if (EARLY_TEXT) textFromChunks(view);   // variant: start now, while the pack threads finish the file
+  const restK = []; for (let k = 0; k < n; k++) if (!kindOf[k] && !chunks.every((c) => c.cols[k].codes)) restK.push(k);
+  let restBytes = 0; for (const k of restK) for (const c of chunks) { const x = c.cols[k]; if (x.bytes) restBytes += x.bytes.length; }
+  // Turning the kept text into strings costs about 30 to 60 ns a cell and 100 bytes or more of memory a cell: for a very tall or very long text column (a 15M-row title list: 9 to 13 s of thread time, 2 GB) it
+  // also holds up the import itself, so past 5M rows or 160 MB of text the strings are not made ahead in Chromium and Safari: a Save, a text sort or a derive reads that column from the saved file instead (first letter and length straight from the bytes). Firefox builds them in the idle pack tail at no cost to the import (measured on the real file: skipping them there made the whole run 30% slower), so it keeps them.
+  if (n > 128) view.liveL = L;   // wide table: the chunks stay and answer for text (Save reads their bytes, a sort or filter makes one column); no strings for hundreds of columns up front
+  else if (restK.length && (isFirefox || (rows <= 5000000 && restBytes <= 160 * 1048576))) {
+    view.liveRest = { names: restK.map((k) => headers[k]), L };
+    if (EARLY_TEXT) textFromChunks(view);
+  }   // variant: start now, while the pack threads finish the file
 }
 async function warmColumn(n) {
   if (view.cols.has(n)) return;
@@ -2418,6 +2656,7 @@ async function dateKeys(n) {
 }
 async function loadColumns(names, stream, plain) {
   if (view.live) { for (const n of names) if (!view.cols.has(n)) view.cols.set(n, view.live.column(n)); const out = {}; for (const n of names) out[n] = view.cols.get(n); return out; }
+  if (view.liveL) for (const n of names) { if (view.cols.has(n)) continue; const c = view.columns.find((x) => x.name === n); if (c && c.type === "string" && view.liveL.isText(n)) view.cols.set(n, view.liveL.column(n)); }   // wide table: the kept chunks answer for text columns (no decode of the saved file)
   let want = names.filter((n) => !view.cols.has(n));
   if (view.dictCols && want.length && !plain) {   // a text column kept as dictionary ids from the import: its strings come from the distinct values (one lookup per row), no decode of the saved file
     for (const n of want) { const d = view.dictCols[n], c = view.columns.find((x) => x.name === n); if (d && c && c.type !== 'integer' && c.type !== 'number' && d.ids.length === view.total) { const a = new Array(view.total), dict = d.dict, ids = d.ids; for (let i = 0; i < a.length; i++) a[i] = dict[ids[i]]; view.cols.set(n, a); } }
@@ -2665,6 +2904,33 @@ function mergeDicts(blocks, rows) {
   }
   return out;
 }
+const ASCII1 = Array.from({ length: 128 }, (_, i) => String.fromCharCode(i));
+// first code unit and length in UTF-16 units of the text at b[s..e), the same answers as String charAt(0) and length on the decoded text (valid UTF-8: a 4-byte character counts 2 units)
+const CP1 = new Map();
+function firstUnit(b, s, e, dec) {
+  if (s >= e) return ''; const c = b[s]; if (c < 128) return ASCII1[c];
+  let cp = -1;   // well-formed 2 and 3 byte sequences are decoded by hand (a decoder call per row costs about 100 ns); anything else (4 byte, damaged) goes to the decoder
+  if (c >= 0xC2 && c < 0xE0) { if (s + 1 < e && (b[s + 1] & 0xC0) === 0x80) cp = ((c & 31) << 6) | (b[s + 1] & 63); }
+  else if (c >= 0xE0 && c < 0xF0) { if (s + 2 < e && (b[s + 1] & 0xC0) === 0x80 && (b[s + 2] & 0xC0) === 0x80) { cp = ((c & 15) << 12) | ((b[s + 1] & 63) << 6) | (b[s + 2] & 63); if (cp < 0x800 || (cp >= 0xD800 && cp < 0xE000)) cp = -1; } }
+  if (cp < 0) return dec.decode(b.subarray(s, Math.min(e, s + 4))).charAt(0);
+  let r = CP1.get(cp); if (r === undefined) { r = String.fromCharCode(cp); CP1.set(cp, r); } return r;
+}
+function unitLength(b, s, e) { let n = 0; for (let i = s; i < e; i++) { const c = b[i]; if ((c & 0xC0) !== 0x80) n += c >= 0xF0 ? 2 : 1; } return n; }
+async function deriveFromBytes(fn, name, total) {
+  const num = fn === 'length', out = num ? new Float64Array(total) : new Array(total), dec = new TextDecoder(), one = (b, s, e) => (num ? unitLength(b, s, e) : firstUnit(b, s, e, dec));
+  const data = new Uint8Array(await view.f.arrayBuffer()), v = view; let at = 0, k = 0;
+  for (const e of LfcPack.unpackColumns(data, { keys: [name], text: 'bytes' })) {
+    if (view !== v) throw new Error('The data changed.');
+    const x = e.cols[name], n = e.n;
+    if (x == null) { for (let i = 0; i < n; i++) out[at + i] = num ? NaN : ''; }
+    else if (Array.isArray(x)) { for (let i = 0; i < n; i++) { const t = x[i]; out[at + i] = typeof t === 'string' ? (num ? t.length : t.charAt(0)) : (num ? NaN : ''); } }
+    else if (x.kind === 'dict') { const lb = x.labels, nl = lb.start.length, lab = num ? new Float64Array(nl) : new Array(nl); for (let q = 0; q < nl; q++) lab[q] = one(lb.bytes, lb.start[q], lb.end[q]); const ids = x.ids; for (let i = 0; i < n; i++) out[at + i] = lab[ids[i]]; }
+    else { const b = x.bytes, st = x.start, en = x.end; for (let i = 0; i < n; i++) out[at + i] = one(b, st[i], en[i]); }
+    at += n; if (++k % 8 === 0) await yieldNow();
+  }
+  if (at !== total) throw new Error('Row count mismatch.');
+  return out;
+}
 async function deriveColumn(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
@@ -2672,7 +2938,10 @@ async function deriveColumn(m) {
     const t0 = performance.now(), src = view.columns.find((c) => c.name === m.source), name = String(m.name || '').trim();
     if (!src) throw new Error('Pick a column to work from.');
     if (!name || view.columns.some((c) => c.name === name)) throw new Error('Give the new column a name no other column has.');
-    const cols = await loadColumns([m.source], false, true), data = deriveMod.derive(cols[m.source], view.total, m.fn), isNum = ArrayBuffer.isView(data);
+    let data = null;
+    if (!isFirefox && (m.fn === 'first' || m.fn === 'length') && src.type === 'string' && !view.live && view.f && view.flat && !view.cols.has(m.source) && !(view.dictCols && view.dictCols[m.source]) && view.f.size <= WHOLE_FILE_MAX && LfcPack.unpackColumns) { try { data = await deriveFromBytes(m.fn, m.source, view.total); } catch { data = null; } }   // first letter and length straight from the stored bytes: no string is built per cell (15M titles: 5.9 s of strings to about 2 s)
+    if (!data) { const cols = await loadColumns([m.source], false, true); data = deriveMod.derive(cols[m.source], view.total, m.fn); }
+    const isNum = ArrayBuffer.isView(data);
     let whole = isNum; if (isNum) for (let i = 0; i < data.length; i++) { const x = data[i]; if (x === x && x !== Math.floor(x)) { whole = false; break; } }
     const meta = { name, type: isNum ? (whole ? 'integer' : 'number') : 'string', nullable: true, derived: true, from: m.source, fn: m.fn };
     (view.derived ||= new Map()).set(name, data); view.cols.set(name, data); view.columns = view.columns.concat([meta]); view.cache && view.cache.clear();
@@ -2788,25 +3057,26 @@ async function exportSummary(m) {
 // The import's pack threads are kept for a minute after the import (their wasm is started and their memory paid) so a Save as LFCP of a big view can pack on them; dropKeep frees them.
 function dropKeep(force) { if (self.__keepBusy && !force) { self.__keepDrop = true; return; }   // a Save is packing on them: dropped when it ends
   clearTimeout(self.__keepT); self.__keepBusy = false; self.__keepDrop = false; if (self.__keep) { for (const w of self.__keep) w.terminate(); self.__keep = null; } }
-function keepWorkers(ws) { dropKeep(); if (!ws.length || !isFirefox) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
+function keepWorkers(ws, wide) { dropKeep(); if (!ws.length || !(isFirefox || wide)) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let writable = null, name = null, closed = false;
   try {
     await LfcPack.init(); ensureFull();
     const t0 = performance.now();
-    await warmAll(); const tWarm = performance.now() - t0;
+    const cols0 = view.columns, LV = view.live || view.liveL || null, liveB = !m.noLiveBytes && !!(LV && LV.gather) && cols0.length > 128 && cols0.every((c) => view.cols.has(c.name) || LV.isText(c.name));   // a wide table still held as imported chunks: its text cells go to LFC-pack as bytes, so no column is turned into strings first
+    if (!liveB) await warmAll(); const tWarm = performance.now() - t0;
     const cols = view.columns, count = view.filtered ? view.indices.length : view.total, keyQ = cols.map((c, i) => (i ? ',' : '{') + JSON.stringify(c.name) + ':');
     name = safe(view.name.replace(/-[0-9a-f-]{36}\.json\.lfc$/, '')) + '-view-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
-    const BATCH = m.batch || 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: 2097152, share: false };
+    const wideS = liveB && !m.noWideSave, BATCH = m.batch || 16384, PIECE = wideS ? (m.piece || 1024) : 0, tm = { rows: 0, text: 0, pack: 0 }, allWarm = liveB || cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
     const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
     // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
-    const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / BATCH) >= 13 ? self.__keep : null;
-    let pool = null; const npool = m.noPool || !(isFirefox || kept) || !allWarm || !LfcPack.packBlock ? 0 : Math.min(kept ? kept.length : 3, Math.ceil(count / BATCH));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
+    const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / (PIECE || BATCH)) >= (wideS ? 2 : 13) ? self.__keep : null;
+    let pool = null; const npool = m.noPool || !(isFirefox || kept || wideS) || !allWarm || !LfcPack.packBlock ? 0 : Math.min(kept ? kept.length : 3, Math.ceil(count / (PIECE || BATCH)));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
     if (npool > 1 && kept) { clearTimeout(self.__keepT); self.__keepBusy = true; pool = kept; } else if (npool > 1) { try { pool = []; for (let i = 0; i < npool; i++) pool.push(new Worker(self.location.href)); } catch { if (pool) pool.forEach((w) => w.terminate()); pool = null; } }
     const results = new Map(); let nextW = 0, emit = 0, pending = 0, wake = null, failed = null;
     const drain = async () => { while (results.has(emit)) { const r = results.get(emit); results.delete(emit); emit++; await write(packer2.pushPacked(r)); } };
@@ -2815,9 +3085,10 @@ async function exportLfcp(m) {
     for (let start = 0; start < count; start += BATCH) {
       const end = Math.min(count, start + BATCH); let ts = performance.now();
       if (allWarm && LfcPack.packBlock) {   // every column is in memory: gather the batch column by column and pack it as columns (no row objects, no JSON text)
-        const out = {}, n = end - start, fx = view.filtered ? view.indices.subarray(start, end) : null;   // the batch's row numbers are cut out once, not looked up per cell
+        const out = {}, n = end - start, fx = view.filtered ? view.indices.subarray(start, end) : null, loc = liveB ? LV.locate(start, end, fx) : null, PZ = PIECE && n > PIECE ? PIECE : 0, PP = !!(PZ && loc && loc.ord), outs = PP ? Array.from({ length: Math.ceil(n / PZ) }, () => ({})) : null;   // the batch's row numbers are cut out once, not looked up per cell
         for (const c of cols) {
           const src = view.cols.get(c.name);
+          if (liveB && !ArrayBuffer.isView(src) && !(view.derived && view.derived.has(c.name))) { if (PP) { const gs = LV.gather(c.name, loc, PZ); for (let q = 0; q < gs.length; q++) { const g = gs[q], nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, g.start.length) : null; outs[q][c.name] = nv || g; } continue; } const g = LV.gather(c.name, loc), nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, n) : null; out[c.name] = nv || g; continue; }   // free-form numbers that print back exactly are saved as numbers, as the import does
           if (!m.noTs && c.type === 'date' && Array.isArray(src)) {   // date text of a fixed width ('YYYY-MM-DD HH:MM:SS[.000000]') goes to packBlock as { kind: 'ts' } epoch seconds: parsed once for all rows (at the end of a live import from the kept bytes, otherwise here from the strings), the saved rows gathered as a typed copy
             const tc = view.tsCache || (view.tsCache = new Map()); let col = tc.get(c.name);
             if (col === undefined) { const t0p = performance.now(); col = new Float64Array(src.length); col.fmt = typeof src[0] === 'string' ? 'YYYY-MM-DD HH:MM:SS' + (src[0].length > 19 ? '.' + 'f'.repeat(src[0].length - 20) : '') : null; for (let r = 0; r < src.length; r++) { const v = src[r]; if (typeof v !== 'string' || v.length < 19 || v.charCodeAt(4) !== 45 || v.charCodeAt(10) !== 32 || v.length !== src[0].length || (v.length > 19 && !/^\.0+$/.test(v.slice(19)))) { col = null; break; }
@@ -2831,14 +3102,21 @@ async function exportLfcp(m) {
             out[c.name] = t; continue;
           }
           const a = new Array(n); if (fx) { for (let i = 0; i < n; i++) a[i] = src[fx[i]]; } else for (let i = 0; i < n; i++) a[i] = src[start + i];
+          if (liveB) { let cap = 0, okS = true; for (let i = 0; i < n; i++) { if (typeof a[i] !== "string") { okS = false; break; } cap += a[i].length; } if (okS) { const bytes = new Uint8Array(cap * 3), off = new Int32Array(n + 1); let o = 0; for (let i = 0; i < n; i++) { off[i] = o; o += enc.encodeInto(a[i], bytes.subarray(o)).written; } off[n] = o; out[c.name] = { bytes: bytes.subarray(0, o), start: off.subarray(0, n), end: off.subarray(1, n + 1) }; continue; } }   // one plain list among byte columns would send the whole block down LFC-pack's row path
           out[c.name] = a;
         }
         tm.rows += performance.now() - ts; ts = performance.now();
-        if (pool) {
-          while (pending >= pool.length) { await new Promise((r) => { wake = r; }); if (failed) throw failed; await drain(); }
-          pending++; pool[nextW++ % pool.length].postMessage({ type: 'packPlain', rid: seq++, cols: out, o: popts });
-          await drain();
-        } else { const r = await LfcPack.packBlock(out, popts); await write(packer2.pushPacked(r)); }
+        // Wide tables: the batch is gathered once and packed in pieces of 1,024 rows (LFC-pack skips its size estimate pass there, and the pieces pack side by side on the helper threads)
+        const pieces = []; if (PZ) { for (let q = 0, a = 0; a < n; a += PZ, q++) { const b = Math.min(n, a + PZ), o2 = {}; for (const c of cols) { const key = c.name, v = PP && outs[q][key] ? outs[q][key] : out[key]; if (PP && outs[q][key]) o2[key] = v; else if (ArrayBuffer.isView(v) || Array.isArray(v)) o2[key] = v.slice(a, b); else if (v.bytes) { const s0 = v.start[a], off = new Int32Array(b - a + 1); for (let i = a; i < b; i++) off[i - a] = v.start[i] - s0; off[b - a] = v.end[b - 1] - s0; o2[key] = { bytes: v.bytes.slice(s0, v.end[b - 1]), start: off.subarray(0, b - a), end: off.subarray(1, b - a + 1) }; } else if (v.kind === 'ts') o2[key] = { kind: 'ts', unit: v.unit, values: v.values.slice(a, b), fmt: v.fmt }; else throw new Error('Save: unexpected column shape'); } pieces.push(o2); } } else pieces.push(out);
+        const cap = wideS ? Math.max(1, ((self.navigator && navigator.hardwareConcurrency) || 4) - 1) : 64;
+        for (const pc of pieces) {
+          if (pool) {
+            while (pending >= Math.min(pool.length, m.wideCap || cap)) { await new Promise((r) => { wake = r; }); if (failed) throw failed; await drain(); }
+            const tr = []; if (wideS) { const seen = new Set(), add = (b) => { if (b && !seen.has(b)) { seen.add(b); tr.push(b); } }; for (const v of Object.values(pc)) { if (ArrayBuffer.isView(v)) add(v.buffer); else if (v && v.bytes) { add(v.bytes.buffer); add(v.start.buffer); add(v.end.buffer); } else if (v && v.values) add(v.values.buffer); } }
+            pending++; pool[nextW++ % pool.length].postMessage({ type: 'packPlain', rid: seq++, cols: pc, o: popts }, tr);
+            await drain();
+          } else { const r = await LfcPack.packBlock(pc, popts); await write(packer2.pushPacked(r)); }
+        }
         tm.pack += performance.now() - ts; continue;
       }
       const objs = view.filtered ? await rowsAt(view.indices, start, end) : view.live ? Array.from({ length: end - start }, (_, i) => view.live.row(start + i)) : await view.R.rows({ from: start, count: end - start });
