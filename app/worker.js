@@ -2795,14 +2795,17 @@ async function queryView(m) {
       view.indices = out; view.filtered = true;
       return send('queried', m.id, { count: out.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, zoneBlocks: zp.blocks.length, blocks: view.R.blocks.length });
     }
-    const cols = await loadColumns(names, m.stream); let qcols = view.columns;
+    // a filter on a column kept as dictionary ids is answered from the ids (one test per distinct value): its text is not made for every row. A sort that follows with the same filters reuses the rows the filter kept.
+    const dcAll = m.noCodes || m.stream ? null : view.dictCols || null, codes = {}; for (const nm of active) { if (m.sort && m.sort.col === nm) continue; const c = view.columns.find((x) => x.name === nm); if (!c || c.type !== 'string' || c.derived || view.cols.has(nm)) continue; const d = dcAll ? dcAll[nm] : view.live && view.live.dictOf ? view.live.dictOf(nm) : null; if (d && d.ids.length === view.total) codes[nm] = d; }
+    const selKey = JSON.stringify(active.map((k) => [k, m.filters[k]])), base = !m.noCodes && m.sort && view.sel && view.sel.key === selKey ? view.sel.idx : null;
+    const cols = await loadColumns(names.filter((nm) => !codes[nm] && !(base && !(m.sort && m.sort.col === nm))), m.stream); let qcols = view.columns;
     if (m.sort && !m.filters[m.sort.col] && !m.stream) { const dk = await dateKeys(m.sort.col); if (dk && dk.length === view.total) { cols[m.sort.col] = dk; qcols = view.columns.map((c) => (c.name === m.sort.col ? Object.assign({}, c, { type: 'number' }) : c)); } }   // a date column sorts as numbers (epoch values read straight from the file), not as 3 million text values parsed one by one
-    const tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), r = colMod.runColumnQuery(cols, view.total, qcols, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS });
+    const tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), r = colMod.runColumnQuery(cols, view.total, qcols, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS }, { codes, base });
     if (r.first) {   // first page first: the best rows now, the full order only when a page beyond them (or an export) needs it
       view.indices = new Uint32Array(r.count); view.indices.set(r.first); view.pending = { topN: r.first.length, full: r.full }; view.filtered = true;
       return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad, selMs: Math.round(performance.now() - tq0) });
     }
-    view.indices = r.indices; view.filtered = true;
+    view.indices = r.indices; view.filtered = true; if (!m.sort && active.length && !Object.keys(r.errors).length) view.sel = { key: selKey, idx: r.indices.slice() }; else if (!base) view.sel = null;
     return send('queried', m.id, { count: r.indices.length, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, loadMs: tLoad, posError: view.posError });
   }
   if (!view.rows) {
@@ -3078,7 +3081,7 @@ async function exportLfcp(m) {
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
-    const wideS = liveB && !m.noWideSave, BATCH = m.batch || 16384, PIECE = wideS ? (m.piece || 1024) : 0, tm = { rows: 0, text: 0, pack: 0 }, allWarm = liveB || cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
+    const wideS = liveB && !m.noWideSave, BATCH = m.batch || 16384, PIECE = wideS ? (m.piece || 1024) : 0, tm = { rows: 0, text: 0, pack: 0 }, dOf = (c) => { if (c.type !== 'string' || c.derived) return null; const d = view.dictCols ? view.dictCols[c.name] : null; return d && d.ids.length === view.total ? d : null; }, allWarm = liveB || cols.every((c) => view.cols.has(c.name) || dOf(c)),   /* a column kept as dictionary ids counts as in memory: its cells for the saved rows come from the ids */ popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
     const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
     // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
     const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / (PIECE || BATCH)) >= (wideS ? 2 : 13) ? self.__keep : null;
@@ -3094,6 +3097,7 @@ async function exportLfcp(m) {
         const out = {}, n = end - start, fx = view.filtered ? view.indices.subarray(start, end) : null, loc = liveB ? LV.locate(start, end, fx) : null, PZ = PIECE && n > PIECE ? PIECE : 0, PP = !!(PZ && loc && loc.ord), outs = PP ? Array.from({ length: Math.ceil(n / PZ) }, () => ({})) : null;   // the batch's row numbers are cut out once, not looked up per cell
         for (const c of cols) {
           const src = view.cols.get(c.name);
+          if (!src && !liveB) { const d = dOf(c), a = new Array(n), ids = d.ids, dict = d.dict; if (fx) { for (let i = 0; i < n; i++) a[i] = dict[ids[fx[i]]]; } else for (let i = 0; i < n; i++) a[i] = dict[ids[start + i]]; out[c.name] = a; continue; }
           if (liveB && !ArrayBuffer.isView(src) && !(view.derived && view.derived.has(c.name))) { if (PP) { const gs = LV.gather(c.name, loc, PZ); for (let q = 0; q < gs.length; q++) { const g = gs[q], nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, g.start.length) : null; outs[q][c.name] = nv || g; } continue; } const g = LV.gather(c.name, loc), nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, n) : null; out[c.name] = nv || g; continue; }   // free-form numbers that print back exactly are saved as numbers, as the import does
           if (!m.noTs && c.type === 'date' && Array.isArray(src)) {   // date text of a fixed width ('YYYY-MM-DD HH:MM:SS[.000000]') goes to packBlock as { kind: 'ts' } epoch seconds: parsed once for all rows (at the end of a live import from the kept bytes, otherwise here from the strings), the saved rows gathered as a typed copy
             const tc = view.tsCache || (view.tsCache = new Map()); let col = tc.get(c.name);
