@@ -339,7 +339,7 @@ async function packColsJob(m) {
         for (const c of ch) {
           const x = c.cols[k], lb = x.lb, nl = lb.start.length, remap = new Uint32Array(nl);
           for (let q = 0; q < nl; q++) {
-            const sub = lb.bytes.subarray(lb.start[q], lb.end[q]), key = lat.decode(sub); let id = map.get(key);
+            const sub = lb.bytes.subarray(lb.start[q], lb.end[q]), key = sub.length <= 32 ? String.fromCharCode.apply(null, sub) : lat.decode(sub); let id = map.get(key);
             if (id === undefined) { id = map.size; map.set(key, id); parts.push(sub); st.push(tb); tb += sub.length; en.push(tb); }
             remap[q] = id;
           }
