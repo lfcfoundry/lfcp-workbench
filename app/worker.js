@@ -2360,7 +2360,7 @@ async function importOnce(m) {
         await colFlush(); if (plen) await dispatch(take(plen));
         while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
         await wchain; if (failed) throw failed;
-        keepWorkers(ws);
+        keepWorkers(ws, t.wide);
       };
       var packWorkersToStop = ws;
     }
@@ -2561,10 +2561,26 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
     column(nm) { const g = this.columnGen(nm); let r; while (!(r = g.next()).done); return r.value; },
     isText(nm) { const k = headers.indexOf(nm); return k >= 0 && !kindOf[k]; },
     // Save for wide tables: where the rows start..end (or the row numbers fx) sit in the kept chunks, found once per batch
-    locate(start, end, fx) { const m = end - start, ci = new Uint32Array(m), li = new Uint32Array(m); if (fx) { for (let i = 0; i < m; i++) { const c = find(fx[i]); ci[i] = c; li[i] = fx[i] - starts[c]; } } else { let c = find(start); for (let i = 0; i < m; i++) { const r = start + i; while (r >= starts[c + 1]) c++; ci[i] = c; li[i] = r - starts[c]; } } return { ci, li, n: m }; },
+    locate(start, end, fx) { const m = end - start, ci = new Uint32Array(m), li = new Uint32Array(m); if (fx) { for (let i = 0; i < m; i++) { const c = find(fx[i]); ci[i] = c; li[i] = fx[i] - starts[c]; } } else { let c = find(start); for (let i = 0; i < m; i++) { const r = start + i; while (r >= starts[c + 1]) c++; ci[i] = c; li[i] = r - starts[c]; } } if (!fx) { const ord = new Uint32Array(m); for (let i = 0; i < m; i++) ord[i] = i; return { ci, li, n: m, ord }; }
+      const cnt = new Uint32Array(chunks.length + 1); for (let i = 0; i < m; i++) cnt[ci[i] + 1]++; for (let c = 0; c < chunks.length; c++) cnt[c + 1] += cnt[c]; const ord = new Uint32Array(m), at = cnt.slice(0, chunks.length); for (let i = 0; i < m; i++) ord[at[ci[i]]++] = i;   // the batch's rows grouped by chunk, so each column is read chunk by chunk instead of hopping between chunks for every row (a sorted or filtered view)
+      return { ci, li, n: m, ord }; },
     // a text column's cells for those rows as { bytes, start, end } (the shape LFC-pack takes without making strings), copied straight from the kept chunk bytes
-    gather(nm, loc) {
+    gather(nm, loc, P) {
       const k = headers.indexOf(nm), m = loc.n, ci = loc.ci, li = loc.li, off = new Int32Array(m + 1); let tot = 0, pc = -1, x = null, xs = null, xe = null, xc = null;
+      if (loc.ord) {
+        const ord = loc.ord, len = loc.len || (loc.len = new Int32Array(m)), src = loc.src || (loc.src = new Int32Array(m));
+        for (let j = 0; j < m; j++) { const i = ord[j], c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xc = x.codes || null; xs = xc ? x.lb.start : x.start; xe = xc ? x.lb.end : x.end; } const q = xc ? xc[li[i]] : li[i], a = xs[q]; src[i] = a; len[i] = xe[q] - a; }
+        if (P) {   // pieces of P rows, each with its own bytes (packed side by side by Save)
+          const np = Math.ceil(m / P), out = new Array(np), dst = loc.dst || (loc.dst = new Int32Array(m));
+          for (let g = 0; g < np; g++) { const a = g * P, b = Math.min(m, a + P), of2 = new Int32Array(b - a + 1); let t2 = 0; for (let i = a; i < b; i++) { of2[i - a] = t2; dst[i] = t2; t2 += len[i]; } of2[b - a] = t2; out[g] = { bytes: new Uint8Array(t2), start: of2.subarray(0, b - a), end: of2.subarray(1, b - a + 1) }; }
+          let xb = null; pc = -1;
+          for (let j = 0; j < m; j++) { const i = ord[j], c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xb = x.codes ? x.lb.bytes : x.bytes; } const a = src[i], e = a + len[i], bytes = out[(i / P) | 0].bytes; let o = dst[i]; if (e - a > 48) bytes.set(xb.subarray(a, e), o); else for (let p = a; p < e; p++) bytes[o++] = xb[p]; }
+          return out;
+        }
+        for (let i = 0; i < m; i++) { off[i] = tot; tot += len[i]; } off[m] = tot; const bytes = new Uint8Array(tot); let xb = null; pc = -1;
+        for (let j = 0; j < m; j++) { const i = ord[j], c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xb = x.codes ? x.lb.bytes : x.bytes; } const a = src[i], e = a + len[i]; let o = off[i]; if (e - a > 48) bytes.set(xb.subarray(a, e), o); else for (let p = a; p < e; p++) bytes[o++] = xb[p]; }
+        return { bytes, start: off.subarray(0, m), end: off.subarray(1, m + 1) };
+      }
       for (let i = 0; i < m; i++) { const c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xc = x.codes || null; xs = xc ? x.lb.start : x.start; xe = xc ? x.lb.end : x.end; } const q = xc ? xc[li[i]] : li[i]; off[i] = tot; tot += xe[q] - xs[q]; }
       off[m] = tot; const bytes = new Uint8Array(tot); let o = 0, xb = null; pc = -1;
       for (let i = 0; i < m; i++) { const c = ci[i]; if (c !== pc) { pc = c; x = chunks[c].cols[k]; xc = x.codes || null; xs = xc ? x.lb.start : x.start; xe = xc ? x.lb.end : x.end; xb = xc ? x.lb.bytes : x.bytes; } const q = xc ? xc[li[i]] : li[i], a = xs[q], e = xe[q]; if (e - a > 48) { bytes.set(xb.subarray(a, e), o); o += e - a; } else for (let p = a; p < e; p++) bytes[o++] = xb[p]; }
@@ -3024,7 +3040,7 @@ async function exportSummary(m) {
 // The import's pack threads are kept for a minute after the import (their wasm is started and their memory paid) so a Save as LFCP of a big view can pack on them; dropKeep frees them.
 function dropKeep(force) { if (self.__keepBusy && !force) { self.__keepDrop = true; return; }   // a Save is packing on them: dropped when it ends
   clearTimeout(self.__keepT); self.__keepBusy = false; self.__keepDrop = false; if (self.__keep) { for (const w of self.__keep) w.terminate(); self.__keep = null; } }
-function keepWorkers(ws) { dropKeep(); if (!ws.length || !isFirefox) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
+function keepWorkers(ws, wide) { dropKeep(); if (!ws.length || !(isFirefox || wide)) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let writable = null, name = null, closed = false;
@@ -3039,11 +3055,11 @@ async function exportLfcp(m) {
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
-    const BATCH = m.batch || 16384, tm = { rows: 0, text: 0, pack: 0 }, allWarm = liveB || cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
+    const wideS = liveB && !m.noWideSave, BATCH = m.batch || 16384, PIECE = wideS ? (m.piece || 1024) : 0, tm = { rows: 0, text: 0, pack: 0 }, allWarm = liveB || cols.every((c) => view.cols.has(c.name)), popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
     const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
     // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
-    const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / BATCH) >= 13 ? self.__keep : null;
-    let pool = null; const npool = m.noPool || !(isFirefox || kept) || !allWarm || !LfcPack.packBlock ? 0 : Math.min(kept ? kept.length : 3, Math.ceil(count / BATCH));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
+    const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / (PIECE || BATCH)) >= (wideS ? 2 : 13) ? self.__keep : null;
+    let pool = null; const npool = m.noPool || !(isFirefox || kept || wideS) || !allWarm || !LfcPack.packBlock ? 0 : Math.min(kept ? kept.length : 3, Math.ceil(count / (PIECE || BATCH)));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
     if (npool > 1 && kept) { clearTimeout(self.__keepT); self.__keepBusy = true; pool = kept; } else if (npool > 1) { try { pool = []; for (let i = 0; i < npool; i++) pool.push(new Worker(self.location.href)); } catch { if (pool) pool.forEach((w) => w.terminate()); pool = null; } }
     const results = new Map(); let nextW = 0, emit = 0, pending = 0, wake = null, failed = null;
     const drain = async () => { while (results.has(emit)) { const r = results.get(emit); results.delete(emit); emit++; await write(packer2.pushPacked(r)); } };
@@ -3052,10 +3068,10 @@ async function exportLfcp(m) {
     for (let start = 0; start < count; start += BATCH) {
       const end = Math.min(count, start + BATCH); let ts = performance.now();
       if (allWarm && LfcPack.packBlock) {   // every column is in memory: gather the batch column by column and pack it as columns (no row objects, no JSON text)
-        const out = {}, n = end - start, fx = view.filtered ? view.indices.subarray(start, end) : null, loc = liveB ? LV.locate(start, end, fx) : null;   // the batch's row numbers are cut out once, not looked up per cell
+        const out = {}, n = end - start, fx = view.filtered ? view.indices.subarray(start, end) : null, loc = liveB ? LV.locate(start, end, fx) : null, PZ = PIECE && n > PIECE ? PIECE : 0, PP = !!(PZ && loc && loc.ord), outs = PP ? Array.from({ length: Math.ceil(n / PZ) }, () => ({})) : null;   // the batch's row numbers are cut out once, not looked up per cell
         for (const c of cols) {
           const src = view.cols.get(c.name);
-          if (liveB && !ArrayBuffer.isView(src) && !(view.derived && view.derived.has(c.name))) { const g = LV.gather(c.name, loc), nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, n) : null; out[c.name] = nv || g; continue; }   // free-form numbers that print back exactly are saved as numbers, as the import does
+          if (liveB && !ArrayBuffer.isView(src) && !(view.derived && view.derived.has(c.name))) { if (PP) { const gs = LV.gather(c.name, loc, PZ); for (let q = 0; q < gs.length; q++) { const g = gs[q], nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, g.start.length) : null; outs[q][c.name] = nv || g; } continue; } const g = LV.gather(c.name, loc), nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, n) : null; out[c.name] = nv || g; continue; }   // free-form numbers that print back exactly are saved as numbers, as the import does
           if (!m.noTs && c.type === 'date' && Array.isArray(src)) {   // date text of a fixed width ('YYYY-MM-DD HH:MM:SS[.000000]') goes to packBlock as { kind: 'ts' } epoch seconds: parsed once for all rows (at the end of a live import from the kept bytes, otherwise here from the strings), the saved rows gathered as a typed copy
             const tc = view.tsCache || (view.tsCache = new Map()); let col = tc.get(c.name);
             if (col === undefined) { const t0p = performance.now(); col = new Float64Array(src.length); col.fmt = typeof src[0] === 'string' ? 'YYYY-MM-DD HH:MM:SS' + (src[0].length > 19 ? '.' + 'f'.repeat(src[0].length - 20) : '') : null; for (let r = 0; r < src.length; r++) { const v = src[r]; if (typeof v !== 'string' || v.length < 19 || v.charCodeAt(4) !== 45 || v.charCodeAt(10) !== 32 || v.length !== src[0].length || (v.length > 19 && !/^\.0+$/.test(v.slice(19)))) { col = null; break; }
@@ -3073,11 +3089,17 @@ async function exportLfcp(m) {
           out[c.name] = a;
         }
         tm.rows += performance.now() - ts; ts = performance.now();
-        if (pool) {
-          while (pending >= pool.length) { await new Promise((r) => { wake = r; }); if (failed) throw failed; await drain(); }
-          pending++; pool[nextW++ % pool.length].postMessage({ type: 'packPlain', rid: seq++, cols: out, o: popts });
-          await drain();
-        } else { const r = await LfcPack.packBlock(out, popts); await write(packer2.pushPacked(r)); }
+        // Wide tables: the batch is gathered once and packed in pieces of 1,024 rows (LFC-pack skips its size estimate pass there, and the pieces pack side by side on the helper threads)
+        const pieces = []; if (PZ) { for (let q = 0, a = 0; a < n; a += PZ, q++) { const b = Math.min(n, a + PZ), o2 = {}; for (const c of cols) { const key = c.name, v = PP && outs[q][key] ? outs[q][key] : out[key]; if (PP && outs[q][key]) o2[key] = v; else if (ArrayBuffer.isView(v) || Array.isArray(v)) o2[key] = v.slice(a, b); else if (v.bytes) { const s0 = v.start[a], off = new Int32Array(b - a + 1); for (let i = a; i < b; i++) off[i - a] = v.start[i] - s0; off[b - a] = v.end[b - 1] - s0; o2[key] = { bytes: v.bytes.slice(s0, v.end[b - 1]), start: off.subarray(0, b - a), end: off.subarray(1, b - a + 1) }; } else if (v.kind === 'ts') o2[key] = { kind: 'ts', unit: v.unit, values: v.values.slice(a, b), fmt: v.fmt }; else throw new Error('Save: unexpected column shape'); } pieces.push(o2); } } else pieces.push(out);
+        const cap = wideS ? Math.max(1, ((self.navigator && navigator.hardwareConcurrency) || 4) - 1) : 64;
+        for (const pc of pieces) {
+          if (pool) {
+            while (pending >= Math.min(pool.length, m.wideCap || cap)) { await new Promise((r) => { wake = r; }); if (failed) throw failed; await drain(); }
+            const tr = []; if (wideS) { const seen = new Set(), add = (b) => { if (b && !seen.has(b)) { seen.add(b); tr.push(b); } }; for (const v of Object.values(pc)) { if (ArrayBuffer.isView(v)) add(v.buffer); else if (v && v.bytes) { add(v.bytes.buffer); add(v.start.buffer); add(v.end.buffer); } else if (v && v.values) add(v.values.buffer); } }
+            pending++; pool[nextW++ % pool.length].postMessage({ type: 'packPlain', rid: seq++, cols: pc, o: popts }, tr);
+            await drain();
+          } else { const r = await LfcPack.packBlock(pc, popts); await write(packer2.pushPacked(r)); }
+        }
         tm.pack += performance.now() - ts; continue;
       }
       const objs = view.filtered ? await rowsAt(view.indices, start, end) : view.live ? Array.from({ length: end - start }, (_, i) => view.live.row(start + i)) : await view.R.rows({ from: start, count: end - start });
