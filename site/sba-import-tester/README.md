@@ -1,0 +1,2 @@
+# SBA import tester
+tester.html: pick the SBA file (zip or csv); imports with build main (1f0f958) and, if a fix/ build folder exists next to the page, with fix too (3 runs each, alternating). Reports import ms, rows, columns, and the timing JSON (columns:true/false, fastRows, parseMs, packMs). Timer stops at the end, Copy results button, noindex. To add a fix: copy app/src/vendor of the fix commit into fix/ (worker.js needs app/worker.js, src/, vendor/lfcp/<version>/).
