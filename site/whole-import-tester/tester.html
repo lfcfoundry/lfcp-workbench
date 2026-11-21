@@ -15,7 +15,7 @@ pre{white-space:pre-wrap;border:1px solid var(--line);border-radius:6px;padding:
 .mut{color:var(--mut)}
 </style></head><body>
 <h1>Whole-import tester</h1>
-<p class="mut">One page for the whole import, on the Workbench main of Nov 20 (PR 89). It compares <b>before</b> (the build before the Parquet pool and pack-worker changes, PR 83) with <b>after</b> (current main), three runs each, alternating order. Part A: Parquet files. Part B: a CSV import plus the first and the repeat Save. Part C: the parse-helper sweep (internal test option, after build only). Everything reads and writes inside your browser; nothing leaves your computer. The timer stops when each import or Save is done. Close other tabs and keep this one in front. Allow about 15 to 25 minutes for everything on a fast computer (the wide file takes the longest); untick a part, or the wide file, to skip it.</p>
+<p class="mut">One page for the whole import, on the Workbench main of Nov 20 (PR 92). It compares <b>before</b> (the build before the Parquet pool and pack-worker changes, PR 83) with <b>after</b> (main fa38874, with PR 92), three runs each, alternating order. Part A: Parquet files. Part B: a CSV import plus the first and the repeat Save. Part C: the parse-helper sweep (internal test option, after build only). Everything reads and writes inside your browser; nothing leaves your computer. The timer stops when each import or Save is done. Close other tabs and keep this one in front. Allow about 15 to 25 minutes for everything on a fast computer (the wide file takes the longest); untick a part, or the wide file, to skip it.</p>
 <h2>Part A: Parquet files</h2>
 <p>Pick the Parquet files (the taxi file and the SBA files; you can select several at once): <input type="file" id="fpq" multiple></p>
 <h2>Part B and C: CSV</h2>
@@ -65,17 +65,18 @@ async function makeCsv(name) {
 function runWorker(build, file, extra, withSave) {
   return new Promise((resolve) => {
     const w = new Worker(build + '/app/worker.js'); const T0 = performance.now(); let done = false, phase = 'import', name = null, res = {};
-    const fin = (r) => { if (done) return; done = true; clearTimeout(to); w.terminate(); resolve(r); };
-    const to = setTimeout(() => fin({ err: 'no answer after 15 minutes' }), 900000);
+    let to = null; const fin = (r) => { if (done) return; done = true; clearTimeout(to); w.terminate(); resolve(r); };
+    const arm = (ms) => { clearTimeout(to); to = setTimeout(() => fin(Object.assign({ err: 'stuck in the ' + phase + ' step for ' + Math.round(ms / 1000) + ' s, moved on' }, res.ms ? { partial: res } : {})), ms); };   // a stuck step reports and the test moves on
+    arm(420000);
     let sv = 0, tS = 0;
     w.onmessage = (e) => { const m = e.data || {};
       if (m.type === 'error' || m.type === 'cancelled') return fin({ err: m.message || m.type });
       if (m.type === 'zipList') return fin({ err: 'the zip has several files; pick the .csv instead' });
       if (phase === 'import' && m.id === 'j1' && m.type === 'done') {
         res = { ms: Math.round(performance.now() - T0), rows: m.dataset && m.dataset.rows, cols: m.dataset && m.dataset.columns && m.dataset.columns.length, bytes: m.dataset && m.dataset.bytes, timing: m.dataset && m.dataset.timing }; name = m.dataset && m.dataset.name;
-        if (!withSave) return fin(res); phase = 'open'; w.postMessage({ id: 'o1', type: 'open', name }); return; }
-      if (phase === 'open' && m.id === 'o1') { phase = 'save'; res.saves = []; tS = performance.now(); w.postMessage({ id: 's0', type: 'exportLfcp' }); return; }
-      if (phase === 'save' && m.id === 's' + sv && m.type === 'exportedLfcp') { res.saves.push(Math.round(performance.now() - tS)); res.saveBytes = m.bytes; sv++; if (sv >= 2) return fin(res); tS = performance.now(); w.postMessage({ id: 's' + sv, type: 'exportLfcp' }); } };
+        if (!withSave) return fin(res); phase = 'open'; arm(240000); w.postMessage({ id: 'o1', type: 'open', name }); return; }
+      if (phase === 'open' && m.id === 'o1') { phase = 'save'; arm(240000); res.saves = []; tS = performance.now(); w.postMessage({ id: 's0', type: 'exportLfcp' }); return; }
+      if (phase === 'save' && m.id === 's' + sv && m.type === 'exportedLfcp') { res.saves.push(Math.round(performance.now() - tS)); res.saveBytes = m.bytes; sv++; if (sv >= 2) return fin(res); arm(240000); tS = performance.now(); w.postMessage({ id: 's' + sv, type: 'exportLfcp' }); } };
     w.onerror = (e) => fin({ err: 'worker error: ' + (e.message || e.filename || '?') });
     w.postMessage(Object.assign({ id: 'j1', type: 'import', file, delimiter: 'auto', live: true }, extra || {}));
   });
@@ -111,7 +112,7 @@ async function getWide() { const f = $('fwide').files[0]; if (f) return f; if (!
 async function urlFile(u) { const b = await (await fetch(u)).blob(); return new File([b], u.split('/').pop()); }
 async function run() {
   $('run').disabled = true; t0 = performance.now(); tEnd = 0; log.length = 0; finished = 0; last = '';
-  const lines = ['Whole-import tester (before = build before PR 84, after = main with PR 89)', 'Browser: ' + navigator.userAgent, 'Cores: ' + navigator.hardwareConcurrency + '   deviceMemory: ' + (navigator.deviceMemory || 'n/a'), 'Rows when made here: ' + ROWS + '   Runs per build: ' + RUNS, 'Detroit time: ' + new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }), ''];
+  const lines = ['Whole-import tester (before = build before PR 84, after = main fa38874 with the Save hang fix)', 'Browser: ' + navigator.userAgent, 'Cores: ' + navigator.hardwareConcurrency + '   deviceMemory: ' + (navigator.deviceMemory || 'n/a'), 'Rows when made here: ' + ROWS + '   Runs per build: ' + RUNS, 'Detroit time: ' + new Date().toLocaleString('en-US', { timeZone: 'America/Detroit' }), ''];
   try {
     await wipeWorkbench();
     const pq = Array.from($('fpq').files); if (Q.get('pqurl')) pq.push(await urlFile(Q.get('pqurl')));

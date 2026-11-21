@@ -2722,7 +2722,7 @@ async function groupView(m) {
 // Decode every file column that is not decoded yet in two parallel calls (numbers as typed arrays, text as strings), so a filtered export reads its rows from memory instead of from 450 scattered blocks.
 // Decodes the wanted columns that are not in memory yet, all in one pass (two parallel calls: number columns as typed arrays, text columns as strings; a dictionary column kept from the import costs
 // one lookup per row and no decode). A column another call is already decoding is waited for, never decoded twice (a Save right after the background warm used to start the same decode again).
-const yieldNow = (() => { const mc = new MessageChannel(); let res = null; mc.port1.onmessage = () => { const r = res; res = null; if (r) r(); }; return () => new Promise((r) => { res = r; mc.port2.postMessage(0); }); })();   // a turn for queued messages without the timer delay
+const yieldNow = (() => { const mc = new MessageChannel(), waiting = []; mc.port1.onmessage = () => { const r = waiting.shift(); if (r) r(); }; return () => new Promise((r) => { waiting.push(r); mc.port2.postMessage(0); }); })();   // one queue slot per caller: two callers at once used to overwrite each other and the first never resumed (a Save or sort waiting on a kept column hung)   // a turn for queued messages without the timer delay
 const EARLY_TEXT = true;
 function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
@@ -2822,10 +2822,9 @@ async function exportLfcp(m) {
               tc.set(c.name, col); }
             if (col) { const t = new Float64Array(n); if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) t[i] = col[ix[start + i]]; } else for (let i = 0; i < n; i++) t[i] = col[start + i]; out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: col.fmt }; continue; }
           }
-          if (ArrayBuffer.isView(src)) {   // a number column without empty cells goes to LFC-pack as a typed array (about 0.6 of the time of a plain array); with empty cells it stays an array with nulls (the NaN form packs 4-5 times slower)
-            const t = new Float64Array(n); let nan = false; if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) { const x = src[ix[start + i]]; t[i] = x; if (x !== x) nan = true; } } else for (let i = 0; i < n; i++) { const x = src[start + i]; t[i] = x; if (x !== x) nan = true; }
-            if (!nan) { out[c.name] = t; continue; }
-            for (let i = 0; i < n; i++) { const x = t[i]; a[i] = x !== x ? null : x; }
+          if (ArrayBuffer.isView(src)) {   // a number column goes to LFC-pack as a typed array, NaN for an empty cell (lfc-pack 0.14.4: 0.86 to 0.91x the time of a plain array with nulls in Chromium, Firefox and WebKitGTK, same bytes)
+            const t = new Float64Array(n); if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) t[i] = src[ix[start + i]]; } else for (let i = 0; i < n; i++) t[i] = src[start + i];
+            out[c.name] = t; continue;
           }
           else for (let i = 0; i < n; i++) a[i] = src[view.filtered ? view.indices[start + i] : start + i];
           out[c.name] = a;
