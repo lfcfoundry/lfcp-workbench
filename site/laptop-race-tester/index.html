@@ -15,8 +15,9 @@ pre{white-space:pre-wrap;border:1px solid var(--line);border-radius:6px;padding:
 </style></head><body>
 <h1>Laptop race tester</h1>
 <p class="mut">Workbench against DuckDB on your own machine, same files, alternating runs. Everything stays in this browser. About 5 minutes. Keep this tab in front and do not use the laptop meanwhile.</p>
-<div class="pick"><b>1. Wikimedia file (H4)</b> <span class="mut">optional</span><br><input type="file" id="fwiki"></div>
-<div class="pick"><b>2. Exoplanets file (H6)</b> <span class="mut">optional</span><br><input type="file" id="fexo"></div>
+<p>The page downloads the two test files itself (about 140 MB, one time) and joins them here. Nothing to pick.</p>
+<p><label><input type="checkbox" id="runh4" checked> H4 Wikimedia pageviews (15.3 million rows)</label><br><label><input type="checkbox" id="runh6" checked> H6 NASA exoplanets (6,473 rows, 703 columns)</label></p>
+<details class="pick"><summary>Use my own files instead (optional)</summary><p>Wikimedia file: <input type="file" id="fwiki"></p><p>Exoplanets file: <input type="file" id="fexo"></p></details>
 <p><button class="go" id="start">Start</button> <button id="copy" disabled>Copy results</button></p>
 <progress id="bar" value="0" max="1"></progress>
 <div id="panel">Pick one or both files, then press Start.</div>
@@ -38,6 +39,23 @@ const panel = () => { $('panel').textContent = section + '\n' + step + '\nElapse
 const tick = setInterval(() => { if (t0 && !tEnd) panel(); }, 500);
 async function wipe() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }); } catch (e) { /* none */ } }
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' took more than ' + Math.round(ms / 1000) + ' s, moved on')), ms))]);
+// ---- test files: downloaded from this site (the public Wikimedia and NASA servers do not allow downloads from other sites), unpacked in the browser, kept in browser storage ----
+async function hosted(name, parts, header, label) {
+  const dir = await navigator.storage.getDirectory();
+  try { const have = await (await dir.getFileHandle(name)).getFile(); if (have.size > 0) { const mark = await (await dir.getFileHandle(name + '.ok')).getFile(); if (mark.size) return have; } } catch (e) { /* not there yet */ }
+  const fh = await dir.getFileHandle(name, { create: true }), w = await fh.createWritable(); let got = 0, total = 0;
+  for (const p of parts) { const h = await fetch(p, { method: 'HEAD' }); total += +h.headers.get('content-length') || 0; }
+  if (header) await w.write(header);
+  for (let i = 0; i < parts.length; i++) {
+    const r = await fetch(parts[i]); if (!r.ok) throw new Error(parts[i] + ' answered ' + r.status);
+    const counted = r.body.pipeThrough(new TransformStream({ transform(c, ctl) { got += c.length; step = label + ': downloading and unpacking, ' + Math.round(100 * got / (total || 1)) + '%'; $('bar').value = got / (total || 1); section = 'Getting the test files'; ctl.enqueue(c); } }));
+    await counted.pipeThrough(new DecompressionStream('gzip')).pipeTo(w, { preventClose: i < parts.length - 1 });
+  }
+  const ok = await (await dir.getFileHandle(name + '.ok', { create: true })).createWritable(); await ok.write('1'); await ok.close();
+  return fh.getFile();
+}
+const getWiki = () => hosted('lt-h4-wiki.txt', ['./data/pageviews-20240115-110000.gz', './data/pageviews-20240115-120000.gz'], 'project page views bytes\n', 'H4');
+const getExo = () => hosted('lt-h6-exo.csv', ['./data/exo.csv.gz'], null, 'H6');
 // ---- Workbench: the app's own worker, the same messages as the app (import live, open, group, add column, filter, sort, summarize, Save) ----
 async function wbRun(file, c, extra, chart) {
   const w = new Worker('./wb/app/worker.js'); let seq = 0; const waiters = new Map(), steps = {}; let ecKey = '', liveSeen = false, liveWork = null;
@@ -120,8 +138,9 @@ async function sweep(file) {
 async function start() {
   $('start').disabled = true; $('copy').disabled = true; lines.length = 0; raw.length = 0; done = 0; t0 = performance.now(); tEnd = 0;
   const urlFile = async (u) => { const b = await (await fetch(u)).blob(); return new File([b], u.split('/').pop()); };   // test hook: ?wikiurl=...&exourl=...&post=... runs by itself and posts the text
-  const wiki = $('fwiki').files[0] || (Q.get('wikiurl') ? await urlFile(Q.get('wikiurl')) : null), exo = $('fexo').files[0] || (Q.get('exourl') ? await urlFile(Q.get('exourl')) : null);
-  if (!wiki && !exo) { $('panel').textContent = 'Pick at least one file first.'; $('start').disabled = false; return; }
+  let wiki = $('fwiki').files[0] || (Q.get('wikiurl') ? await urlFile(Q.get('wikiurl')) : null), exo = $('fexo').files[0] || (Q.get('exourl') ? await urlFile(Q.get('exourl')) : null);
+  try { if (!wiki && $('runh4').checked) wiki = await getWiki(); if (!exo && $('runh6').checked) exo = await getExo(); } catch (e) { $('panel').textContent = 'Could not get the test files: ' + (e && e.message || e) + '. Use the "my own files" box instead.'; $('panel').className = 'bad'; $('start').disabled = false; return; }
+  if (!wiki && !exo) { $('panel').textContent = 'Tick at least one race, or pick a file.'; $('start').disabled = false; return; }
   const engCount = threadedOk ? 3 : 2; planned = (exo ? RUNS * engCount : 0) + (wiki ? RUNS * engCount + 4 + 4 : 0);
   lines.push('Laptop race tester, ' + new Date().toString(), 'Browser: ' + navigator.userAgent, 'Cores: ' + navigator.hardwareConcurrency + '   deviceMemory: ' + (navigator.deviceMemory || 'n/a') + '   threaded DuckDB ' + (threadedOk ? 'available' : 'NOT available (page not cross-origin isolated); only DuckDB base ran'), '');
   try { if (exo) await race('exo', exo); if (wiki) { await race('wiki', wiki); await chartCost(wiki); await sweep(wiki); } } catch (e) { raw.push('FAILED: ' + (e && e.message || e)); }
@@ -136,6 +155,6 @@ $('copy').onclick = async () => { const t = $('out').textContent; try { await na
   threadedOk = !!self.crossOriginIsolated;
   if (!threadedOk && 'serviceWorker' in navigator && !Q.get('nothreads')) { try { const reg = await navigator.serviceWorker.register('./coi-sw.js'); if (reg.active && !navigator.serviceWorker.controller) { location.reload(); return; } await navigator.serviceWorker.ready; if (!navigator.serviceWorker.controller) { location.reload(); return; } } catch (e) { /* run without the threaded build */ } }
   if (Q.get('auto')) { setTimeout(start, 500); }
-  $('panel').textContent = 'Pick one or both files, then press Start.  (Threaded DuckDB: ' + (threadedOk ? 'ready' : 'not available here') + ')';
+  $('panel').textContent = 'Press Start.  (Threaded DuckDB: ' + (threadedOk ? 'ready' : 'not available here') + ')';
 })();
 </script></body></html>
