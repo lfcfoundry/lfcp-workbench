@@ -2092,6 +2092,7 @@ async function importOnce(m) {
     const write = async (parts) => { for (const p of parts) { stop(job); const s = performance.now(); await writable.write(p); t.writeMs += performance.now() - s; outBytes += p.byteLength; } };
     let inlScan = null, packBytes = async (bytes) => { stop(job); const s = performance.now(); if (t.scanPack && !t.flatPack) { inlScan ||= flatTransform(); const sc = inlScan.scan(bytes); for (const k of sc.keys) (t.keys ||= new Set()).add(k); if (sc.maybeBig) { inlScan.reset(0); const tb = inlScan(bytes), bg = inlScan.big(); if (bg) { t.big = (t.big || 0) + bg; bytes = tb; } } } const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
     let dkBlocks = null;
+    let tsJobs = null;
     let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
     const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? 1 : 2);   // live columns: Firefox packs with one worker while parsing (the cores go to the parse helpers) and gets three more when parsing is done; Chromium also packs with one while parsing and gets one more (measured: each is the best of the variants in its browser)   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
@@ -2186,7 +2187,7 @@ async function importOnce(m) {
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
-    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) view.cols.set(c.name, view.live.column(c.name));   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ const wide = ((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);   // owner laptop (16 cores): Chrome is best at 4 pack workers in all (2 before), Firefox keeps gaining to 6; 4-core machines keep the old counts
+    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) { view.cols.set(c.name, view.live.column(c.name)); (tsJobs ||= []).push([view, c.name, view.live]); }   /* typed seconds for Save are made after 'done' (not on the import's critical path) */   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ const wide = ((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);   // owner laptop (16 cores): Chrome is best at 4 pack workers in all (2 before), Firefox keeps gaining to 6; 4-core machines keep the old counts
     if (morePack && m.morePack !== 0) morePack(m.morePack || (wide ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 1 : 2)); }
     if (view && view.preview && view.name === name && !(view.live)) { view = null; send('liveclosed', m.id, {}); }
     if (file && file.lazy) await file.settle(); await finishPacking(); if (res.refine) { res.refine(types); for (let i = 0; i < headers.length; i++) { cols[i].type = types[i].type; if (meta.tables[0].columns[i]) meta.tables[0].columns[i].type = types[i].type; } }
@@ -2204,6 +2205,7 @@ async function importOnce(m) {
     const cat = await store.catalog(); cat.push({ name, source: file.name, rows, bytes: outBytes, columns: cols, created: Date.now(), storage: STORAGE }); await store.setCatalog(cat);
     if (view && view.live && view.name === name) { try { const f2 = await store.file(name), R2 = await LfcPack.open(f2); Object.assign(view, { dictCols: keptDict.get(name) || null, R: R2, f: f2, flat: isFlatFile(R2), live: null }); liveChunks = null; textFromChunks(view); } catch { /* keep reading the kept columns */ } }   // the saved file takes over from the kept columns (same rows, same order)
     send('done', m.id, { dataset: { name, source: file.name, rows, bytes: outBytes, storage: STORAGE, delimiter: delimiter === '\t' ? 'TAB' : delimiter, columns: cols, sample, validation: v, ms: Math.round(performance.now() - t0), timing: { readMs: Math.round(t.readMs), parseMs: Math.round(t.parseMs), packMs: Math.round(t.packMs), writeMs: Math.round(t.writeMs), pieces: (res && res.pieces) || 0, redos: t.redos || 0, fastRows: t.fastRows || 0, columns: !!t.cols }, plan: plan ? plan.map(Boolean) : null, parallel: !!helper || !!(res && res.pieces), segmented: !!(res && res.pieces), serialTail: !!t.serialTail, redos: t.redos || 0, segWhy: t.segWhy } });
+    if (tsJobs) { const jobs = tsJobs; setTimeout(async () => { for (const [v, nm, L] of jobs) { await yieldNow(); if (view !== v || (v.tsCache && v.tsCache.has(nm))) continue; try { (v.tsCache ||= new Map()).set(nm, L.tsColumn(nm)); } catch { /* Save parses the text instead */ } } }, 0); }
   } catch (err) {
     if (view && (view.live || view.preview) && view.name === name) { view = null; send('liveclosed', m.id, {}); }
     if (writable && !closed) { try { await writable.abort(); } catch {} }
@@ -2351,6 +2353,25 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
       return out;
     },
     column(nm) { const g = this.columnGen(nm); let r; while (!(r = g.next()).done); return r.value; },
+    tsColumn(nm) {   // a fixed-width 'YYYY-MM-DD HH:MM:SS[.000000]' text column as epoch seconds (UTC), read straight from the kept bytes; null when any cell does not fit (then Save uses the text path)
+      const k = headers.indexOf(nm), out = new Float64Array(rows); let at = 0, W = -1, lastKey = -1, lastDays = 0;
+      const days = (Y, M, D) => { const yy = M <= 2 ? Y - 1 : Y, era = Math.floor(yy / 400), yoe = yy - era * 400, doy = Math.floor((153 * (M + (M > 2 ? -3 : 9)) + 2) / 5) + D - 1; return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468; };
+      const one = (b, a, e) => {
+        const w = e - a; if (w === 0) return NaN; if (W < 0) W = w; if (w !== W || w < 19 || b[a + 4] !== 45 || b[a + 10] !== 32) return undefined;
+        for (let q = 19; q < w; q++) { if (q === 19 ? b[a + q] !== 46 : b[a + q] !== 48) return undefined; }
+        const c0 = b[a] - 48, c1 = b[a + 1] - 48, c2 = b[a + 2] - 48, c3 = b[a + 3] - 48, c5 = b[a + 5] - 48, c6 = b[a + 6] - 48, c8 = b[a + 8] - 48, c9 = b[a + 9] - 48, c11 = b[a + 11] - 48, c12 = b[a + 12] - 48, c14 = b[a + 14] - 48, c15 = b[a + 15] - 48, c17 = b[a + 17] - 48, c18 = b[a + 18] - 48;
+        if ((c0 >>> 0) > 9 || (c1 >>> 0) > 9 || (c2 >>> 0) > 9 || (c3 >>> 0) > 9 || (c5 >>> 0) > 9 || (c6 >>> 0) > 9 || (c8 >>> 0) > 9 || (c9 >>> 0) > 9 || (c11 >>> 0) > 9 || (c12 >>> 0) > 9 || (c14 >>> 0) > 9 || (c15 >>> 0) > 9 || (c17 >>> 0) > 9 || (c18 >>> 0) > 9) return undefined;
+        const key = (((c0 * 10 + c1) * 10 + c2) * 10 + c3) * 10000 + (c5 * 10 + c6) * 100 + c8 * 10 + c9; if (key !== lastKey) { lastKey = key; lastDays = days(c0 * 1000 + c1 * 100 + c2 * 10 + c3, c5 * 10 + c6, c8 * 10 + c9); }
+        return (lastDays * 24 + c11 * 10 + c12) * 3600 + (c14 * 10 + c15) * 60 + c17 * 10 + c18;
+      };
+      for (const ch of chunks) {
+        const x = ch.cols[k];
+        if (x.codes) { const lb = x.lb, v = new Float64Array(lb.start.length); for (let q = 0; q < v.length; q++) { const r = one(lb.bytes, lb.start[q], lb.end[q]); if (r === undefined) return null; v[q] = r; } for (let r = 0; r < ch.n; r++) out[at++] = v[x.codes[r]]; continue; }
+        const b = x.bytes, st = x.start, en = x.end; for (let r = 0; r < ch.n; r++) { const v = one(b, st[r], en[r]); if (v === undefined) return null; out[at++] = v; }
+      }
+      out.fmt = W < 0 ? null : 'YYYY-MM-DD HH:MM:SS' + (W > 19 ? '.' + 'f'.repeat(W - 20) : '');
+      return out;
+    },
   };
   view = { name, R: null, f: null, total: rows, rows: null, columns: colsMeta, indices: null, filtered: false, cols: nums, flat: true, cache: new Map(), live: L };
   send('live', id, { name, total: rows, columns: colsMeta });
@@ -2778,6 +2799,14 @@ async function exportLfcp(m) {
         const out = {}, n = end - start;
         for (const c of cols) {
           const src = view.cols.get(c.name), a = new Array(n);
+          if (!m.noTs && c.type === 'date' && Array.isArray(src)) {   // date text of a fixed width ('YYYY-MM-DD HH:MM:SS[.000000]') goes to packBlock as { kind: 'ts' } epoch seconds: parsed once for all rows (at the end of a live import from the kept bytes, otherwise here from the strings), the saved rows gathered as a typed copy
+            const tc = view.tsCache || (view.tsCache = new Map()); let col = tc.get(c.name);
+            if (col === undefined) { const t0p = performance.now(); col = new Float64Array(src.length); col.fmt = typeof src[0] === 'string' ? 'YYYY-MM-DD HH:MM:SS' + (src[0].length > 19 ? '.' + 'f'.repeat(src[0].length - 20) : '') : null; for (let r = 0; r < src.length; r++) { const v = src[r]; if (typeof v !== 'string' || v.length < 19 || v.charCodeAt(4) !== 45 || v.charCodeAt(10) !== 32 || v.length !== src[0].length || (v.length > 19 && !/^\.0+$/.test(v.slice(19)))) { col = null; break; }
+                const Y = (v.charCodeAt(0) - 48) * 1000 + (v.charCodeAt(1) - 48) * 100 + (v.charCodeAt(2) - 48) * 10 + v.charCodeAt(3) - 48, M = (v.charCodeAt(5) - 48) * 10 + v.charCodeAt(6) - 48, D = (v.charCodeAt(8) - 48) * 10 + v.charCodeAt(9) - 48, h = (v.charCodeAt(11) - 48) * 10 + v.charCodeAt(12) - 48, mi = (v.charCodeAt(14) - 48) * 10 + v.charCodeAt(15) - 48, se = (v.charCodeAt(17) - 48) * 10 + v.charCodeAt(18) - 48;
+                const yy = M <= 2 ? Y - 1 : Y, era = Math.floor(yy / 400), yoe = yy - era * 400, doy = Math.floor((153 * (M + (M > 2 ? -3 : 9)) + 2) / 5) + D - 1, doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy; col[r] = ((era * 146097 + doe - 719468) * 24 + h) * 3600 + mi * 60 + se; }
+              tc.set(c.name, col); }
+            if (col) { const t = new Float64Array(n); if (view.filtered) { const ix = view.indices; for (let i = 0; i < n; i++) t[i] = col[ix[start + i]]; } else for (let i = 0; i < n; i++) t[i] = col[start + i]; out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: col.fmt }; continue; }
+          }
           if (ArrayBuffer.isView(src)) { for (let i = 0; i < n; i++) { const x = src[view.filtered ? view.indices[start + i] : start + i]; a[i] = x !== x ? null : x; } }
           else for (let i = 0; i < n; i++) a[i] = src[view.filtered ? view.indices[start + i] : start + i];
           out[c.name] = a;
