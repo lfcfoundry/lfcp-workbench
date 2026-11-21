@@ -1,6 +1,6 @@
 /* Workbench import worker. Classic worker: loads the pinned LFC-pack build, then the ES-module ingest core. */
 'use strict';
-importScripts('../vendor/lfcp/0.14.6/lfc-pack.js'); //@@IMPORT_LFC@@
+importScripts('../vendor/lfcp/0.14.8/lfc-pack.js'); //@@IMPORT_LFC@@
 
 const DIR = 'lfcfoundry-workbench', CATALOG = 'catalog.json', SLICE = 256 * 1024, FLUSH = 256 * 1024;
 const enc = new TextEncoder(), jobs = new Map();
@@ -2393,6 +2393,7 @@ function makeInterner() {
     },
   };
 }
+const TXT_SLICE = 16384;
 async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
   const n = headers.length, starts = new Uint32Array(chunks.length + 1); for (let i = 0; i < chunks.length; i++) starts[i + 1] = starts[i] + chunks[i].n;
@@ -2408,10 +2409,14 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
         yield;   // between chunks: the caller may let queued messages run
         const x = ch.cols[k];
         if (x.codes) { const lb = x.lb, labs = new Array(lb.start.length); for (let q = 0; q < labs.length; q++) labs[q] = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); for (let r = 0; r < ch.n; r++) out[at++] = labs[x.codes[r]]; continue; }   // dictionary chunk: the distinct values decoded once, one lookup per row
-        if (I && I.on) { I.chunk(out, at, x.bytes, x.start, x.end, ch.n, mk); at += ch.n; if (!I.on) I = null; continue; }   // equal cells share one string
-        const b = x.bytes; let ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; }
-        if (ascii) { const s = latin.decode(b); for (let r = 0; r < ch.n; r++) out[at++] = s.substring(x.start[r], x.end[r]); }   // plain ASCII chunk: one decode, then slices
-        else for (let r = 0; r < ch.n; r++) out[at++] = dec.decode(b.subarray(x.start[r], x.end[r]));
+        let ascii = null;
+        for (let r0 = 0; r0 < ch.n; r0 += TXT_SLICE) {   // slices of 16,384 cells: the importer's pack results and file writes get the thread between slices
+          const r1 = Math.min(ch.n, r0 + TXT_SLICE); if (r0) yield;
+          if (I && I.on) { I.chunk(out, at, x.bytes, x.start.subarray(r0, r1), x.end.subarray(r0, r1), r1 - r0, mk); at += r1 - r0; if (!I.on) I = null; continue; }   // equal cells share one string
+          if (ascii === null) { const b = x.bytes; ascii = true; for (let i = 0; i < b.length; i++) if (b[i] > 127) { ascii = false; break; } }
+          if (ascii && x.end[r1 - 1] >= x.start[r0]) { const lo = x.start[r0], sub = latin.decode(x.bytes.subarray(lo, x.end[r1 - 1])); for (let r = r0; r < r1; r++) out[at++] = sub.substring(x.start[r] - lo, x.end[r] - lo); }   // plain ASCII chunk: one decode per slice, then substrings
+          else { const b = x.bytes; for (let r = r0; r < r1; r++) out[at++] = dec.decode(b.subarray(x.start[r], x.end[r])); }
+        }
       }
       return out;
     },
@@ -2441,8 +2446,14 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   setTimeout(() => { if (colMod.primeTopN) for (const a of nums.values()) colMod.primeTopN(a); }, 0);
   // The text columns the import does not keep as dictionary ids are made from the kept chunks as soon as the import has finished (see textFromChunks): a Save as LFCP or a text sort
   // right after the import finds them in memory instead of decoding them from the file (6 columns: 0.7-0.9 s). Done after, not during, the import so the import time does not change.
-  view.liveRest = { names: headers.filter((h, k) => !kindOf[k] && !chunks.every((c) => c.cols[k].codes)), L };
-  if (EARLY_TEXT) textFromChunks(view);   // variant: start now, while the pack threads finish the file
+  const restK = []; for (let k = 0; k < n; k++) if (!kindOf[k] && !chunks.every((c) => c.cols[k].codes)) restK.push(k);
+  let restBytes = 0; for (const k of restK) for (const c of chunks) { const x = c.cols[k]; if (x.bytes) restBytes += x.bytes.length; }
+  // Turning the kept text into strings costs about 30 to 60 ns a cell and 100 bytes or more of memory a cell: for a very tall or very long text column (a 15M-row title list: 9 to 13 s of thread time, 2 GB) it
+  // also holds up the import itself, so past 5M rows or 160 MB of text the strings are not made ahead: a Save or a text sort reads that column from the saved file instead.
+  if (restK.length && rows <= 5000000 && restBytes <= 160 * 1048576) {
+    view.liveRest = { names: restK.map((k) => headers[k]), L };
+    if (EARLY_TEXT) textFromChunks(view);
+  }   // variant: start now, while the pack threads finish the file
 }
 async function warmColumn(n) {
   if (view.cols.has(n)) return;
@@ -2776,7 +2787,7 @@ function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
   const fly = (v.inflight ||= new Map()); let done; const p = new Promise((r) => { done = r; }); for (const n of lr.names) fly.set(n, p);
   setTimeout(async () => {
-    try { for (const nm of lr.names) { if (view !== v) break; if (!v.cols.has(nm)) { try { const g = lr.L.columnGen(nm); let r, k = 0; while (!(r = g.next()).done) { if (++k % 4 === 0) await yieldNow(); if (view !== v) break; } if (r.done && view === v) v.cols.set(nm, r.value); } catch {} } fly.delete(nm); await yieldNow(); } }
+    try { for (const nm of lr.names) { if (view !== v) break; if (!v.cols.has(nm)) { try { const g = lr.L.columnGen(nm); let r, k = 0; while (!(r = g.next()).done) { await yieldNow(); if (view !== v) break; } if (r.done && view === v) v.cols.set(nm, r.value); } catch {} } fly.delete(nm); await yieldNow(); } }
     finally { for (const nm of lr.names) fly.delete(nm); done(); }
   }, 0);
 }
