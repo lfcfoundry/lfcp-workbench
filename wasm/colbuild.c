@@ -3,16 +3,18 @@
 #include <wasm_simd128.h>
 typedef unsigned char u8; typedef unsigned int u32; typedef unsigned long long u64;
 #define EXPORT(n) __attribute__((export_name(n)))
-#define MAXC 128
+#define MAXC 1024
 #define DSL 40
 #define DCAP 4096
 #define DSLOTS 8
-static u8 keybuf[8192]; static u32 keyoff[MAXC], keylen[MAXC];
+static u8 keybuf[131072]; static u32 keyoff[MAXC], keylen[MAXC];
 static u8 isplan[MAXC], flags[MAXC], dslot[MAXC];
 static u32 cnt_n[MAXC], cnt_e[MAXC];
 static u32 ncols, extra; static u8 D;
 static u8 dtab[DSLOTS][DCAP][DSL + 1];   // len byte then bytes; len 0 = empty slot
 static u32 g_out, g_rows, g_bail, g_nl;
+static u32 g_tcap;   // wide tables: bytes of text a column may hold in one chunk (0 = a whole chunk); a row that would pass it ends the chunk, so 700 text columns do not each need a chunk-sized area
+EXPORT("set_tcap") void set_tcap(u32 t){ g_tcap = t; }
 // ---- Dictionary mode (parse-research prototype): a text column in dict mode writes a u16 code per row (colA[c] is a u16 array) instead of text; the labels (distinct values, first-seen order in this chunk)
 // go to dbytes[c] with dstart[c] / dend[c] offsets. More than DMAX labels or no room in dbytes: g_bail = 4 and g_bailcol = the column (JS switches that column to text and calls again from the returned position).
 #define DMAX 4096
@@ -213,6 +215,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
     if (hi8 && !utf8_ok(in + i, end - i)) { g_bail = 1; break; }
     for (u32 c = 0; c < n; c++) if (esc[c]) { u32 w = fs[c], r = fs[c], z = fe[c]; while (r < z) { u8 ch = in[r++]; ((u8*)in)[w++] = ch; if (ch == 34) r++; } fe[c] = w; }
     if (nrows >= cap) break;
+    if (g_tcap) { int full = 0; for (u32 c = 0; c < n; c++) if (!isplan[c] && !dmode[c] && !dtmode[c] && tlen[c] + (fe[c] - fs[c]) > g_tcap) { full = 1; break; } if (full) { if (nrows == 0) g_bail = 1; break; } }   // no room in a text area: the chunk ends here (a single row that cannot fit goes to JavaScript)
     // check every cell against the type flags before writing anything for the row
     for (u32 c = 0; c < n; c++) {
       u32 s0 = fs[c], l = fe[c] - s0; if (l == 0) continue;

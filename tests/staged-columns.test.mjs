@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { buildColumns } from '../src/ingest/columns.mjs';
 import { typedCell, typedDecimal } from '../src/ingest/infer.mjs';
-const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.14.8/lfc-pack.js')); await lib.init();
+const lib = createRequire(import.meta.url)(join(dirname(fileURLToPath(import.meta.url)), '../vendor/lfcp/0.14.10/lfc-pack.js')); await lib.init();
 const enc = new TextEncoder();
 let seed = 4242; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296, ri = (n) => Math.floor(rnd() * n);
 const headers = ['id', 'name', 'score', 'when', 'note'], plan = [true, false, 2, false, false];
@@ -75,6 +75,34 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
     assert.equal(w.bail, r.bail, t); assert.equal(w.n, r.n, t);
   }
   console.log(`ok: wasm column builder equals the JavaScript reference (${chunks} chunks, bail rules)`);
+}
+
+// Wide tables: 700 columns go through the wasm builder (it took 128 at most before), as one buffer per chunk, and a small text area per column ends a chunk early instead of overflowing
+{
+  const { make } = await import('../src/ingest/colbuild.mjs');
+  const { readFileSync } = await import('node:fs');
+  const wasm = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../wasm/colbuild.wasm'));
+  const W = 700, wh = Array.from({ length: W }, (_, c) => 'c' + c), wplan = wh.map((_, c) => (c % 4 === 0 ? true : c % 4 === 1 ? 2 : false));
+  const cell = (r, c) => (c % 7 === 3 || (r + c) % 5 === 0 ? '' : c % 4 === 0 ? String((r * 31 + c) % 5000 - 100) : c % 4 === 1 ? ((r * 17 + c) % 9000 / 100 - 20).toFixed(2).replace(/^-0\.00$/, '0.00') : c % 4 === 2 ? 'text ' + r + ' in column ' + c : 'k' + (r + c) % 13);
+  const lines = []; for (let r = 0; r < 400; r++) { const f = new Array(W); for (let c = 0; c < W; c++) f[c] = cell(r, c); lines.push(f.join(',')); }
+  const data = enc.encode(lines.join('\n') + '\n');
+  const ref = buildColumns(data, wh, wplan, ',');
+  assert.equal(ref.bail, null); assert.equal(ref.n, 400);
+  for (const textCap of [0, 4096]) {   // 4096 bytes of text per column: the chunk ends early several times
+    const B = await make(wasm, wh, wplan, ',', { capRows: 4096, chunkBytes: 4194304, textCap });
+    let at = 0, row = 0, calls = 0;
+    while (at < data.length) {
+      const w = B.build(data.subarray(at)); assert.equal(w.bail, null); assert.ok(w.n > 0); assert.ok(w.arr.slab instanceof ArrayBuffer, 'one buffer per chunk');
+      for (let c = 0; c < W; c++) {
+        const a = w.arr[c], b = ref.cols[wh[c]];
+        if (a instanceof Float64Array) { for (let i = 0; i < w.n; i++) assert.ok(Object.is(a[i], b[row + i]), 'number cell ' + (row + i) + ',' + c); }
+        else for (let i = 0; i < w.n; i++) assert.equal(new TextDecoder().decode(a.bytes.subarray(a.start[i], a.end[i])), new TextDecoder().decode(b.bytes.subarray(b.start[row + i], b.end[row + i])), 'text cell ' + (row + i) + ',' + c);
+      }
+      at += w.used; row += w.n; calls++;
+    }
+    assert.equal(row, 400); if (textCap) assert.ok(calls > 1, 'the text cap cut the chunk');
+  }
+  console.log('ok: wasm column builder takes 700 columns (one buffer per chunk, text cap ends a chunk early)');
 }
 
 // Quoted cells in the wasm builder: quoted cells (also with delimiters, line breaks and CRLF inside) land in the same columns as the character parser makes;
