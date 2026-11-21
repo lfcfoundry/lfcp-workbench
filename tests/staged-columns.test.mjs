@@ -91,6 +91,14 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
   assert.deepEqual([0, 1, 2].map((i) => tx(r.cols.c, i)), ['x', 'say "hi" now', 'y']);
   const r2 = B.build(eq.encode('1,"closed"tail,x\n'));
   assert.equal(r2.n, 0); assert.equal(r2.bail, 'line');   // text after a closing quote is not this case
+  // text right after a closing quote joins the cell when the lenient switch is on (the tidy pass's reading): "<a href="u" x="v">t</a>" is <a href=u" x="v">t</a>"
+  B.exports.set_lenient(1);
+  const r4 = B.build(eq.encode('1,"<a href="u" x="v">t</a>",z\n2,"a ""b"" c"d,"q"\n3,""tail,y\n'));
+  assert.equal(r4.n, 3); assert.equal(r4.bail, null);
+  assert.deepEqual([0, 1, 2].map((i) => tx(r4.cols.b, i)), ['<a href=u" x="v">t</a>"', 'a "b" cd', 'tail']);
+  assert.deepEqual([0, 1, 2].map((i) => tx(r4.cols.c, i)), ['z', 'q', 'y']);
+  B.exports.set_lenient(0);
+  assert.equal(B.build(eq.encode('1,"closed"tail,x\n')).bail, 'line');
   const S = await make(wasmQ, ['a', 'b'], [true, false], ' ');
   const r3 = S.build(eq.encode('1 5"pipe\n'));
   assert.equal(r3.n, 0); assert.equal(r3.bail, 'line');
