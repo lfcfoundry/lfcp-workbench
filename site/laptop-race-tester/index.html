@@ -43,9 +43,9 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.2212, a fresh page for every run</span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.2218, a fresh page for every run</span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
-<div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
+<div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
 <div class="score"><div><b id="s1">-</b><span>H6 exoplanets: Workbench share of DuckDB base's time</span></div><div><b id="s2">-</b><span>H4 Wikimedia: share of DuckDB base's time</span></div><div><b id="s3">-</b><span>H4: share of DuckDB threaded's time</span></div><div><b id="s4">0</b><span>runs finished</span></div></div>
 <div class="card"><h2 id="head">Total time start to finish, by race</h2><p class="note">Shorter is better. Grey is DuckDB, blue is Workbench (counted when its table is usable and saved). Each dot is one run.</p>
@@ -70,7 +70,7 @@ const CFG = {
 let ST = null, threadedOk = false, curLabel = '', curW = 1, tNow0 = Date.now();
 const dl = { on: false, got: 0, total: 0, t: 0, label: '' };   // the download phase: the bar and the text show bytes, speed and time left
 const setBar = (f) => { $('bar').style.width = Math.round(100 * f) + '%'; };
-const busy = (b) => { $('start').disabled = b; $('startfull').disabled = b; };
+const busy = (b) => { $('start').disabled = b; $('startfull').disabled = b; $('startpq').disabled = b; };
 const mb = (n) => (n / 1048576).toFixed(0) + ' MB';
 const KEY = 'ltState';
 const saveState = () => { try { sessionStorage.setItem(KEY, JSON.stringify(ST)); } catch (e) { /* none */ } };
@@ -282,10 +282,10 @@ async function ownFile(file, name) {   // a picked file is copied into browser s
   await file.stream().pipeThrough(new TransformStream({ transform(c, ctl) { dl.got += c.length; ctl.enqueue(c); } })).pipeTo(w); dl.on = false;
   const ok = await (await dir.getFileHandle(name + '.ok', { create: true })).createWritable(); await ok.write('1'); await ok.close();
 }
-async function start(fullFlag) {
+async function start(fullFlag, pqOnly) {
   busy(true); $('copy').disabled = true; $('save').disabled = true; $('copied').textContent = ''; $('panel').className = ''; $('panel').textContent = 'Starting: checking for the test files...';
-  const full = fullFlag || !!Q.get('full'), pw = $('fwiki').files[0], pe = $('fexo').files[0];
-  let hasWiki = $('runh4').checked || !!pw, hasExo = $('runh6').checked || !!pe; const hasPq = $('runpq').checked;
+  const full = fullFlag || !!pqOnly || !!Q.get('full'), pw = $('fwiki').files[0], pe = $('fexo').files[0];
+  let hasWiki = !pqOnly && ($('runh4').checked || !!pw), hasExo = !pqOnly && ($('runh6').checked || !!pe); const hasPq = pqOnly || $('runpq').checked;
   try {
     if (pw) { await ownFile(pw, 'lt-h4-wiki.txt'); } else if (hasWiki) await getWiki();
     if (pe) { await ownFile(pe, 'lt-h6-exo.csv'); } else if (hasExo) await getExo();
@@ -296,7 +296,7 @@ async function start(fullFlag) {
   ST = { running: true, full, jobs, results: [], idx: 0, t0: Date.now(), tRace: Date.now(), wTot: jobs.reduce((a, j) => a + j.w, 0), stopped: false, ua: navigator.userAgent, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory, threaded: threadedOk, ver: document.getElementById('ver').textContent, last: '' };
   saveState(); $('stop').disabled = false; await runNext();
 }
-$('start').onclick = () => start(false); $('startfull').onclick = () => start(true);
+$('start').onclick = () => start(false); $('startfull').onclick = () => start(true); $('startpq').onclick = () => start(false, true);
 $('stop').onclick = () => { if (ST) { ST.stopped = true; saveState(); } $('stop').disabled = true; };
 $('copy').onclick = () => copyText($('out').value);
 $('save').onclick = () => downloadText($('out').value);
@@ -323,7 +323,7 @@ try { localStorage.removeItem('ltReport'); } catch (e) { /* earlier versions kep
   const st = loadState();
   if (st && st.running) { ST = st; busy(true); $('stop').disabled = false; if (ST.results.length) showReport(false); await runNext(); return; }   // a page turn in the middle of a run: carry on
   else { try { sessionStorage.removeItem(KEY); } catch (e) { /* none */ } }   // a new visit starts empty: no earlier results are shown
-  if (Q.get('auto')) { setTimeout(start, 500); return; }
+  if (Q.get('auto')) { setTimeout(() => start(false, Q.get('auto') === 'pq'), 500); return; }
   if (!($('out').value)) $('panel').textContent = 'Tap Quick run.  (Threaded DuckDB: ' + (threadedOk ? 'ready' : 'not available here') + ')';
 })();
 </script></body></html>
