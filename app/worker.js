@@ -62,6 +62,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'packPlain') packPlainJob(m);
   else if (m.type === 'packCols') packColsJob(m);
   else if (m.type === 'pqGroup') pqGroupJob(m);
+  else if (m.type === 'pqCol') pqColJob(m);
   else if (m.type === 'pqPackPart') pqPartJob(m);
   else if (m.type === 'credit') { parseCredits++; if (credit) { const r = credit; credit = null; r(); } }
   else if (m.type === 'import') importWithEncoding(m);
@@ -3640,11 +3641,20 @@ async function arrowGroupCols(m, a) {
   m.cols.forEach((c, i) => { const node = a.nodes[i] || { len: a.len, nulls: 0 }; out.push(arrowCol(c, node, B, bi, a.dicts, pqIsExact(m.exact, i, c), i)); bi += c.dictId !== null ? 2 : (c.ak === K.UTF8 || c.ak === K.LUTF8) ? 3 : 2; });
   return out;
 }
+const pqBufs = (c) => { const o = c instanceof Float64Array ? [c.buffer] : c.kind === 'ts' ? [c.values.buffer] : c.codes ? [c.codes.buffer, c.lb.bytes.buffer, c.lb.start.buffer, c.lb.end.buffer] : [c.bytes.buffer, c.start.buffer, c.end.buffer]; return o.filter((b, i) => o.indexOf(b) === i); };
+async function pqColJob(m) {   // decode one column chunk of a row group on any helper (a one-group file no longer decodes serially); the group is finished by pqGroupJob with m.pre
+  try {
+    pqInit(); const ch = m.ch, col = m.col, i = m.i, b = new Uint8Array(await m.file.slice(ch.start, ch.start + ch.comp).arrayBuffer());
+    let c; try { c = PQ.decodeChunk(col, ch, b, pqInfl, pqIsExact(m.exact, i, col) ? { exact: true } : undefined); } catch (e) { if (e && e.code === 'INT64_RANGE') { self.postMessage({ type: 'pqdone', rid: m.rid, error: String(e.message), exactCol: i }); return; } throw e; }
+    if (c instanceof Float64Array && (col.kind === 'date' || col.kind === 'timestamp')) c = (!m.chunk && col.kind === 'timestamp' && !col.tz && pqTs(c, col.unit, col.fixed)) || pqDateText(c, col.kind, col.unit, col.fixed, col.tz);
+    self.postMessage({ type: 'pqdone', rid: m.rid, c, i }, pqBufs(c));
+  } catch (err) { self.postMessage({ type: 'pqdone', rid: m.rid, error: String(err && err.message || err) }); }
+}
 async function pqGroupJob(m) {
   try {
-    pqInit(); await LfcPack.init(); const g = m.group, out = [], dec = new TextDecoder();
+    pqInit(); await LfcPack.init(); const g = m.group, out = m.pre || [], dec = new TextDecoder();
     let arrowOut = null; if (g.arrow) { try { arrowOut = await arrowGroupCols(m, g.arrow); } catch (e) { if (e && e.code === 'INT64_RANGE') { self.postMessage({ type: 'pqdone', rid: m.rid, error: String(e.message), exactCol: e.col }); return; } throw e; } }
-    for (let i = 0; i < (g.arrow ? m.cols.length : g.chunks.length); i++) {
+    for (let i = 0; !m.pre && i < (g.arrow ? m.cols.length : g.chunks.length); i++) {
       const ch = g.arrow ? null : g.chunks[i], b = ch ? new Uint8Array(await m.file.slice(ch.start, ch.start + ch.comp).arrayBuffer()) : null, col = m.cols[i];
       let c; try { c = g.arrow ? arrowOut[i] : PQ.decodeChunk(col, ch, b, pqInfl, pqIsExact(m.exact, i, col) ? { exact: true } : undefined); } catch (e) { if (e && e.code === 'INT64_RANGE') { self.postMessage({ type: 'pqdone', rid: m.rid, error: String(e.message), exactCol: i }); return; } throw e; } if (c instanceof Float64Array && (col.kind === 'date' || col.kind === 'timestamp')) c = (!m.chunk && col.kind === 'timestamp' && !col.tz && pqTs(c, col.unit, col.fixed)) || pqDateText(c, col.kind, col.unit, col.fixed, col.tz); out.push(c);
     }
@@ -3689,22 +3699,42 @@ async function parseParquet(file, job, progress, t, write, packer, col, setPlan,
   const plan = cols.map((c, i) => pqIsExact(exact, i, c) ? false : c.kind === 'int' ? true : c.kind === 'decimal' ? (c.scale > 0 ? c.scale : true) : false);
   if (col && cols.some((c) => c.kind === 'double')) col = null;   // doubles have no fixed-decimal form, so the staged path would store them as text (bigger file, slower): take the direct pack path
   setPlan(plan); if (col) { await col.begin(headers); t.cols = true; }
-  const hw = (self.navigator && navigator.hardwareConcurrency) || 4, nw = Math.max(1, Math.min(4, hw - 1, groups.length)), helpers = [], pending = new Map(); let rid = 0;
+  const hw = (self.navigator && navigator.hardwareConcurrency) || 4, nw = Math.max(1, Math.min(4, hw - 1)), helpers = [], pending = new Map(); let rid = 0;
   const ph = [], idle = [], partQ = [], partsIn = new Map();   // pack helpers for row ranges handed over by the decode workers
   const closeAll = () => { helpers.forEach((h) => h.terminate()); ph.forEach((h) => h.terminate()); };
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   try { for (let i = 0; i < nw; i++) helpers.push(mkWorker()); } catch { closeAll(); throw new Error('Parquet files need worker threads, and this page cannot start them.'); }
-  // Pack pool (owner laptop runs: taxi 16 cores k=4 best, SBA 16 cores k=8 best): a decoded group is cut into k row ranges, k = min(floor(workers / row groups), POOL_K_MAX), and no range may hold fewer than POOL_CELLS (about 2M after the SBA laptop run) cells (rows x columns). Constants, not settings.
-  const POOL_K_MAX = 8, POOL_CELLS = 2e6, canPool = !col && hw > 4 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);
+  // Pack pool (owner laptop runs: taxi 16 cores k=4 best, SBA 16 cores k=8 best): a decoded group is cut into k row ranges, k = min(floor(workers / row groups), POOL_K_MAX), and no range may hold fewer than POOL_CELLS (4M, chosen from training data: taxi and the SBA-shaped stand-in; held-out files only confirmed it) cells (rows x columns). The decode worker already cuts and copies the ranges, so the page and importing worker never copy them. Constants, not settings.
+  const POOL_K_MAX = 8, POOL_CELLS = 4e6, canPool = !col && hw > 4 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);
   const kBase = canPool ? Math.min(POOL_K_MAX, Math.floor((hw - 1) / groups.length)) : 1, partsFor = (g) => Math.max(1, Math.min(kBase, Math.floor(((g && g.rows) || 0) * cols.length / POOL_CELLS)));
   const spare = kBase > 1 ? Math.min(hw - 1 - nw, nw * (kBase - 1)) : 0;
   const dispatch = () => { while (partQ.length && (idle.length || ph.length < spare)) { let h = idle.shift(); if (!h) { try { h = mkWorker(); } catch { return; } h.onmessage = (e) => { const d = e.data || {}; if (d.type !== 'pqpartdone') return; if (d.error) failAll(new Error(d.error)); else { (partsIn.get(d.grp) || partsIn.set(d.grp, new Map()).get(d.grp)).set(d.p, d); idle.push(h); dispatch(); } signal(); }; h.onerror = (e) => { failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); signal(); }; ph.push(h); } const q = partQ.shift(), trf = []; for (const nm in q.named) { const c = q.named[nm]; if (c instanceof Float64Array) trf.push(c.buffer); else if (c.kind === 'ts') trf.push(c.values.buffer); else if (c.kind === 'dict') trf.push(c.ids.buffer); else trf.push(c.bytes.buffer, c.start.buffer, c.end.buffer); } h.postMessage({ type: 'pqPackPart', grp: q.grp, p: q.p, rows: q.rows, named: q.named, o: q.o }, trf); } };
   for (const h of helpers) { h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'pqPart') { partQ.push(d); dispatch(); return; } if (d.type === 'pqdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); if (d.error) p.rej(Object.assign(new Error(d.error), { pqExact: d.exactCol })); else p.res(d); } } }; h.onerror = (e) => failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); }
   job.abort = () => { closeAll(); failAll(Object.assign(new Error('Import cancelled.'), { cancelled: true })); };
-  const rpc = (h, msg) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'pqGroup', rid: id }, msg)); });
+  const rpc = (h, msg, trf) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'pqGroup', rid: id }, msg), trf || []); });
+  const rpcCol = (h, msg) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'pqCol', rid: id }, msg)); });
   let rows = 0, sample = [], next = 0, nextW = 0; const done = new Map(), waiters = new Set(); const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } }, wait = () => new Promise((r) => waiters.add(r));
   const WINDOW = nw * 2; let quit = false, bytes = 0;
-  const run = async (h) => { while (!quit && next < groups.length) { if (next >= nextW + WINDOW) { await wait(); continue; } const k = next++; done.set(k, await rpc(h, { file, cols, exact, group: groups[k], grp: k, parts: partsFor(groups[k]), first: k === 0, level: 3, chunk: !!col, dup: !!(col && col.dup) }).catch((err) => ({ error: err }))); signal(); } };
+  // Decode runs per column chunk on any helper, so a one-group file decodes in parallel too; a group whose columns are all decoded is finished (cut, pack) by one helper with the decoded columns handed over (arrow groups decode and finish in one job)
+  const gst = new Map(), colQ = [], finQ = [];
+  const run = async (h) => {
+    while (!quit) {
+      const t = finQ.shift() || colQ.shift();
+      if (!t) {
+        if (next < groups.length && next < nextW + WINDOW) { const k = next++, g = groups[k]; if (g.arrow) finQ.push({ k }); else { gst.set(k, { pre: new Array(g.chunks.length), left: g.chunks.length, err: null }); g.chunks.forEach((_, i) => colQ.push({ k, i })); } signal(); continue; }
+        await wait(); continue;
+      }
+      if (t.i === undefined) {
+        const st = gst.get(t.k); gst.delete(t.k);
+        done.set(t.k, await rpc(h, { file, cols, exact, group: groups[t.k], grp: t.k, parts: partsFor(groups[t.k]), first: t.k === 0, level: 3, chunk: !!col, dup: !!(col && col.dup), pre: st ? st.pre : undefined }, st ? [].concat(...st.pre.map(pqBufs)) : undefined).catch((err) => ({ error: err })));
+      } else {
+        const st = gst.get(t.k);
+        try { st.pre[t.i] = (await rpcCol(h, { file, col: cols[t.i], ch: groups[t.k].chunks[t.i], i: t.i, exact, chunk: !!col })).c; } catch (err) { if (!st.err) st.err = err; }
+        if (--st.left === 0) { if (st.err) { gst.delete(t.k); done.set(t.k, { error: st.err }); } else finQ.push({ k: t.k }); }
+      }
+      signal();
+    }
+  };
   try {
     const loops = helpers.map(run);
     for (let k = 0; k < groups.length; k++) {
