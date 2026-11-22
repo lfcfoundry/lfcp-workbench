@@ -3710,7 +3710,7 @@ async function parseParquet(file, job, progress, t, write, packer, col, setPlan,
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   try { for (let i = 0; i < nw; i++) helpers.push(mkWorker()); } catch { closeAll(); throw new Error('Parquet files need worker threads, and this page cannot start them.'); }
   // Pack pool (owner laptop runs: taxi 16 cores k=4 best, SBA 16 cores k=8 best): a decoded group is cut into k row ranges, k = min(floor(workers / row groups), POOL_K_MAX), and no range may hold fewer than POOL_CELLS (4M, chosen from training data: taxi and the SBA-shaped stand-in; held-out files only confirmed it) cells (rows x columns). The decode worker already cuts and copies the ranges, so the page and importing worker never copy them. Constants, not settings.
-  const POOL_K_MAX = 8, POOL_CELLS = 2e6, canPool = !col && hw > 4 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);
+  const POOL_K_MAX = 8, oneWhole = groups.length === 1 && hw <= 8, POOL_CELLS = oneWhole ? 4e6 : 2e6, canPool = !col && hw > 4 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);
   const kBase = canPool ? Math.min(POOL_K_MAX, Math.floor((hw - 1) / groups.length)) : 1, partsFor = (g) => Math.max(1, Math.min(kBase, Math.floor(((g && g.rows) || 0) * cols.length / POOL_CELLS)));
   const spare = kBase > 1 ? Math.min(hw - 1 - nw, nw * (kBase - 1)) : 0;
   const dispatch = () => { while (partQ.length && (idle.length || ph.length < spare)) { let h = idle.shift(); if (!h) { try { h = mkWorker(); } catch { return; } h.onmessage = (e) => { const d = e.data || {}; if (d.type !== 'pqpartdone') return; if (d.error) failAll(new Error(d.error)); else { (partsIn.get(d.grp) || partsIn.set(d.grp, new Map()).get(d.grp)).set(d.p, d); idle.push(h); dispatch(); } signal(); }; h.onerror = (e) => { failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); signal(); }; ph.push(h); } const q = partQ.shift(), trf = []; for (const nm in q.named) { const c = q.named[nm]; if (c instanceof Float64Array) trf.push(c.buffer); else if (c.kind === 'ts') trf.push(c.values.buffer); else if (c.kind === 'dict') trf.push(c.ids.buffer); else trf.push(c.bytes.buffer, c.start.buffer, c.end.buffer); } h.postMessage({ type: 'pqPackPart', grp: q.grp, p: q.p, rows: q.rows, named: q.named, o: q.o }, trf); } };
@@ -3720,13 +3720,14 @@ async function parseParquet(file, job, progress, t, write, packer, col, setPlan,
   const rpcCol = (h, msg) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'pqCol', rid: id }, msg)); });
   let rows = 0, sample = [], next = 0, nextW = 0; const done = new Map(), waiters = new Set(); const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } }, wait = () => new Promise((r) => waiters.add(r));
   const WINDOW = nw * 2; let quit = false, bytes = 0;
+  // One row group on 8 cores or fewer (phone training run: column chunks +8% over the old whole-group decode in both runs) keeps the old path: one helper decodes and finishes the whole group, ranges floor 4M cells; 2 or more groups, or more than 8 cores, decode per column chunk
   // Decode runs per column chunk on any helper, so a one-group file decodes in parallel too; a group whose columns are all decoded is finished (cut, pack) by one helper with the decoded columns handed over (arrow groups decode and finish in one job)
   const gst = new Map(), colQ = [], finQ = [];
   const run = async (h) => {
     while (!quit) {
       const t = finQ.shift() || colQ.shift();
       if (!t) {
-        if (next < groups.length && next < nextW + WINDOW) { const k = next++, g = groups[k]; if (g.arrow) finQ.push({ k }); else { gst.set(k, { pre: new Array(g.chunks.length), left: g.chunks.length, err: null }); g.chunks.forEach((_, i) => colQ.push({ k, i })); } signal(); continue; }
+        if (next < groups.length && next < nextW + WINDOW) { const k = next++, g = groups[k]; if (g.arrow || oneWhole) finQ.push({ k }); else { gst.set(k, { pre: new Array(g.chunks.length), left: g.chunks.length, err: null }); g.chunks.forEach((_, i) => colQ.push({ k, i })); } signal(); continue; }
         await wait(); continue;
       }
       if (t.i === undefined) {
