@@ -43,7 +43,7 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.2131, a fresh page for every run</span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.2141, a fresh page for every run</span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -51,7 +51,7 @@ label{display:block;margin:4px 0}
 <div class="card"><h2 id="head">Total time start to finish, by race</h2><p class="note">Shorter is better. Grey is DuckDB, blue is Workbench (counted when its table is usable and saved). Each dot is one run.</p>
 <div class="key"><span><i style="background:var(--us)"></i>Workbench (middle run)</span><span><i style="background:var(--rival)"></i>DuckDB</span><span><i style="background:var(--dot);width:10px;border-radius:5px"></i>each run</span></div>
 <div class="panels" id="panels"><p class="note">The charts appear here as runs finish.</p></div></div>
-<details><summary>Options: pick races or use my own files</summary><label><input type="checkbox" id="runh4" checked> H4 Wikimedia pageviews (15.3 million rows)</label><label><input type="checkbox" id="runh6" checked> H6 NASA exoplanets (6,473 rows, 703 columns)</label><p class="note">Wikimedia file: <input type="file" id="fwiki"> &nbsp; Exoplanets file: <input type="file" id="fexo"></p></details>
+<details><summary>Options: pick races or use my own files</summary><label><input type="checkbox" id="runh4" checked> H4 Wikimedia pageviews (15.3 million rows)</label><label><input type="checkbox" id="runh6" checked> H6 NASA exoplanets (6,473 rows, 703 columns)</label><label><input type="checkbox" id="runpq" checked> Parquet import, old against new (two made-up 21 MB files)</label><p class="note">Wikimedia file: <input type="file" id="fwiki"> &nbsp; Exoplanets file: <input type="file" id="fexo"></p></details>
 <details><summary>What is measured</summary><p class="note">Two public Wikimedia pageview hours joined (H4, 15.3 million rows) and the NASA exoplanet table (H6, 6,473 rows by 703 columns), fetched by this page and kept in browser storage. Each run starts from a fresh page. Workbench is timed from import start until its table is usable and saved as a view; its stored copy finishes later and is reported on its own line. DuckDB-WASM (base build, plus a self-built threaded build, labeled estimated performance) imports the file, adds the first-letter column, filters, sorts, summarizes and writes Parquet. Runs alternate, the order swaps each round, and the threaded runs go last because they can stall on some machines. The parse-thread sweep runs Workbench with 2, 4, 6 and 8 reading threads (8 is the most Workbench uses).</p></details>
 <details id="rawd"><summary>Results as text</summary><textarea id="out" readonly rows="14" autocomplete="off"></textarea></details>
 </div></main>
@@ -90,7 +90,7 @@ const panel = () => {
 setInterval(() => { if (ST && ST.running) panel(); }, 500);
 async function wipe() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }); } catch (e) { /* none */ } }
 // ---- test files: downloaded from this site (the public Wikimedia and NASA servers do not allow downloads from other sites), unpacked in the browser, kept in browser storage ----
-async function hosted(name, parts, header, label) {
+async function hosted(name, parts, header, label, plain) {
   const dir = await navigator.storage.getDirectory();
   try { const have = await (await dir.getFileHandle(name)).getFile(); if (have.size > 0) { const mark = await (await dir.getFileHandle(name + '.ok')).getFile(); if (mark.size) return have; } } catch (e) { /* not there yet */ }
   const fh = await dir.getFileHandle(name, { create: true }), w = await fh.createWritable(); let total = 0;
@@ -102,7 +102,7 @@ async function hosted(name, parts, header, label) {
     for (let i = 0; i < parts.length; i++) {
       const r = await fetch(parts[i]); if (!r.ok) throw new Error(parts[i] + ' answered ' + r.status);
       const counted = r.body.pipeThrough(new TransformStream({ transform(c, ctl) { dl.got += c.length; ctl.enqueue(c); } }));
-      await counted.pipeThrough(new DecompressionStream('gzip')).pipeTo(w, { preventClose: i < parts.length - 1 });
+      await (plain ? counted : counted.pipeThrough(new DecompressionStream('gzip'))).pipeTo(w, { preventClose: i < parts.length - 1 });
     }
   } finally { dl.on = false; }
   const ok = await (await dir.getFileHandle(name + '.ok', { create: true })).createWritable(); await ok.write('1'); await ok.close();
@@ -110,6 +110,7 @@ async function hosted(name, parts, header, label) {
 }
 const getWiki = () => hosted('lt-h4-wiki.txt', ['./data/pageviews-20240115-110000.gz', './data/pageviews-20240115-120000.gz'], 'project page views bytes\n', 'H4');
 const getExo = () => hosted('lt-h6-exo.csv', ['./data/exo.csv.gz'], null, 'H6');
+const getPq1 = () => hosted('lt-pq1.parquet', ['./data/standin-1group.parquet'], null, 'Parquet', true), getPq3 = () => hosted('lt-pq3.parquet', ['./data/standin-3groups.parquet'], null, 'Parquet', true);
 // ---- Workbench: the app's own worker, the same messages as the app (import live, open, group, add column, filter, sort, summarize, Save) ----
 async function wbRun(file, c, extra, chart) {
   // "usable first": like the app, the table is used as soon as the worker says it is read ('live'); the stored copy finishes in the background and its time is reported separately
@@ -144,6 +145,17 @@ async function wbRun(file, c, extra, chart) {
 }
 // ---- DuckDB (base = published build; threaded = self-built extension, estimated performance), the SQL of the benchmark harness ----
 let duckMod = null;
+const PQ = { pq1: 'Parquet, one row group (made-up 158,038 rows x 116 columns)', pq3: 'Parquet, three row groups (same data)' };
+async function pqRun(workerUrl, file, ds) {   // whole import to the stored file, the old import code against the new
+  const w = new Worker(workerUrl), t0 = performance.now();
+  try {
+    return await new Promise((res, rej) => {
+      w.onmessage = (e) => { const m = e.data || {}; if (m.type === 'done') res({ total: Math.round(performance.now() - t0), steps: {}, rows: m.rows || 0 }); else if (m.type === 'error' || m.type === 'cancelled') rej(new Error(m.message || m.type)); };
+      w.onerror = (e) => rej(new Error('worker error: ' + (e.message || '?')));
+      w.postMessage({ id: 'j1', type: 'import', file, delimiter: 'auto' });
+    });
+  } finally { try { w.terminate(); } catch (e) { /* gone */ } }
+}
 let duckStage = '';
 async function duckRun(kind, file, c, extra) {
   duckMod ||= await import('./duck/duckdb-browser.mjs'); const duck = duckMod, steps = {}, thr = kind === 'threaded';
@@ -168,7 +180,7 @@ async function duckRun(kind, file, c, extra) {
 const ENG = { workbench: (f, c) => wbRun(f, c, null, true), base: (f, c) => duckRun('base', f, c), threaded: (f, c) => duckRun('threaded', f, c) };
 const LAB = { wb: 'Workbench', base: 'DuckDB base', thr: 'DuckDB threaded (self-built extension, estimated performance)' };
 const sweepNs = (full) => { const cores = navigator.hardwareConcurrency || 4; return [2, 4, 6, 8].filter((x) => x <= Math.max(2, cores)); };
-function buildJobs(full, hasWiki, hasExo) {
+function buildJobs(full, hasWiki, hasExo, hasPq) {
   const J = [], add = (ds, eng, label, w, extra, chart, grp, to) => J.push({ ds, eng, label, w, extra: extra || null, chart: !!chart, grp, to: to || 420 });
   const dsn = (ds) => ds === 'wiki' ? 'H4' : 'H6';
   for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) {
@@ -179,6 +191,7 @@ function buildJobs(full, hasWiki, hasExo) {
       for (const nn of sweepNs(full)) add('wiki', 'wb', 'Parse threads ' + nn, 3, { parseHelpers: nn }, false, 'sweep-' + nn);
     }
   }
+  if (hasPq) for (const ds of ['pq1', 'pq3']) { const n = full ? 3 : 1; for (let i = 0; i < n; i++) for (const e of (i % 2 ? ['pqnew', 'pqold'] : ['pqold', 'pqnew'])) add(ds, e, (ds === 'pq1' ? 'Parquet 1 group, ' : 'Parquet 3 groups, ') + (e === 'pqold' ? 'old import' : 'new import') + ', run ' + (i + 1) + ' of ' + n, 1, null, false, 'race', 150); }
   if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), ds === 'wiki' ? 3 : 1, null, false, 'race', 120);   // last: it is the one that hangs on some machines
   if (threadedOk && hasWiki && (navigator.hardwareConcurrency || 4) > 4) add('wiki', 'thr', 'H4 DuckDB threaded limited to 4 threads', 3, { threads: 4 }, false, 'thr4', 120);   // shows whether the full thread count is what stalls
   return J;
@@ -202,6 +215,8 @@ function report(final) {
   if (on.length || off.length) { L.push('H4 Wikimedia: early chart cost (Workbench total)'); if (on.length && off.length) L.push('  chart on ' + sec(med(on.map((r) => r.total))) + ' (' + on.map((r) => sec(r.total)).join(', ') + '), chart off ' + sec(med(off.map((r) => r.total))) + ' (' + off.map((r) => sec(r.total)).join(', ') + '), difference ' + pct(med(on.map((r) => r.total)), med(off.map((r) => r.total))) + '. Noise on one machine is about 10%.'); else L.push('  not enough finished runs'); L.push(''); }
   const sw = sweepNs(ST.full).map((n) => [n, get('wiki', 'sweep-' + n, 'wb')[0]]).filter((x) => x[1]);
   if (sw.length) { L.push('H4 Wikimedia: Workbench by number of parse helper threads (' + ST.cores + ' cores; one run each; total when usable, import to usable, stored copy at)'); for (const [n, r] of sw) L.push('  ' + n + ' helpers: total ' + sec(r.total) + ' (import ' + sec(r.steps.import) + ', save ' + sec(r.steps.save) + ', stored at ' + sec(r.storedAt) + ')'); L.push(''); }
+  const pqL = []; for (const ds of ['pq1', 'pq3']) { const o = get(ds, 'race', 'pqold'), nw = get(ds, 'race', 'pqnew'); if (o.length && nw.length) pqL.push('  ' + PQ[ds] + ': old ' + sec(med(o.map((r) => r.total))) + ' (' + o.map((r) => sec(r.total)).join(', ') + '), new ' + sec(med(nw.map((r) => r.total))) + ' (' + nw.map((r) => sec(r.total)).join(', ') + '), change ' + pct(med(nw.map((r) => r.total)), med(o.map((r) => r.total)))); }
+  if (pqL.length) { L.push('Parquet import, whole import to the stored file, old code against new (' + ST.cores + ' cores)', ...pqL, ''); }
   const bad = R.filter((r) => r.err); if (bad.length) { L.push('Runs that failed (' + bad.length + '):'); for (const r of bad) L.push('  ' + ST.jobs[r.i].label + ': ' + r.err); L.push(''); }
   L.push('Not measured here: overlap of column unpack and Save with parse (not built yet). The DuckDB Parquet extension install is outside the timing.', '', 'Raw:'); for (const r of R) L.push('  ' + ST.jobs[r.i].label + ' ' + (r.err ? 'FAILED ' + r.err : JSON.stringify({ total: r.r.total, steps: r.r.steps, storedAt: r.r.storedAt, rows: r.r.rows, filterRows: r.r.filterRows })));
   return L.join('\n');
@@ -216,6 +231,16 @@ function draw() {
     const top = Math.max(...rows.map((x) => Math.max(...x[2]))) * 1.18, W = 360, L = 112, Rm = 52, rh = 40, H = rows.length * rh + 30, pw = W - L - Rm, X = (v) => L + v / top * pw;
     let s = '<div><h3>' + (ds === 'wiki' ? 'H4 Wikimedia, 15.3 million rows' : 'H6 exoplanets, 703 columns') + '</h3><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Total time by engine">';
     rows.forEach(([e, n, v], k) => { const so = v.slice().sort((a, b) => a - b), mid = so[so.length >> 1], y = 6 + k * rh, col = e === 'wb' ? 'var(--us)' : 'var(--rival)';
+      s += '<text x="' + (L - 8) + '" y="' + (y + 17) + '" font-size="11.5" fill="var(--fg)" text-anchor="end">' + n + '</text><rect x="' + L + '" y="' + y + '" width="' + (X(mid) - L) + '" height="24" rx="2" fill="' + col + '"/>';
+      v.forEach((q) => { s += '<circle cx="' + X(q) + '" cy="' + (y + 12) + '" r="3" fill="var(--dot)" stroke="var(--bg)" stroke-width="1"/>'; });
+      s += '<text x="' + (W - 2) + '" y="' + (y + 17) + '" font-size="12" font-weight="700" text-anchor="end" fill="var(--fg)">' + fmtS(mid) + '</text>'; });
+    html += s + '<line x1="' + L + '" y1="2" x2="' + L + '" y2="' + (rows.length * rh + 4) + '" stroke="var(--line)"/></svg></div>';
+  }
+  for (const ds of ['pq1', 'pq3']) {
+    const rows = [['pqnew', 'New import'], ['pqold', 'Old import']].map(([e, n]) => [e, n, vals(ds, e)]).filter((x) => x[2].length); if (!rows.length) continue;
+    const top = Math.max(...rows.map((x) => Math.max(...x[2]))) * 1.18, W = 360, L = 112, Rm = 52, rh = 40, H = rows.length * rh + 30, pw = W - L - Rm, X = (v) => L + v / top * pw;
+    let s = '<div><h3>' + PQ[ds] + '</h3><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Parquet import time">';
+    rows.forEach(([e, n, v], k) => { const so = v.slice().sort((a, b) => a - b), mid = so[so.length >> 1], y = 6 + k * rh, col = e === 'pqnew' ? 'var(--us)' : 'var(--rival)';
       s += '<text x="' + (L - 8) + '" y="' + (y + 17) + '" font-size="11.5" fill="var(--fg)" text-anchor="end">' + n + '</text><rect x="' + L + '" y="' + y + '" width="' + (X(mid) - L) + '" height="24" rx="2" fill="' + col + '"/>';
       v.forEach((q) => { s += '<circle cx="' + X(q) + '" cy="' + (y + 12) + '" r="3" fill="var(--dot)" stroke="var(--bg)" stroke-width="1"/>'; });
       s += '<text x="' + (W - 2) + '" y="' + (y + 17) + '" font-size="12" font-weight="700" text-anchor="end" fill="var(--fg)">' + fmtS(mid) + '</text>'; });
@@ -237,13 +262,13 @@ async function copyText(t) {
   $('copied').textContent = ok ? 'Copied ' + t.length + ' characters.' : 'The browser blocked copying. The text box is selected: press Ctrl+C, or use Download.'; if (!ok) { $('out').focus(); $('out').select(); }
 }
 function downloadText(t) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([t], { type: 'text/plain' })); a.download = 'laptop-race-results.txt'; document.body.appendChild(a); a.click(); a.remove(); }
-const FILES = { wiki: () => getWiki(), exo: () => getExo() };
+const FILES = { wiki: () => getWiki(), exo: () => getExo(), pq1: () => getPq1(), pq3: () => getPq3() };
 async function runNext() {
   while (ST.idx < ST.jobs.length && !ST.stopped) {
     const job = ST.jobs[ST.idx]; curLabel = job.label; panel();
     const watchdog = setTimeout(() => { ST.results.push({ i: ST.idx, err: 'stalled for more than ' + job.to + ' s' + (job.eng === 'thr' ? ' (last stage reached: ' + duckStage + ')' : '') + ', the page was reloaded and the test went on' }); ST.idx++; ST.last = job.label + ' FAILED (timeout)'; saveState(); location.reload(); }, (job.to || 420) * 1000);
     let res;
-    try { await wipe(); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
+    try { await wipe(); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = job.eng === 'pqold' || job.eng === 'pqnew' ? await pqRun(job.eng === 'pqold' ? './wb-old/app/worker.js' : './wb/app/worker.js', file, job.ds) : job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
     catch (e) { res = { i: ST.idx, err: String(e && e.message || e).slice(0, 160) }; ST.last = job.label + ' FAILED ' + res.err; }
     clearTimeout(watchdog); ST.results.push(res); ST.idx++; saveState(); showReport(false);
     if (ST.idx < ST.jobs.length && !ST.stopped) { $('panel').textContent = 'Finished ' + job.label + '. Starting a fresh page for the next run...'; await sleep(400); location.reload(); return; }   // a page turn between runs: nothing is kept in memory from the run before
@@ -260,13 +285,14 @@ async function ownFile(file, name) {   // a picked file is copied into browser s
 async function start(fullFlag) {
   busy(true); $('copy').disabled = true; $('save').disabled = true; $('copied').textContent = ''; $('panel').className = ''; $('panel').textContent = 'Starting: checking for the test files...';
   const full = fullFlag || !!Q.get('full'), pw = $('fwiki').files[0], pe = $('fexo').files[0];
-  let hasWiki = $('runh4').checked || !!pw, hasExo = $('runh6').checked || !!pe;
+  let hasWiki = $('runh4').checked || !!pw, hasExo = $('runh6').checked || !!pe; const hasPq = $('runpq').checked;
   try {
     if (pw) { await ownFile(pw, 'lt-h4-wiki.txt'); } else if (hasWiki) await getWiki();
     if (pe) { await ownFile(pe, 'lt-h6-exo.csv'); } else if (hasExo) await getExo();
+    if (hasPq) { await getPq1(); await getPq3(); }
   } catch (e) { $('panel').textContent = 'Could not get the test files: ' + (e && e.message || e) + '. Use the "my own files" box instead.'; $('panel').className = 'bad'; dl.on = false; busy(false); return; }
-  if (!hasWiki && !hasExo) { $('panel').textContent = 'Tick at least one race, or pick a file.'; busy(false); return; }
-  const jobs = buildJobs(full, hasWiki, hasExo);
+  if (!hasWiki && !hasExo && !hasPq) { $('panel').textContent = 'Tick at least one race, or pick a file.'; busy(false); return; }
+  const jobs = buildJobs(full, hasWiki, hasExo, hasPq);
   ST = { running: true, full, jobs, results: [], idx: 0, t0: Date.now(), tRace: Date.now(), wTot: jobs.reduce((a, j) => a + j.w, 0), stopped: false, ua: navigator.userAgent, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory, threaded: threadedOk, ver: document.getElementById('ver').textContent, last: '' };
   saveState(); $('stop').disabled = false; await runNext();
 }
