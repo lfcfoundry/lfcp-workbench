@@ -43,7 +43,7 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.2218, a fresh page for every run</span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.21.2235, a fresh page for every run</span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -257,9 +257,13 @@ function showReport(final) {
 }
 async function copyText(t) {
   let ok = false;
-  try { const ta = $('out'); ta.focus(); ta.select(); ok = document.execCommand('copy'); } catch (e) { /* try the other way */ }   // first, inside the click
-  if (!ok) { try { await navigator.clipboard.writeText(t); ok = true; } catch (e) { /* none */ } }
-  $('copied').textContent = ok ? 'Copied ' + t.length + ' characters.' : 'The browser blocked copying. The text box is selected: press Ctrl+C, or use Download.'; if (!ok) { $('out').focus(); $('out').select(); }
+  try { await navigator.clipboard.writeText(t); ok = true; } catch (e) { /* try the other way */ }   // first call inside the tap
+  if (!ok) {   // the text box sits in a closed section, where selecting does nothing: copy from a temporary visible box instead
+    const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;width:2em;height:2em;opacity:0.01;font-size:16px';
+    document.body.appendChild(ta); ta.focus(); ta.select(); try { ta.setSelectionRange(0, t.length); ok = document.execCommand('copy'); } catch (e) { /* none */ } ta.remove();
+  }
+  $('copied').textContent = ok ? 'Copied ' + t.length + ' characters.' : 'The browser blocked copying. The text is open below and selected: copy it by hand, or use Download.';
+  if (!ok) { $('rawd').open = true; const o = $('out'); o.focus(); o.select(); }
 }
 function downloadText(t) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([t], { type: 'text/plain' })); a.download = 'laptop-race-results.txt'; document.body.appendChild(a); a.click(); a.remove(); }
 const FILES = { wiki: () => getWiki(), exo: () => getExo(), pq1: () => getPq1(), pq3: () => getPq3(), pq4: () => getPq4() };
