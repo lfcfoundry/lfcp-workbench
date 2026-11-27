@@ -43,7 +43,7 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2202, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2239, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -184,13 +184,13 @@ async function wbRun(file, c, extra, chart) {
 // ---- DuckDB (base = published build; threaded = self-built extension, estimated performance), the SQL of the benchmark harness ----
 let duckMod = null;
 const PQ = { pq1: 'Parquet, one row group (made-up 158,038 rows x 116 columns)', pq3: 'Parquet, three row groups (same data)', pq4: 'Parquet, NYC taxi January 2024 (public file, real data)' };
-async function pqRun(workerUrl, file, ds) {   // whole import to the stored file, the old import code against the new
+async function pqRun(workerUrl, file, ds, extra) {   // whole import to the stored file, the old import code against the new
   const w = new Worker(workerUrl), t0 = performance.now();
   try {
     return await new Promise((res, rej) => {
       w.onmessage = (e) => { const m = e.data || {}; if (m.type === 'done') res({ total: Math.round(performance.now() - t0), steps: {}, rows: m.rows || 0 }); else if (m.type === 'error' || m.type === 'cancelled') rej(new Error(m.message || m.type)); };
       w.onerror = (e) => rej(new Error('worker error: ' + (e.message || '?')));
-      w.postMessage({ id: 'j1', type: 'import', file, delimiter: 'auto' });
+      w.postMessage(Object.assign({ id: 'j1', type: 'import', file, delimiter: 'auto' }, extra || {}));
     });
   } finally { try { w.terminate(); } catch (e) { /* gone */ } }
 }
@@ -230,7 +230,7 @@ function buildJobs(full, hasWiki, hasExo, hasPq, pqSets) {
       for (const nn of sweepNs(full)) add('wiki', 'wb', 'Parse threads ' + nn, 3, { parseHelpers: nn }, false, 'sweep-' + nn);
     }
   }
-  if (hasPq) for (const ds of (pqSets || ['pq1', 'pq3', 'pq4'])) { const n = full ? 3 : 1; for (let i = 0; i < n; i++) for (const e of (i % 2 ? ['pqnew', 'pqold'] : ['pqold', 'pqnew'])) add(ds, e, (ds === 'pq1' ? 'Parquet 1 group, ' : ds === 'pq3' ? 'Parquet 3 groups, ' : 'Parquet taxi, ') + (e === 'pqold' ? 'old import' : 'new import') + ', run ' + (i + 1) + ' of ' + n, 1, null, false, 'race', 150); }
+  if (hasPq) for (const ds of (pqSets || ['pq1', 'pq3', 'pq4'])) { const n = full ? 3 : 1; for (let i = 0; i < n; i++) for (const e of (ds === 'pq1' ? [['pqold', 'pqnew', 'pqforce'], ['pqforce', 'pqold', 'pqnew'], ['pqnew', 'pqforce', 'pqold']][i % 3] : (i % 2 ? ['pqnew', 'pqold'] : ['pqold', 'pqnew']))) add(ds, e, (ds === 'pq1' ? 'Parquet 1 group, ' : ds === 'pq3' ? 'Parquet 3 groups, ' : 'Parquet taxi, ') + (e === 'pqold' ? 'old import' : e === 'pqforce' ? 'new import, column chunks forced' : 'new import') + ', run ' + (i + 1) + ' of ' + n, 1, null, false, 'race', 150); }
   if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), ds === 'wiki' ? 3 : 1, null, false, 'race', 120);   // last: it is the one that hangs on some machines
   if (threadedOk && hasWiki && (navigator.hardwareConcurrency || 4) > 4) add('wiki', 'thr', 'H4 DuckDB threaded limited to 4 threads', 3, { threads: 4 }, false, 'thr4', 120);   // shows whether the full thread count is what stalls
   return J;
@@ -256,6 +256,7 @@ function report(final) {
   const sw = sweepNs(ST.full).map((n) => [n, get('wiki', 'sweep-' + n, 'wb')[0]]).filter((x) => x[1]);
   if (sw.length) { L.push('H4 Wikimedia: Workbench by number of parse helper threads (' + ST.cores + ' cores; one run each; total when usable, import to usable, stored copy at)'); for (const [n, r] of sw) L.push('  ' + n + ' helpers: total ' + sec(r.total) + ' (import ' + sec(r.steps.import) + ', save ' + sec(r.steps.save) + ', stored at ' + sec(r.storedAt) + ')'); L.push(''); }
   const pqL = []; for (const ds of ['pq1', 'pq3', 'pq4']) { const o = get(ds, 'race', 'pqold'), nw = get(ds, 'race', 'pqnew'); if (o.length && nw.length) pqL.push('  ' + PQ[ds] + ': old ' + sec(med(o.map((r) => r.total))) + ' (' + o.map((r) => sec(r.total)).join(', ') + '), new ' + sec(med(nw.map((r) => r.total))) + ' (' + nw.map((r) => sec(r.total)).join(', ') + '), change ' + pct(med(nw.map((r) => r.total)), med(o.map((r) => r.total)))); }
+  { const nw = get('pq1', 'race', 'pqnew'), fc = get('pq1', 'race', 'pqforce'); if (nw.length && fc.length) pqL.push('  Parquet, one row group, new import with column chunks forced (measure only): ' + sec(med(fc.map((r) => r.total))) + ' (' + fc.map((r) => sec(r.total)).join(', ') + '), against the guarded new import ' + pct(med(fc.map((r) => r.total)), med(nw.map((r) => r.total)))); }
   if (pqL.length) { L.push('Parquet import, whole import to the stored file, old code against new (' + ST.cores + ' cores)', ...pqL, ''); }
   const bad = R.filter((r) => r.err); if (bad.length) { L.push('Runs that failed (' + bad.length + '):'); for (const r of bad) L.push('  ' + ST.jobs[r.i].label + ': ' + r.err); L.push(''); }
   L.push('Not measured here: overlap of column unpack and Save with parse (not built yet). The DuckDB Parquet extension install is outside the timing.', '', 'Raw:'); for (const r of R) L.push('  ' + ST.jobs[r.i].label + ' ' + (r.err ? 'FAILED ' + r.err : JSON.stringify({ total: r.r.total, steps: r.r.steps, storedAt: r.r.storedAt, rows: r.r.rows, filterRows: r.r.filterRows })));
@@ -312,7 +313,7 @@ async function runNext() {
     const job = ST.jobs[ST.idx]; curLabel = job.label; panel(); ST.cur = ST.idx; ST.stage = ''; saveState();   // marks the run as started: if the page dies mid-run (out of memory), the reload sees the mark and records that run as crashed
     const watchdog = setTimeout(() => { ST.results.push({ i: ST.idx, err: 'stalled for more than ' + job.to + ' s' + (job.eng === 'thr' ? ' (last stage reached: ' + duckStage + ')' : '') + ', the page was reloaded and the test went on' }); ST.idx++; ST.last = job.label + ' FAILED (timeout)'; saveState(); location.reload(); }, (job.to || 420) * 1000);
     let res;
-    try { await wipe(); if (ST.low) await dropData(job.ds); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = job.eng === 'pqold' || job.eng === 'pqnew' ? await pqRun(job.eng === 'pqold' ? './wb-old/app/worker.js' : './wb/app/worker.js', file, job.ds) : job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
+    try { await wipe(); if (ST.low) await dropData(job.ds); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = job.eng === 'pqold' || job.eng === 'pqnew' || job.eng === 'pqforce' ? await pqRun(job.eng === 'pqold' ? './wb-old/app/worker.js' : './wb/app/worker.js', file, job.ds, job.eng === 'pqforce' ? { forceColumns: true } : null) : job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
     catch (e) { res = { i: ST.idx, err: String(e && e.message || e).slice(0, 160) }; ST.last = job.label + ' FAILED ' + res.err; }
     clearTimeout(watchdog); ST.results.push(res); ST.idx++; saveState(); showReport(false);
     if (ST.idx < ST.jobs.length && !ST.stopped) { $('panel').textContent = 'Finished ' + job.label + '. Starting a fresh page for the next run...'; await sleep(400); location.reload(); return; }   // a page turn between runs: nothing is kept in memory from the run before
