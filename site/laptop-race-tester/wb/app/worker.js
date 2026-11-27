@@ -599,7 +599,8 @@ async function segJob(m) {
   try {
     const r = await parseSegment(m);
     if (m.dup) r.chunks2 = r.chunks.map(dupChunk);   // live columns: a second copy made here, in parallel, so the import worker keeps one and forwards the other to the pack workers
-    if (r.chunks && r.chunks.length) { r.chunks = r.chunks.map(slabChunk); if (r.chunks2) r.chunks2 = r.chunks2.map(slabChunk); }
+    // A piece with many small buffers (a wide table: 36,000 per piece) is copied into one slab so it travels as one transfer; a piece with few (a narrow table) travels as it is: the slab copy was 20% of the helpers' time on a 4-column list.
+    if (r.chunks && r.chunks.length) { let nb = 0; for (const c of r.chunks) nb += c.slab ? 1 : chunkBuffers(c).length; if (nb > 1024 || m.slabAll) { r.chunks = r.chunks.map(slabChunk); if (r.chunks2) r.chunks2 = r.chunks2.map(slabChunk); } }
     self.postMessage({ type: 'segdone', rid: m.rid, r }, r.pieces.map((b) => b.buffer).concat(...r.chunks.map(chunkBuffers), ...(r.chunks2 || []).map(chunkBuffers)));
   } catch (err) { self.postMessage({ type: 'segdone', rid: m.rid, r: { error: String(err && err.message || err), mixed: !!(err && err.mixed), col: err && err.col != null ? err.col : -1 } }); }
 }
