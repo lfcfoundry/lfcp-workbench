@@ -246,7 +246,9 @@ function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn, lenien
     }
     const end = Math.min(b.length, lim);
     while (i < end && !F.off) {
-      const r = B.build(b.subarray(i, i + Math.min(end - i, CB)));
+      const w = Math.min(end - i, F.cap || CB), r = B.build(b.subarray(i, i + w));
+      if (!r.bail && r.used === 0 && w < end - i) { F.cap = CB; continue; }   // a row longer than the window: look at a whole chunk
+      F.cap = r.bail ? 16384 : Math.min(CB, (F.cap || CB) * 4);   // after a hand-back the next look is small: copying a whole chunk into the builder cost about 100 us a hand-back (8,000 of them on the real wiki file)
       if (r.n) { const m = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 1024), e = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 1024); for (let c = 0; c < n; c++) { trackers[c].n += m[c]; trackers[c].empty += e[c]; } parser.line += C.nlines(); parser.startLine = parser.line; F.rows += r.n; F.miss = 0; if (r.stray) F.stray = (F.stray || 0) + r.stray; sink(r.arr.slab ? { n: r.n, bytes: r.used, cols: r.arr, slab: r.arr.slab } : { n: r.n, bytes: r.used, cols: r.arr }); }
       i += r.used;
       if (r.bail === 'mixed') { if (++F.miss >= 64) F.off = true; break; }   // the character parser reads this line next and names the column if the cell really is text-like
