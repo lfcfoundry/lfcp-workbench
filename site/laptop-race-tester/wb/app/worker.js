@@ -3027,7 +3027,7 @@ async function groupView(m) {
 // Decodes the wanted columns that are not in memory yet, all in one pass (two parallel calls: number columns as typed arrays, text columns as strings; a dictionary column kept from the import costs
 // one lookup per row and no decode). A column another call is already decoding is waited for, never decoded twice (a Save right after the background warm used to start the same decode again).
 const yieldNow = (() => { const mc = new MessageChannel(), waiting = []; mc.port1.onmessage = () => { const r = waiting.shift(); if (r) r(); }; return () => new Promise((r) => { waiting.push(r); mc.port2.postMessage(0); }); })();   // one queue slot per caller: two callers at once used to overwrite each other and the first never resumed (a Save or sort waiting on a kept column hung)   // a turn for queued messages without the timer delay
-const EARLY_TEXT = true;
+const EARLY_TEXT = /Firefox\//.test((self.navigator && navigator.userAgent) || '');   // CSV-parse thread Step C: the early text decode competes with the writer in Chromium and WebKitGTK (import + first filter + sort -10% and -13% without it on a text-heavy made-up file; real Wikimedia file level) and helps Firefox (12 to 15% worse without it)
 function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
   const fly = (v.inflight ||= new Map()); let done; const p = new Promise((r) => { done = r; }); for (const n of lr.names) fly.set(n, p);
