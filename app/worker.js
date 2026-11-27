@@ -410,6 +410,11 @@ const freeCell = (s) => {
   if (neg) { if (v === 0) return s; v = -v; }
   return v;
 };
+function f64Text(x) {   // a number chunk as text: String of each value (a free-format column's cells are exactly that), empty for NaN
+  const n = x.length, off = new Int32Array(n + 1); let buf = new Uint8Array(n * 8 + 32), at = 0;
+  for (let i = 0; i < n; i++) { const v = x[i]; off[i] = at; if (v === v) { const tx = String(v); if (at + tx.length > buf.length) { const nb = new Uint8Array(buf.length * 2 + tx.length); nb.set(buf.subarray(0, at)); buf = nb; } for (let q = 0; q < tx.length; q++) buf[at++] = tx.charCodeAt(q); } }
+  off[n] = at; return { bytes: buf.slice(0, at), start: off.subarray(0, n), end: off.subarray(1, n + 1) };
+}
 function numFromText(bytes, start, end, n) {
   const out = new Float64Array(n);
   for (let i = 0; i < n; i++) {
@@ -459,6 +464,7 @@ async function packColsJob(m) {
         continue;
       }
       for (const c of ch) { const x = c.cols[k]; if (x.codes) c.cols[k] = expandDict(x, c.n); }   // a mix of dictionary and text chunks: all become text
+      if (ch.some((c) => c.cols[k].bytes)) for (const c of ch) { const x = c.cols[k]; if (!x.bytes) c.cols[k] = f64Text(x); }   // a free-format number column that turned to text in this block: its number chunks become their exact text
       if (ch[0].cols[k].bytes) {
         let tb = 0; for (const c of ch) tb += c.cols[k].bytes.length;
         const bytes = new Uint8Array(tb), start = new Int32Array(rows), end = new Int32Array(rows); let bo = 0, ro = 0;
@@ -2430,7 +2436,15 @@ async function importOnce(m) {
         const numText = (x, d) => { const n = x.length, off = new Int32Array(n + 1); let buf = new Uint8Array(n * 8 + 32), at = 0; for (let i = 0; i < n; i++) { const v = x[i]; off[i] = at; if (v === v) { const tx = d ? formatScaled(v, d) : String(v); if (at + tx.length > buf.length) { const nb = new Uint8Array(buf.length * 2 + tx.length); nb.set(buf.subarray(0, at)); buf = nb; } for (let q = 0; q < tx.length; q++) buf[at++] = tx.charCodeAt(q); } } off[n] = at; return { bytes: buf.slice(0, at), start: off.subarray(0, n), end: off.subarray(1, n + 1) }; };
         const retext = (c) => { for (const [k, d] of demoted) if (ArrayBuffer.isView(c.cols[k])) { const y = numText(c.cols[k], d); y.own = true; c.cols[k] = y; } };
         const demote = async (k) => {
-          if (!liveChunks || !plan || k < 0 || (!t.wide && plan[k] !== 'f') || k >= colHeaders.length || demoted.has(k) || !(plan[k] === true || plan[k] === 'f' || (typeof plan[k] === 'number' && plan[k] > 0))) return false;
+          // A free-format number column that meets a cell like "1.50": it is text from here on, and nothing is packed again. LFC-pack keeps a column's kind per block (packColsJob turns text into
+          // numbers only for a block where every cell reads back exactly), so the blocks packed so far stay numbers, as they would have been written had the column been text all along.
+          if (plan && plan[k] === 'f' && !demoted.has(k) && k >= 0 && k < colHeaders.length) {
+            demoted.set(k, 0); plan[k] = false; if (numPlan) numPlan[k] = true;
+            if (liveChunks) for (const c of liveChunks) retext(c);
+            if (pvKind) { pvKind[k] = false; if (view && view.preview && view.columns[k]) { view.columns[k].type = 'string'; delete view.columns[k].decimals; } }
+            return true;
+          }
+          if (!liveChunks || !plan || k < 0 || !t.wide || k >= colHeaders.length || demoted.has(k) || !(plan[k] === true || plan[k] === 'f' || (typeof plan[k] === 'number' && plan[k] > 0))) return false;
           demoted.set(k, plan[k] === true || plan[k] === 'f' ? 0 : plan[k]); plan[k] = false; if (numPlan && samplePlan.num) numPlan[k] = !!samplePlan.num[k];
           for (const c of liveChunks) retext(c);
           if (pvKind) { pvKind[k] = false; if (view && view.preview && view.columns[k]) { view.columns[k].type = 'string'; delete view.columns[k].decimals; } }
