@@ -204,7 +204,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
   u32 n = ncols; u8 D0 = D;
   for (u32 c = 0; c < n; c++) { cnt_n[c] = 0; cnt_e[c] = 0; }
   while (i < len) {
-    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC], esc[MAXC]; u32 acl[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; esc[0] = 0; int ok = 1, inq = 0, hi8 = 0, sq = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
+    u32 fs[MAXC], fe[MAXC]; u8 fq[MAXC], esc[MAXC]; u32 acl[MAXC]; u32 col = 0, p = i; fs[0] = i; fq[0] = 0; esc[0] = 0; int ok = 1, inq = 0, hi8 = 0, sq = 0, bs = 0, qs = 0; u32 e = len + 1, nl = 0, qend = 0, skipq = 0xffffffffu;
     {
       v128_t vd = wasm_i8x16_splat((int8_t)D0), vnl = wasm_i8x16_splat(10), vq = wasm_i8x16_splat(34), vbs = wasm_i8x16_splat(92), v31 = wasm_i8x16_splat(31), v126 = wasm_i8x16_splat(126);
       int done = 0;
@@ -218,7 +218,8 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
           if (q >= len) { done = 1; break; }
           if (q == skipq) continue;   // the second quote of an empty quoted cell
           u8 c = in[q];
-          if (c == 92) { ok = 0; done = 1; break; }   // backslash stays with the character parser
+          if (c == 92) { bs = 1; continue; }   // the character parser reads a backslash as an ordinary character; a line that also holds a quote mark still goes to it (checked below), because the tidy rules for stray quotes look at backslashes
+          if (c == 34) qs = 1;
           if (c > 126) { hi8 = 1; continue; }   // non-ASCII: the whole line is checked as UTF-8 below (invalid bytes stay with the character parser, which replaces them)
           if (inq) {
             if (c == 34) {   // inside a quoted field: a quote is either an escaped quote ("" -> the line goes to the character parser) or the closing quote
@@ -245,6 +246,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
       }
     }
     if (!ok) { g_bail = 1; break; }
+    if (bs && qs && !g_noq) { g_bail = 1; break; }
     if (e > len) break;
     u32 end = e; if (end > i && in[end-1] == 13) end--;
     if (col != n - 1 || end == i) { g_bail = 1; break; }
