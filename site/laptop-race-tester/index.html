@@ -43,7 +43,7 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2134, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2159, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -53,6 +53,7 @@ label{display:block;margin:4px 0}
 <div class="panels" id="panels"><p class="note">The charts appear here as runs finish.</p></div></div>
 <details><summary>Options: pick races or use my own files</summary><label><input type="checkbox" id="runh4" checked> H4 Wikimedia pageviews (15.3 million rows)</label><label><input type="checkbox" id="runh6" checked> H6 NASA exoplanets (6,473 rows, 703 columns)</label><label><input type="checkbox" id="runpq" checked> Parquet import, old against new (two made-up 21 MB files and the public NYC taxi file, 50 MB)</label><p class="note">Wikimedia file: <input type="file" id="fwiki"> &nbsp; Exoplanets file: <input type="file" id="fexo"></p></details>
 <details><summary>What is measured</summary><p class="note">Two public Wikimedia pageview hours joined (H4, 15.3 million rows) and the NASA exoplanet table (H6, 6,473 rows by 703 columns), fetched by this page and kept in browser storage. Each run starts from a fresh page. Workbench is timed from import start until its table is usable and saved as a view; its stored copy finishes later and is reported on its own line. DuckDB-WASM (base build, plus a self-built threaded build, labeled estimated performance) imports the file, adds the first-letter column, filters, sorts, summarizes and writes Parquet. Runs alternate, the order swaps each round, and the threaded runs go last because they can stall on some machines. The parse-thread sweep runs Workbench with 2, 4, 6 and 8 reading threads (8 is the most Workbench uses).</p></details>
+<details id="chkd"><summary>Browser check (use it if a tab crashes)</summary><div class="card"><p class="note">Runs the browser calls the races use, one at a time, and notes each step before it runs. If the tab dies, reload this page: it says which step it died in. Nothing is sent anywhere.</p><div class="bar"><button id="chk">Browser check<small>about 20 seconds</small></button></div><pre id="chkout" style="white-space:pre-wrap;font:12.5px/1.45 var(--mono);margin:0"></pre></div></details>
 <details id="rawd"><summary>Results as text</summary><textarea id="out" readonly rows="14" autocomplete="off"></textarea></details>
 </div></main>
 <script>window.addEventListener('error', function (e) { var p = document.getElementById('panel'); if (p) { p.textContent = 'Page error: ' + e.message + ' (line ' + e.lineno + '). Please press Copy results or send this line.'; p.className = 'bad'; } });</script>
@@ -74,6 +75,37 @@ const busy = (b) => { $('start').disabled = b; $('startfull').disabled = b; $('s
 const mb = (n) => (n / 1048576).toFixed(0) + ' MB';
 const coresLine = () => { const n = navigator.hardwareConcurrency || 0; return 'This device reports ' + (n || '?') + ' threads (about ' + (n ? Math.max(1, Math.round(n / 2)) : '?') + ' real cores if they are hyperthreads)' + (navigator.deviceMemory ? ' and ' + navigator.deviceMemory + ' GB of memory' : ', memory not reported') + '. Helper counts and the thread sweep follow the reported threads.'; };
 try { $('cores').textContent = coresLine(); } catch (e) { /* none */ }
+// ---- Browser check: each step is noted before it runs, so a dead tab can say where it died ----
+const CHK = 'ltChk';
+const chkSteps = [
+  ['page storage write', async () => { sessionStorage.setItem('ltChkProbe', '1'); sessionStorage.removeItem('ltChkProbe'); return 'ok'; }],
+  ['storage estimate', async () => { const e = await navigator.storage.estimate(); return 'quota ' + mb(e.quota || 0) + ', used ' + mb(e.usage || 0); }],
+  ['storage folder', async () => { await navigator.storage.getDirectory(); return 'ok'; }],
+  ['write 1 MB to storage', async () => { const d = await navigator.storage.getDirectory(), w = await (await d.getFileHandle('lt-chk-1', { create: true })).createWritable(); await w.write(new Uint8Array(1048576)); await w.close(); return 'ok'; }],
+  ['read it back', async () => { const d = await navigator.storage.getDirectory(), f = await (await d.getFileHandle('lt-chk-1')).getFile(); return (await f.arrayBuffer()).byteLength + ' bytes'; }],
+  ['write 32 MB in 16 KB pieces', async () => { const d = await navigator.storage.getDirectory(), w = await (await d.getFileHandle('lt-chk-2', { create: true })).createWritable(), piece = new Uint8Array(16384); for (let i = 0; i < 2048; i++) await w.write(piece); await w.close(); return 'ok'; }],
+  ['fetch the 8 MB test file', async () => { const r = await fetch('./data/exo.csv.gz?chk=' + Date.now(), { cache: 'no-store' }); let n = 0; const rd = r.body.getReader(); for (;;) { const x = await rd.read(); if (x.done) break; n += x.value.length; } return mb(n); }],
+  ['unpack it into storage', async () => { const r = await fetch('./data/exo.csv.gz'), d = await navigator.storage.getDirectory(), w = await (await d.getFileHandle('lt-chk-3', { create: true })).createWritable(); await r.body.pipeThrough(new DecompressionStream('gzip')).pipeTo(w); return 'ok'; }],
+  ['start a worker', async () => { const u = URL.createObjectURL(new Blob(["onmessage=(e)=>postMessage('pong '+e.data)"])), w = new Worker(u); const r = await new Promise((res, rej) => { w.onmessage = (e) => res(e.data); w.onerror = () => rej(new Error('worker error')); w.postMessage('ping'); }); w.terminate(); return r; }],
+  ['worker inside a worker', async () => { const inner = "onmessage=(e)=>postMessage('inner')", src = "const w=new Worker(URL.createObjectURL(new Blob([" + JSON.stringify(inner) + "])));w.onmessage=(e)=>postMessage(e.data);w.postMessage(1)"; const w = new Worker(URL.createObjectURL(new Blob([src]))); const r = await new Promise((res, rej) => { w.onmessage = (e) => res(e.data); w.onerror = () => rej(new Error('nested worker error')); }); w.terminate(); return r; }],
+  ['send a stored file to a worker', async () => { const d = await navigator.storage.getDirectory(), f = await (await d.getFileHandle('lt-chk-3')).getFile(), w = new Worker(URL.createObjectURL(new Blob(["onmessage=(e)=>postMessage(e.data.f.size)"]))); const r = await new Promise((res, rej) => { w.onmessage = (e) => res(e.data); w.onerror = () => rej(new Error('worker error')); w.postMessage({ f }); }); w.terminate(); return mb(r) + ' seen by the worker'; }],
+  ['read a stored file inside a worker', async () => { const d = await navigator.storage.getDirectory(), f = await (await d.getFileHandle('lt-chk-3')).getFile(), w = new Worker(URL.createObjectURL(new Blob(["onmessage=async(e)=>{const b=await e.data.f.slice(0,4194304).arrayBuffer();postMessage(b.byteLength)}"]))); const r = await new Promise((res, rej) => { w.onmessage = (e) => res(e.data); w.onerror = () => rej(new Error('worker error')); w.postMessage({ f }); }); w.terminate(); return mb(r) + ' read'; }],
+];
+const chkNote = () => { try { const o = JSON.parse(sessionStorage.getItem(CHK) || 'null'); if (o && o.step) { $('chkd').open = true; $('chkout').textContent = 'The last browser check did not finish. The tab stopped during: ' + o.step + '.\n\nSteps that finished before it:\n' + (o.done || []).join('\n') + '\n\nPlease paste this text into the chat.'; } } catch (e) { /* none */ } };
+$('chk').onclick = async () => {
+  const done = [], out = $('chkout'); $('chk').disabled = true;
+  out.textContent = 'This device reports ' + (navigator.hardwareConcurrency || '?') + ' threads, memory ' + (navigator.deviceMemory || 'not reported') + '.\n' + navigator.userAgent + '\n';
+  for (const [name, f] of chkSteps) {
+    try { sessionStorage.setItem(CHK, JSON.stringify({ step: name, done })); } catch (e) { /* none */ }
+    const t0 = performance.now(); let line;
+    try { const r = await f(); line = name + ': ' + r + ' (' + Math.round(performance.now() - t0) + ' ms)'; } catch (e) { line = name + ': FAILED ' + (e && e.message || e); }
+    done.push(line); out.textContent += line + '\n';
+  }
+  try { const d = await navigator.storage.getDirectory(); for (const n of ['lt-chk-1', 'lt-chk-2', 'lt-chk-3']) await d.removeEntry(n).catch(() => {}); } catch (e) { /* none */ }
+  try { sessionStorage.removeItem(CHK); } catch (e) { /* none */ }
+  out.textContent += '\nAll steps finished. No crash in this check.'; $('chk').disabled = false;
+};
+chkNote();
 const KEY = 'ltState';
 const saveState = () => { try { sessionStorage.setItem(KEY, JSON.stringify(ST)); } catch (e) { /* none */ } };
 const loadState = () => { try { return JSON.parse(sessionStorage.getItem(KEY) || 'null'); } catch (e) { return null; } };
