@@ -1468,8 +1468,13 @@
   var FAST_DEFAULT = !(typeof globalThis !== 'undefined' && globalThis.__FAST_DEFAULT === 0);   // B72 (owner 11.15): fast is on unless opts.fast === false
   var FAST_ON = false, FLT = 1, FSK = 1;   // FLT: the zstd level of text columns under fast; FSK: skip the dictionary count of nearly-distinct columns
   function manyDistinct(v) { var s = new Set(), i; for (i = 0; i < 1024; i++) s.add(v[i]); return s.size > 900; }
-  function manyDistinctBC(B, S, E, a) { var s = new Set(), i; for (i = 0; i < 1024; i++) s.add(td.decode(B.subarray(S[a + i], E[a + i]))); return s.size > 900; }   // the same test on a byte column: fast skips the dictionary count of a column whose first 1,024 values are nearly all different
-  function manyDistinctDC(dc, a) { var s = new Set(), i, D = dc.labels; for (i = 0; i < 1024; i++) { var c = dc.ids[a + i]; s.add(c >= 0 && c < D.start.length ? td.decode(D.bytes.subarray(D.start[c], D.end[c])) : c); } return s.size > 900; }
+  var MDB_T = null;
+  function manyDistinctBC(B, S, E, a) { var T = MDB_T || (MDB_T = new Int32Array(2048)), nd = 0, i, j, h, x, y, L, q, eq; T.fill(-1);   // distinct byte strings first (no text made); only more than 900 decodes, as before (equal bytes decode equal, so the byte count is never lower)
+    for (i = 0; i < 1024; i++) { x = S[a + i]; L = E[a + i] - x; h = L; for (q = 0; q < L; q++) h = Math.imul(h ^ B[x + q], 16777619); h = (h >>> 21) & 2047;
+      for (;;) { j = T[h]; if (j < 0) { T[h] = i; nd++; break; } y = S[a + j]; if (E[a + j] - y === L) { eq = true; for (q = 0; q < L; q++) if (B[x + q] !== B[y + q]) { eq = false; break; } if (eq) break; } h = (h + 1) & 2047; } }
+    if (nd <= 900) return false;
+    var s = new Set(); for (i = 0; i < 1024; i++) s.add(td.decode(B.subarray(S[a + i], E[a + i]))); return s.size > 900; }   // the same test on a byte column: fast skips the dictionary count of a column whose first 1,024 values are nearly all different
+  function manyDistinctDC(dc, a) { var D0 = dc.labels, NL0 = D0.start.length; if (NL0 <= 900) return false; var seen = new Uint8Array(NL0), nd = 0, i0, c0, oob = 0; for (i0 = 0; i0 < 1024; i0++) { c0 = dc.ids[a + i0]; if (c0 >= 0 && c0 < NL0) { if (!seen[c0]) { seen[c0] = 1; nd++; } } else oob++; } if (nd + oob <= 900) return false; var s = new Set(), i, D = dc.labels; for (i = 0; i < 1024; i++) { var c = dc.ids[a + i]; s.add(c >= 0 && c < D.start.length ? td.decode(D.bytes.subarray(D.start[c], D.end[c])) : c); } return s.size > 900; }
   // B45: hex and IPv4 string columns checked and packed in one pass, no regex, no slices; the same acceptance as RX_HEX (lowercase) and RX_IP with parts under 256, the same bytes
   var HEXN = (function () { var t = new Int8Array(128), c; t.fill(-1); for (c = 48; c < 58; c++) t[c] = c - 48; for (c = 97; c < 103; c++) t[c] = c - 87; return t; })();
   function hexRaw(v, n, L) {
