@@ -758,6 +758,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
 
 // Which columns are stored as numbers: those whose first 2,000 rows (from the first MB) are all plain whole numbers or empty, with at least one number.
 // Decided once from the sample so every piece and helper agrees; a later value that is not a plain whole number stays text in its cell.
+const FREE_MAX_COLS = 64;   // wide tables (H6 exoplanets, 703 columns: +30% to done when many columns restart as text one after another) keep text for free-format numbers
 const FREE_OFF = typeof location !== 'undefined' && /[?&]nofree=1/.test(String(location.search || ''));
 async function samplePlan(file, delimiter) {
   samplePlan.dict = null; samplePlan.num = null; samplePlan.headRows = 0; samplePlan.seed = null; samplePlan.plainTidy = false;
@@ -803,7 +804,7 @@ async function samplePlan(file, delimiter) {
     // low-variety text columns (at most 5% of the sample's rows distinct, and 200+ sample rows) are built as dictionary columns: a code per row and the distinct values
     const nr = rows.length - 1; samplePlan.dict = nr >= 200 ? tr.map((x, c) => { if (plan[c] || x.type === 'empty') return false; const seen = new Set(); for (let r = 1; r < rows.length; r++) { seen.add(rows[r][c]); if (seen.size > nr * 0.05) return false; } return true; }) : null;
     samplePlan.num = tr.map((x, c) => x.type === 'number' && x.n > x.empty && !plan[c] && !(samplePlan.dict && samplePlan.dict[c]));
-    if (!FREE_OFF) for (let c = 0; c < cols; c++) if (samplePlan.num[c] && allRows.length > 1 && allRows.every((r, i) => i === 0 || typeof freeCell(r[c]) !== 'string')) plan[c] = 'f';   // free-format numbers: built as numbers in the staged columns (their text is String of the value)
+    if (!FREE_OFF && cols <= FREE_MAX_COLS) for (let c = 0; c < cols; c++) if (samplePlan.num[c] && allRows.length > 1 && allRows.every((r, i) => i === 0 || typeof freeCell(r[c]) !== 'string')) plan[c] = 'f';   // free-format numbers: built as numbers in the staged columns (their text is String of the value)
     return plan.some(Boolean) ? plan : null;
   } catch { return null; }
 }
