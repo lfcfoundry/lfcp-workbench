@@ -148,6 +148,33 @@ static int is_num(const u8* b, u32 l){   // -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)
   return p == f;
 }
 typedef double f64;
+
+static inline void cpy(u8* d, const u8* s, u32 l){   // small copies without a byte loop: overlapping wide loads and stores, never past the end
+  if (l >= 16) { u32 k = 0; for (; k + 16 <= l; k += 16) wasm_v128_store(d + k, wasm_v128_load(s + k)); if (k < l) wasm_v128_store(d + l - 16, wasm_v128_load(s + l - 16)); }
+  else if (l >= 8) { u64 a, b; __builtin_memcpy(&a, s, 8); __builtin_memcpy(&b, s + l - 8, 8); __builtin_memcpy(d, &a, 8); __builtin_memcpy(d + l - 8, &b, 8); }
+  else if (l >= 4) { u32 a, b; __builtin_memcpy(&a, s, 4); __builtin_memcpy(&b, s + l - 4, 4); __builtin_memcpy(d, &a, 4); __builtin_memcpy(d + l - 4, &b, 4); }
+  else for (u32 q = 0; q < l; q++) d[q] = s[q];
+}
+static u8 fastc[MAXC];
+// One pass for a planned number cell: checks exactly what is_int / is_num, plain_int and plain_dec check together and returns the value the conversion would write. 0 = use the separate passes.
+static inline int fast_plan(const u8* b, u32 l, u32 pl, u32 f, double* out){
+  u32 neg = b[0] == 45; if (l <= neg) return 0;
+  if (pl == 1) {
+    u8 c0 = b[neg]; if (c0 == 48) { if (l != 1) return 0; *out = 0; return 1; }
+    if (c0 < 49 || c0 > 57) return 0; if (l - neg > 15) return 0;
+    u64 m = (u64)(c0 - 48); for (u32 p = neg + 1; p < l; p++) { u32 d = (u32)b[p] - 48; if (d > 9) return 0; m = m * 10 + d; }
+    double v = (double)m; *out = neg ? -v : v; return 1;
+  }
+  if (f != 2) return 0; u32 d = pl - 16; if (d < 1) return 0;
+  if (l < neg + d + 2) return 0; u32 dot = l - d - 1;
+  if (dot <= neg || b[dot] != 46) return 0;
+  if (b[neg] == 48 && dot - neg > 1) return 0;
+  if (l - neg - 1 > 15) return 0;
+  u64 m = 0; u32 nz = 0;
+  for (u32 p = neg; p < l; p++) { if (p == dot) continue; u32 dg = (u32)b[p] - 48; if (dg > 9) return 0; m = m * 10 + dg; nz |= dg; }
+  if (neg && !nz) return 0;
+  double v = (double)m; *out = neg ? -v : v; return 1;
+}
 static int is_bool(const u8* b, u32 l){
   if (l == 4) return (b[0]|32)=='t' && (b[1]|32)=='r' && (b[2]|32)=='u' && (b[3]|32)=='e';
   if (l == 5) return (b[0]|32)=='f' && (b[1]|32)=='a' && (b[2]|32)=='l' && (b[3]|32)=='s' && (b[4]|32)=='e';
@@ -157,6 +184,8 @@ static int is_bool(const u8* b, u32 l){
 static int utf8_ok(const u8* p, u32 l){
   u32 i = 0;
   while (i < l) {
+    while (i + 16 <= l && !wasm_v128_any_true(wasm_i8x16_lt(wasm_v128_load(p + i), wasm_i8x16_splat(0)))) i += 16;
+    if (i >= l) break;
     u8 c = p[i];
     if (c < 0x80) { i++; continue; }
     u32 n; u32 minv; u32 cp;
@@ -181,7 +210,8 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
       int done = 0;
       for (; p < len && !done; p += 16) {
         v128_t v = wasm_v128_load(in + p);
-        v128_t hit = wasm_v128_or(wasm_v128_or(wasm_i8x16_eq(v, vd), wasm_i8x16_eq(v, vq)), wasm_v128_or(wasm_i8x16_eq(v, vbs), wasm_v128_or(wasm_u8x16_le(v, v31), wasm_u8x16_gt(v, v126))));
+        v128_t hit = wasm_v128_or(wasm_v128_or(wasm_i8x16_eq(v, vd), wasm_i8x16_eq(v, vq)), wasm_v128_or(wasm_i8x16_eq(v, vbs), wasm_u8x16_le(v, v31)));
+        if (wasm_v128_any_true(wasm_u8x16_gt(v, v126))) hi8 = 1;   // a block with a byte above 126 (the line is checked as UTF-8 below; a block that reaches into the next line only triggers a check that passes)
         u32 m = (u32)wasm_i8x16_bitmask(hit);
         while (m) {
           u32 q = p + (u32)__builtin_ctz(m); m &= m - 1;
@@ -226,10 +256,13 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
     if (nrows >= cap) break;
     if (g_tcap) { int full = 0; for (u32 c = 0; c < n; c++) if (!isplan[c] && !dmode[c] && !dtmode[c] && tlen[c] + (fe[c] - fs[c]) > g_tcap) { full = 1; break; } if (full) { if (nrows == 0) g_bail = 1; break; } }   // no room in a text area: the chunk ends here (a single row that cannot fit goes to JavaScript)
     // check every cell against the type flags before writing anything for the row
+    double dnum[MAXC];
+    for (u32 c = 0; c < n; c++) fastc[c] = 0;
     for (u32 c = 0; c < n; c++) {
       u32 s0 = fs[c], l = fe[c] - s0; if (l == 0) continue;
       u8 f = flags[c]; if (!f) continue;
       const u8* v = in + s0; u8 nf = 0;
+      if (isplan[c] && !(f & ~3) && l <= 20) { double fv; if (fast_plan(v, l, isplan[c], f, &fv)) { dnum[c] = fv; fastc[c] = 1; continue; } }
       int ii = 0, isn = 0;
       if (f & 3) { ii = is_int(v, l); if (f & 1) { if (ii) nf |= 1; } if (f & 2) { isn = ii ? 1 : is_num(v, l); if (isn) nf |= 2; } }
       if ((f & 4) && is_bool(v, l)) nf |= 4;
@@ -239,19 +272,21 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
     // the number cells must read back as numbers (a text-like cell in a number column cannot live in a Float64 column)
     for (u32 c = 0; c < n; c++) {
       u8 pl = isplan[c]; if (!pl) continue;
-      u32 s0 = fs[c], l = fe[c] - s0; if (l == 0) continue;
+      u32 s0 = fs[c], l = fe[c] - s0; if (l == 0 || fastc[c]) continue;
       if (pl == 1 ? !plain_int(in + s0, l) : !plain_dec(in + s0, l, pl - 16)) { g_bail = 2; goto stop; }
     }
-    double dnum[MAXC];
     for (u32 c = 0; c < n; c++) if (dtmode[c] && !isplan[c]) { if (!iso_ms(in + fs[c], fe[c] - fs[c], &dnum[c])) { g_bail = 5; g_bailcol = c; goto stop; } }
     u32 dcode[MAXC];
     for (u32 c = 0; c < n; c++) if (dmode[c] && !isplan[c]) { if (!dict_code(c, in + fs[c], fe[c] - fs[c], &dcode[c])) { g_bail = 4; g_bailcol = c; goto stop; } }
     for (u32 c = 0; c < n; c++) {
       u32 s0 = fs[c], f0 = fe[c], l = f0 - s0; cnt_n[c]++; if (l == 0) cnt_e[c]++;
       u8 pl = isplan[c];
+      if (fastc[c]) { ((f64*)colA[c])[nrows] = dnum[c]; continue; }
       if (!pl && dtmode[c]) { ((double*)colA[c])[nrows] = dnum[c]; continue; }
       if (!pl && dmode[c]) { ((unsigned short*)colA[c])[nrows] = (unsigned short)dcode[c]; continue; }
-      if (!pl) { u32 t = tlen[c]; u8* tb = colT[c]; for (u32 q = 0; q < l; q++) tb[t + q] = in[s0 + q]; ((u32*)colA[c])[nrows] = t; t += l; ((u32*)colB[c])[nrows] = t; tlen[c] = t; continue; }
+      if (!pl) { u32 t = tlen[c]; u8* tb = colT[c]; 
+ cpy(tb + t, in + s0, l);
+ ((u32*)colA[c])[nrows] = t; t += l; ((u32*)colB[c])[nrows] = t; tlen[c] = t; continue; }
       f64 v;
       if (l == 0) v = __builtin_nan("");
       else {
