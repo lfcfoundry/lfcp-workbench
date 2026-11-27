@@ -43,7 +43,7 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2159, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2202, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -145,6 +145,10 @@ async function hosted(name, parts, header, label, plain) {
 const getWiki = () => hosted('lt-h4-wiki.txt', ['./data/pageviews-20240115-110000.gz', './data/pageviews-20240115-120000.gz'], 'project page views bytes\n', 'H4');
 const getExo = () => hosted('lt-h6-exo.csv', ['./data/exo.csv.gz'], null, 'H6');
 const getPq1 = () => hosted('lt-pq1.parquet', ['./data/standin-1group.parquet'], null, 'Parquet', true), getPq3 = () => hosted('lt-pq3.parquet', ['./data/standin-3groups.parquet'], null, 'Parquet', true), getPq4 = () => hosted('lt-pq4.parquet', ['./data/yellow_tripdata_2024-01.parquet'], null, 'Parquet', true);
+const NEED = { wiki: 850, exo: 100, pq1: 100, pq3: 100, pq4: 180 };   // MB of browser storage one race needs: its test file unpacked plus Workbench's stored copy
+const dataOf = { wiki: 'lt-h4-wiki.txt', exo: 'lt-h6-exo.csv', pq1: 'lt-pq1.parquet', pq3: 'lt-pq3.parquet', pq4: 'lt-pq4.parquet' };
+async function dropData(keep) { try { const d = await navigator.storage.getDirectory(); for (const k in dataOf) { if (k === keep) continue; await d.removeEntry(dataOf[k]).catch(() => {}); await d.removeEntry(dataOf[k] + '.ok').catch(() => {}); } } catch (e) { /* none */ } }   // a small-storage browser keeps one test file at a time
+async function storageQuotaMB() { try { const e = await navigator.storage.estimate(); return Math.round((e.quota || 0) / 1048576); } catch (e) { return 0; } }
 // ---- Workbench: the app's own worker, the same messages as the app (import live, open, group, add column, filter, sort, summarize, Save) ----
 async function wbRun(file, c, extra, chart) {
   // "usable first": like the app, the table is used as soon as the worker says it is read ('live'); the stored copy finishes in the background and its time is reported separately
@@ -215,7 +219,7 @@ async function duckRun(kind, file, c, extra) {
 const ENG = { workbench: (f, c) => wbRun(f, c, null, true), base: (f, c) => duckRun('base', f, c), threaded: (f, c) => duckRun('threaded', f, c) };
 const LAB = { wb: 'Workbench', base: 'DuckDB base', thr: 'DuckDB threaded (self-built extension, estimated performance)' };
 const sweepNs = (full) => { const cores = navigator.hardwareConcurrency || 4; return [2, 4, 6, 8].filter((x) => x <= Math.max(2, cores)); };
-function buildJobs(full, hasWiki, hasExo, hasPq) {
+function buildJobs(full, hasWiki, hasExo, hasPq, pqSets) {
   const J = [], add = (ds, eng, label, w, extra, chart, grp, to) => J.push({ ds, eng, label, w, extra: extra || null, chart: !!chart, grp, to: to || 420 });
   const dsn = (ds) => ds === 'wiki' ? 'H4' : 'H6';
   for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) {
@@ -226,13 +230,14 @@ function buildJobs(full, hasWiki, hasExo, hasPq) {
       for (const nn of sweepNs(full)) add('wiki', 'wb', 'Parse threads ' + nn, 3, { parseHelpers: nn }, false, 'sweep-' + nn);
     }
   }
-  if (hasPq) for (const ds of ['pq1', 'pq3', 'pq4']) { const n = full ? 3 : 1; for (let i = 0; i < n; i++) for (const e of (i % 2 ? ['pqnew', 'pqold'] : ['pqold', 'pqnew'])) add(ds, e, (ds === 'pq1' ? 'Parquet 1 group, ' : ds === 'pq3' ? 'Parquet 3 groups, ' : 'Parquet taxi, ') + (e === 'pqold' ? 'old import' : 'new import') + ', run ' + (i + 1) + ' of ' + n, 1, null, false, 'race', 150); }
+  if (hasPq) for (const ds of (pqSets || ['pq1', 'pq3', 'pq4'])) { const n = full ? 3 : 1; for (let i = 0; i < n; i++) for (const e of (i % 2 ? ['pqnew', 'pqold'] : ['pqold', 'pqnew'])) add(ds, e, (ds === 'pq1' ? 'Parquet 1 group, ' : ds === 'pq3' ? 'Parquet 3 groups, ' : 'Parquet taxi, ') + (e === 'pqold' ? 'old import' : 'new import') + ', run ' + (i + 1) + ' of ' + n, 1, null, false, 'race', 150); }
   if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), ds === 'wiki' ? 3 : 1, null, false, 'race', 120);   // last: it is the one that hangs on some machines
   if (threadedOk && hasWiki && (navigator.hardwareConcurrency || 4) > 4) add('wiki', 'thr', 'H4 DuckDB threaded limited to 4 threads', 3, { threads: 4 }, false, 'thr4', 120);   // shows whether the full thread count is what stalls
   return J;
 }
 function report(final) {
   const L = [], R = ST.results, get = (ds, grp, eng) => R.filter((r) => ST.jobs[r.i].ds === ds && ST.jobs[r.i].grp === grp && ST.jobs[r.i].eng === eng && !r.err).map((r) => r.r);
+  if (ST.low) L.push('Storage this browser allows: ' + ST.qmb + ' MB (small), so test files were fetched one at a time. Skipped because they need more: ' + ((ST.skipped || []).join(', ') || 'nothing') + '.', '');
   L.push(coresLine(), '', (final ? '' : 'PARTIAL RESULTS (' + R.length + ' of ' + ST.jobs.length + ' runs finished)\n') + 'Laptop race tester ' + (ST.ver || '') + ', ' + new Date(ST.t0).toString(), 'Browser: ' + ST.ua, 'Cores: ' + ST.cores + '   deviceMemory: ' + (ST.mem || 'n/a') + '   threaded DuckDB ' + (ST.threaded ? 'available' : 'NOT available (page not cross-origin isolated)') + '   plan: ' + (ST.full ? 'full' : 'quick') + '   every run in a fresh page', '');
   const wbN = ['import', 'open', 'summarize_first', 'add_column', 'filter', 'sort', 'summarize', 'save'], dkN = ['start', 'import', 'add_column', 'filter', 'sort', 'summarize', 'save_parquet'];
   const stepLine = (a, names) => names.filter((n) => a.some((r) => r.steps[n] !== undefined)).map((n) => n + ' ' + sec(med(a.filter((r) => r.steps[n] !== undefined).map((r) => r.steps[n])))).join(', ');
@@ -307,7 +312,7 @@ async function runNext() {
     const job = ST.jobs[ST.idx]; curLabel = job.label; panel(); ST.cur = ST.idx; ST.stage = ''; saveState();   // marks the run as started: if the page dies mid-run (out of memory), the reload sees the mark and records that run as crashed
     const watchdog = setTimeout(() => { ST.results.push({ i: ST.idx, err: 'stalled for more than ' + job.to + ' s' + (job.eng === 'thr' ? ' (last stage reached: ' + duckStage + ')' : '') + ', the page was reloaded and the test went on' }); ST.idx++; ST.last = job.label + ' FAILED (timeout)'; saveState(); location.reload(); }, (job.to || 420) * 1000);
     let res;
-    try { await wipe(); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = job.eng === 'pqold' || job.eng === 'pqnew' ? await pqRun(job.eng === 'pqold' ? './wb-old/app/worker.js' : './wb/app/worker.js', file, job.ds) : job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
+    try { await wipe(); if (ST.low) await dropData(job.ds); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = job.eng === 'pqold' || job.eng === 'pqnew' ? await pqRun(job.eng === 'pqold' ? './wb-old/app/worker.js' : './wb/app/worker.js', file, job.ds) : job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
     catch (e) { res = { i: ST.idx, err: String(e && e.message || e).slice(0, 160) }; ST.last = job.label + ' FAILED ' + res.err; }
     clearTimeout(watchdog); ST.results.push(res); ST.idx++; saveState(); showReport(false);
     if (ST.idx < ST.jobs.length && !ST.stopped) { $('panel').textContent = 'Finished ' + job.label + '. Starting a fresh page for the next run...'; await sleep(400); location.reload(); return; }   // a page turn between runs: nothing is kept in memory from the run before
@@ -325,14 +330,26 @@ async function start(fullFlag, pqOnly) {
   busy(true); $('copy').disabled = true; $('save').disabled = true; $('copied').textContent = ''; $('panel').className = ''; $('panel').textContent = 'Starting: checking for the test files...';
   const full = fullFlag || !!pqOnly || !!Q.get('full'), pw = $('fwiki').files[0], pe = $('fexo').files[0];
   let hasWiki = !pqOnly && ($('runh4').checked || !!pw), hasExo = !pqOnly && ($('runh6').checked || !!pe); const hasPq = pqOnly || $('runpq').checked;
+  const qmb = await storageQuotaMB(), low = qmb > 0 && qmb < 2048, skipped = []; let pqSets = ['pq1', 'pq3', 'pq4'];
+  if (low) {   // this browser allows little storage (a nearly full disk): fetch one test file at a time and skip the races that cannot fit
+    const fit = (k) => NEED[k] <= qmb * 0.9;
+    if (hasWiki && !fit('wiki')) { hasWiki = false; skipped.push('H4 Wikimedia (needs about ' + NEED.wiki + ' MB)'); }
+    if (hasExo && !fit('exo')) { hasExo = false; skipped.push('H6 exoplanets (needs about ' + NEED.exo + ' MB)'); }
+    if (hasPq) { const out = pqSets.filter((k) => !fit(k)); out.forEach((k) => skipped.push('Parquet ' + k + ' (needs about ' + NEED[k] + ' MB)')); pqSets = pqSets.filter(fit); }
+    $('panel').textContent = 'This browser allows only ' + qmb + ' MB of storage here, so the test files are fetched one at a time.' + (skipped.length ? ' Skipped: ' + skipped.join(', ') + '.' : '');
+  }
+  const hasPq2 = hasPq && pqSets.length > 0;
   try {
+    if (low) { /* files are fetched when their race starts */ }
+    else {
     if (pw) { await ownFile(pw, 'lt-h4-wiki.txt'); } else if (hasWiki) await getWiki();
     if (pe) { await ownFile(pe, 'lt-h6-exo.csv'); } else if (hasExo) await getExo();
     if (hasPq) { await getPq1(); await getPq3(); await getPq4(); }
+    }
   } catch (e) { $('panel').textContent = 'Could not get the test files: ' + (e && e.message || e) + '. Use the "my own files" box instead.'; $('panel').className = 'bad'; dl.on = false; busy(false); return; }
-  if (!hasWiki && !hasExo && !hasPq) { $('panel').textContent = 'Tick at least one race, or pick a file.'; busy(false); return; }
-  const jobs = buildJobs(full, hasWiki, hasExo, hasPq);
-  ST = { running: true, full, jobs, results: [], idx: 0, t0: Date.now(), tRace: Date.now(), wTot: jobs.reduce((a, j) => a + j.w, 0), stopped: false, ua: navigator.userAgent, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory, threaded: threadedOk, ver: document.getElementById('ver').textContent, last: '' };
+  if (!hasWiki && !hasExo && !hasPq2) { $('panel').textContent = 'Tick at least one race, or pick a file.'; busy(false); return; }
+  const jobs = buildJobs(full, hasWiki, hasExo, hasPq2, pqSets);
+  ST = { running: true, full, jobs, results: [], idx: 0, t0: Date.now(), tRace: Date.now(), wTot: jobs.reduce((a, j) => a + j.w, 0), stopped: false, ua: navigator.userAgent, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory, threaded: threadedOk, ver: document.getElementById('ver').textContent, last: '', low, qmb, skipped };
   saveState(); $('stop').disabled = false; await runNext();
 }
 $('start').onclick = () => start(false); $('startfull').onclick = () => start(true); $('startpq').onclick = () => start(false, true);
