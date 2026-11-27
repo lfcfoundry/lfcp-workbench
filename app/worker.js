@@ -2395,7 +2395,7 @@ async function importOnce(m) {
     if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null, m.parseHelpers);
     if (res && col && col.release) col.release();   // chunks held back after a column turned to text: pack them now
     if (!res && !m.ndjson && !m.parquet) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
-        if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer, col, (p) => { plan = p; }, m.exact, m.forceColumns); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
+        if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer, col, (p) => { plan = p; }, m.exact, m.forceColumns, m.forcePool); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
         let chain = Promise.resolve();
         job.abort = () => reject(Object.assign(new Error('Import cancelled.'), { cancelled: true }));
@@ -3695,7 +3695,7 @@ async function pqPartJob(m) {   // pack helper: pack one row range that a decode
   try { pqInit(); await LfcPack.init(); const r = await LfcPack.packBlock(m.named, m.o); self.postMessage({ type: 'pqpartdone', grp: m.grp, p: m.p, rows: m.rows, r }, [r.buffer]); }
   catch (err) { self.postMessage({ type: 'pqpartdone', grp: m.grp, p: m.p, error: String(err && err.message || err) }); }
 }
-async function parseParquet(file, job, progress, t, write, packer, col, setPlan, exact, forceColumns) {
+async function parseParquet(file, job, progress, t, write, packer, col, setPlan, exact, forceColumns, forcePool) {
   const t0 = performance.now(); let tailN = Math.min(file.size, 1048576), tail = new Uint8Array(await file.slice(file.size - tailN).arrayBuffer());
   const fl = new DataView(tail.buffer, tail.byteLength - 8, 4).getUint32(0, true); if (fl + 8 > tailN && fl + 8 <= file.size) tail = new Uint8Array(await file.slice(file.size - fl - 8).arrayBuffer());
   const AP = arrowPlans.get(file), ft = AP ? { cols: AP.cols, groups: AP.groups } : PQ.readFooter(tail), cols = ft.cols, groups = ft.groups;
@@ -3705,13 +3705,13 @@ async function parseParquet(file, job, progress, t, write, packer, col, setPlan,
   const plan = cols.map((c, i) => pqIsExact(exact, i, c) ? false : c.kind === 'int' ? true : c.kind === 'decimal' ? (c.scale > 0 ? c.scale : true) : false);
   if (col && cols.some((c) => c.kind === 'double')) col = null;   // doubles have no fixed-decimal form, so the staged path would store them as text (bigger file, slower): take the direct pack path
   setPlan(plan); if (col) { await col.begin(headers); t.cols = true; }
-  const hw = (self.navigator && navigator.hardwareConcurrency) || 4, nw = Math.max(1, Math.min(4, hw - 1)), helpers = [], pending = new Map(); let rid = 0;
+  const hw = (self.navigator && navigator.hardwareConcurrency) || 4, oneWhole = groups.length === 1 && hw <= 8 && !forceColumns, nw = Math.max(1, Math.min(4, hw - 1, oneWhole ? 1 : 4)), helpers = [], pending = new Map(); let rid = 0;
   const ph = [], idle = [], partQ = [], partsIn = new Map();   // pack helpers for row ranges handed over by the decode workers
   const closeAll = () => { helpers.forEach((h) => h.terminate()); ph.forEach((h) => h.terminate()); };
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   try { for (let i = 0; i < nw; i++) helpers.push(mkWorker()); } catch { closeAll(); throw new Error('Parquet files need worker threads, and this page cannot start them.'); }
   // Pack pool (owner laptop runs: taxi 16 cores k=4 best, SBA 16 cores k=8 best): a decoded group is cut into k row ranges, k = min(floor(workers / row groups), POOL_K_MAX), and no range may hold fewer than POOL_CELLS (4M, chosen from training data: taxi and the SBA-shaped stand-in; held-out files only confirmed it) cells (rows x columns). The decode worker already cuts and copies the ranges, so the page and importing worker never copy them. Constants, not settings.
-  const POOL_K_MAX = 8, oneWhole = groups.length === 1 && hw <= 8 && !forceColumns, POOL_CELLS = oneWhole ? 4e6 : 2e6, canPool = !col && hw > 4 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8) && (hw > 8 || !!(self.navigator && navigator.deviceMemory));   // memory not reported (Firefox, Safari) with 8 or fewer threads: no pack pool (Firefox 4 cores: tab peak 2.1 GB without it, 3.0 GB with it; a 4-core, 8-thread desktop tab crashed at the start of a Parquet import)
+  const POOL_K_MAX = 8, POOL_CELLS = 2e6, canPool = !col && hw > 4 && (!!forcePool || (!(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8) && (hw > 8 || !!(self.navigator && navigator.deviceMemory))));   // memory not reported (Firefox, Safari) with 8 or fewer threads: no pack pool (Firefox 4 cores: tab peak 2.1 GB without it, 3.0 GB with it; a 4-core, 8-thread desktop tab crashed at the start of a Parquet import)
   const kBase = canPool ? Math.min(POOL_K_MAX, Math.floor((hw - 1) / groups.length)) : 1, partsFor = (g) => Math.max(1, Math.min(kBase, Math.floor(((g && g.rows) || 0) * cols.length / POOL_CELLS)));
   const spare = kBase > 1 ? Math.min(hw - 1 - nw, nw * (kBase - 1)) : 0;
   const dispatch = () => { while (partQ.length && (idle.length || ph.length < spare)) { let h = idle.shift(); if (!h) { try { h = mkWorker(); } catch { return; } h.onmessage = (e) => { const d = e.data || {}; if (d.type !== 'pqpartdone') return; if (d.error) failAll(new Error(d.error)); else { (partsIn.get(d.grp) || partsIn.set(d.grp, new Map()).get(d.grp)).set(d.p, d); idle.push(h); dispatch(); } signal(); }; h.onerror = (e) => { failAll(new Error('A Parquet helper failed: ' + (e && e.message || 'unknown error'))); signal(); }; ph.push(h); } const q = partQ.shift(), trf = []; for (const nm in q.named) { const c = q.named[nm]; if (c instanceof Float64Array) trf.push(c.buffer); else if (c.kind === 'ts') trf.push(c.values.buffer); else if (c.kind === 'dict') trf.push(c.ids.buffer); else trf.push(c.bytes.buffer, c.start.buffer, c.end.buffer); } h.postMessage({ type: 'pqPackPart', grp: q.grp, p: q.p, rows: q.rows, named: q.named, o: q.o }, trf); } };
@@ -3721,7 +3721,7 @@ async function parseParquet(file, job, progress, t, write, packer, col, setPlan,
   const rpcCol = (h, msg) => new Promise((res, rej) => { const id = ++rid; pending.set(id, { res, rej }); h.postMessage(Object.assign({ type: 'pqCol', rid: id }, msg)); });
   let rows = 0, sample = [], next = 0, nextW = 0; const done = new Map(), waiters = new Set(); const signal = () => { for (const w of [...waiters]) { waiters.delete(w); w(); } }, wait = () => new Promise((r) => waiters.add(r));
   const WINDOW = nw * 2; let quit = false, bytes = 0;
-  // One row group on 8 cores or fewer (phone training run: column chunks +8% over the old whole-group decode in both runs) keeps the old path: one helper decodes and finishes the whole group, ranges floor 4M cells; 2 or more groups, or more than 8 cores, decode per column chunk
+  // One row group on 8 cores or fewer (phone training run: column chunks +8% over the old whole-group decode in both runs) keeps the old path exactly: one decode helper (as before the column-chunk change, so the spare workers stay pack helpers) decodes and finishes the whole group, ranges floor 2M cells; 2 or more groups, or more than 8 cores, decode per column chunk
   // Decode runs per column chunk on any helper, so a one-group file decodes in parallel too; a group whose columns are all decoded is finished (cut, pack) by one helper with the decoded columns handed over (arrow groups decode and finish in one job)
   const gst = new Map(), colQ = [], finQ = [];
   const run = async (h) => {
