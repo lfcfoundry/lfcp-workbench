@@ -648,7 +648,7 @@ async function packBlockJob(m) {
 async function segJob(m) {
   try {
     const r = await parseSegment(m);
-    if (r.chunks && m.merge !== false && !isFirefox) r.chunks = mergeSmall(r.chunks);   // not in Firefox: parse is faster there too, but the early text decode then holds the writer for 1.3-1.5 s and the import ends 20% later
+    if (r.chunks && m.merge !== false) r.chunks = mergeSmall(r.chunks);   // Firefox too: on the 10,000-hand-back stand-in import + first filter + sort -22%, first rows -25% (import itself +10%: the text decode now lands inside it)
     if (m.dup) r.chunks2 = r.chunks.map(dupChunk);   // live columns: a second copy made here, in parallel, so the import worker keeps one and forwards the other to the pack workers
     // A piece with many small buffers (a wide table: 36,000 per piece) is copied into one slab so it travels as one transfer; a piece with few (a narrow table) travels as it is: the slab copy was 20% of the helpers' time on a 4-column list.
     if (r.chunks && r.chunks.length) { let nb = 0; for (const c of r.chunks) nb += c.slab ? 1 : chunkBuffers(c).length; if (nb > 1024 || m.slabAll) { r.chunks = r.chunks.map(slabChunk); if (r.chunks2) r.chunks2 = r.chunks2.map(slabChunk); } }
