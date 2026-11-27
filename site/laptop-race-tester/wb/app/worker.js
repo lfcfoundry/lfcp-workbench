@@ -104,7 +104,7 @@ function makeFast(headers, plan, trackers, delimiter) {
   if (n === 0 || n > 512 || D > 126) return null;
   const keys = headers.map((h, i) => enc.encode((i ? ',' : '{') + JSON.stringify(h) + ':')), isInt = headers.map((_, i) => !!(plan && plan[i] === true)), decN = headers.map((_, i) => (plan && typeof plan[i] === 'number' ? plan[i] : 0));
   const extra = keys.reduce((a, k) => a + k.length, 0) + 8 * n + 4, fs = new Int32Array(n), fe = new Int32Array(n), tdec = new TextDecoder();
-  const F = { off: false, rows: 0, miss: 0 };
+  const F = { off: false, rows: 0, miss: 0, fails: 0, wait: 1 };
   // Parses the plain lines of b[i..) whose line break is before lim; returns where it stopped (the caller handles the next line another way).
   F.run = (b, i, lim, parser, io) => {
     let out = io.buf, o = io.pos, count = 0;
@@ -165,7 +165,7 @@ function makeFastW(headers, plan, trackers, delimiter) {
   const kp = X.keys_ptr(), flagsP = X.flags_ptr(), cn = new Uint32Array(X.memory.buffer, X.cnt_n_ptr(), 64), ce = new Uint32Array(X.memory.buffer, X.cnt_e_ptr(), 64);
   let off = 0, slotNo = 0; const slot = new Uint8Array(n).fill(255), synced = new Int32Array(n);
   for (let c = 0; c < n; c++) { m8.set(keys[c], kp + off); X.set_col(c, off, keys[c].length, plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 && plan[c] < 10 ? 16 + plan[c] : 0, 255); off += keys[c].length; }
-  const F = { off: false, rows: 0, miss: 0 };
+  const F = { off: false, rows: 0, miss: 0, fails: 0, wait: 1 };
   F.run = (b, i, lim, parser, io) => {
     for (let c = 0; c < n; c++) {
       const t = trackers[c]; if (t.date && slot[c] === 255 && slotNo < SLOTS) { slot[c] = slotNo++; X.set_slot(c, slot[c]); } m8[flagsP + c] = (t.int ? 1 : 0) | (t.num ? 2 : 0) | (t.bool ? 4 : 0) | (t.date ? 8 : 0);
@@ -236,7 +236,7 @@ function makeColW(headers, plan, trackers, delimiter, sink, dict, dictOn, lenien
   const B = core.placeColumns(C, headers, plan, delimiter, n > 128 ? { capRows: Math.ceil(CB / n) + 64, chunkBytes: CB, dict, textCap: Math.max(65536, Math.ceil(8 * CB / n)) } : { capRows: 32768, chunkBytes: CB, dict }); if (C.set_lenient) C.set_lenient(lenient ? 1 : 0); if (C.set_noq) C.set_noq(noq ? 1 : 0); if (dictOn) for (let c = 0; c < n; c++) dictOn[c] = B.isDict(c);
   const flagsP = B.exports.flags_ptr(), cn = new Uint32Array(B.memory.buffer, B.exports.cnt_n_ptr(), 1024), ce = new Uint32Array(B.memory.buffer, B.exports.cnt_e_ptr(), 1024);
   const slot = new Uint8Array(n).fill(255), synced = new Int32Array(n); let slotNo = 0; const SLOTS = 8;
-  const F = { off: false, rows: 0, miss: 0 };
+  const F = { off: false, rows: 0, miss: 0, fails: 0, wait: 1 };
   // Same contract as makeFastW's run: takes the plain lines of b[i..) whose line break is before lim, returns where it stopped.
   F.run = (b, i, lim, parser) => {
     const m8 = B.mem();
@@ -557,6 +557,7 @@ async function parseSegment(m) {
     if (m.headerOnly && at - start > 8 * SL) throw new Error('No line break found near the start of the file.');
     const to = Math.min(size, at + SL); let b = new Uint8Array(await pre), base = at; pre = to < size ? file.slice(to, Math.min(size, to + SL)).arrayBuffer() : null;   // the next slice loads while this one is parsed
     if (carry) { const nb = new Uint8Array(carry.length + b.length); nb.set(carry); nb.set(b, carry.length); b = nb; base = at - carry.length; carry = null; }
+    if (F && F.off && F.fails < 4 && --F.wait <= 0) { F.off = false; F.miss = 0; F.fails++; F.wait = 1 << F.fails; }   // retry the byte reader on later slices, backing off when it keeps failing
     let i = 0; const from = Math.max(0, limit - base);
     while (i < b.length) {
       if (F && !F.off && sample.length >= needSample && cleanState(parser)) { drain(); const io = { buf, pos }; i = F.run(b, i, from, parser, io); buf = io.buf; pos = io.pos; if (i >= b.length) break; }
