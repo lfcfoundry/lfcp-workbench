@@ -77,6 +77,34 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
   console.log(`ok: wasm column builder equals the JavaScript reference (${chunks} chunks, bail rules)`);
 }
 
+// A backslash is an ordinary character for the wasm builder, as it is for the character parser: a line with a backslash and no quote mark is built (the real wiki file handed back about 8,000 such lines,
+// 4% of its rows); a line with a backslash and a quote mark still goes to the character parser (except in space lists with plain quote marks). The cells match what the character parser makes.
+{
+  const { readFileSync } = await import('node:fs');
+  const wasmB = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../wasm/colbuild.wasm'));
+  const { make } = await import('../src/ingest/colbuild.mjs');
+  const { DelimitedParser } = await import('../src/ingest/delimited.mjs');
+  const dq = new TextDecoder(), eq = new TextEncoder(), tx = (col, i) => dq.decode(col.bytes.subarray(col.start[i], col.end[i]));
+  for (const [delim, noq] of [[' ', false], [' ', true], [',', false]]) {
+    const text = ['en Foo\\x 3', 'de Bar\\ 5', 'fr a\\\\b 7', 'es plain 9', 'ja \\ 1'].map((l) => l.replace(/ /g, delim)).join('\n') + '\n';
+    const rows = []; new DelimitedParser(delim, (f) => rows.push(f), { noQuote: noq }).feed(text, true);
+    const S = await make(wasmB, ['a', 'b', 'c'], [false, false, true], delim);
+    if (noq) S.exports.set_noq(1);
+    const r = S.build(eq.encode(text));
+    assert.equal(r.bail, null); assert.equal(r.n, 5);
+    for (let i = 0; i < 5; i++) { assert.equal(tx(r.cols.a, i), rows[i][0]); assert.equal(tx(r.cols.b, i), rows[i][1]); assert.equal(r.cols.c[i], Number(rows[i][2])); }
+  }
+  const C = await make(wasmB, ['a', 'b', 'c'], [false, false, true], ',');
+  const r3 = C.build(eq.encode('en,Foo\\x,3\nde,Ba"r\\,5\n'));   // a backslash and a quote mark in one line: the character parser reads it
+  assert.equal(r3.n, 1); assert.equal(r3.bail, 'line');
+  C.exports.set_lenient(1);
+  const r4 = C.build(eq.encode('en,Foo\\x,3\nde,Ba"r\\,5\n'));
+  assert.equal(r4.n, 1); assert.equal(r4.bail, 'line');
+  const N = await make(wasmB, ['a', 'b', 'c'], [false, false, true], ' '); N.exports.set_noq(1);
+  const r5 = N.build(eq.encode('en Ba"r\\ 5\n'));
+  assert.equal(r5.bail, null); assert.equal(r5.n, 1); assert.equal(tx(r5.cols.b, 0), 'Ba"r\\');
+  console.log('ok: a backslash is an ordinary character (also with a quote mark in plain-quote space lists); with a quote mark elsewhere the line goes to the character parser');
+}
 // A quote mark inside an unquoted cell is plain text for the wasm builder (comma and tab files), and the line is counted; a space-separated list still leaves such a line to the character parser
 {
   const { readFileSync } = await import('node:fs');
@@ -133,7 +161,7 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
 }
 
 // Quoted cells in the wasm builder: quoted cells (also with delimiters, line breaks and CRLF inside) land in the same columns as the character parser makes;
-// cells with an escaped quote (""), a backslash, non-ASCII text or a wrong field count stop the chunk at that record (bail 'line') for the character parser.
+// cells with a wrong field count or text after the closing quote stop the chunk at that record (bail 'line') for the character parser.
 {
   const { make } = await import('../src/ingest/colbuild.mjs');
   const { readFileSync } = await import('node:fs');
@@ -156,7 +184,7 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
       default: return [id, q('a'), sc, q('b') + 'x'].join(',');   // weird: text after the closing quote
     }
   };
-  const weird = new Set([5, 7, 9]);   // escaped quotes (4), valid UTF-8 (6) and a quote inside an unquoted cell (8, kept as plain text) are built by the wasm builder now
+  const weird = new Set([7, 9]);   // escaped quotes (4), a backslash (5), valid UTF-8 (6) and a quote inside an unquoted cell (8, kept as plain text) are built by the wasm builder now
   let seed2 = 99; const r2 = () => (seed2 = (seed2 * 1103515245 + 12345) >>> 0) / 4294967296;
   for (const eol of ['\n', '\r\n']) {
     const recs = [], kinds = []; for (let i = 0; i < 4000; i++) { const k = r2() < 0.08 ? 4 + Math.floor(r2() * 6) : Math.floor(r2() * 4); kinds.push(k); recs.push(rec(i, k)); }
