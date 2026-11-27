@@ -306,6 +306,53 @@ const slabChunk = (c) => {
 const reView = (a, buf) => new a.constructor(buf, a.byteOffset, a.length);
 const ownDup = (x, extra) => { const y = dupText(x); y.own = true; extra.push(y.bytes.buffer, y.start.buffer); return y; };   // a column that was turned to text after the chunk was built has its own buffers
 const dupSlab = (c) => { const b = c.slab.slice(0), extra = [], o = { n: c.n, bytes: c.bytes, slab: b, cols: c.cols.map((x) => (x.own ? ownDup(x, extra) : x.codes ? { codes: reView(x.codes, b), lb: { bytes: reView(x.lb.bytes, b), start: reView(x.lb.start, b), end: reView(x.lb.end, b) } } : x.bytes ? { bytes: reView(x.bytes, b), start: reView(x.start, b), end: reView(x.end, b) } : reView(x, b))) }; if (extra.length) o.extra = extra; return o; };   // one copy of the buffer, the columns are views at the same places
+// Chunk merging: every hand-back to the character parser ends the fast chunk and starts a small slow chunk, so a piece with thousands of hand-backs travels as thousands of tiny chunks (each a few buffers to
+// transfer, copy, hold and pack). Consecutive small chunks of the same shape are joined here, before the piece is posted; same rows in the same order, same values.
+const MERGE_SMALL = 2048, MERGE_MAX = 16384;
+const colShape = (x) => (x.codes ? 2 : x.bytes ? 1 : 0);
+const mergeable = (c, ref) => {
+  if (!c.cols || c.n >= MERGE_SMALL || c.slab && false) return false;
+  for (let k = 0; k < c.cols.length; k++) {
+    const x = c.cols[k]; if (colShape(x) !== colShape(ref.cols[k])) return false;
+    if (x.bytes && !x.codes) { if (c.n < 1 || x.start[0] !== 0 || x.end[c.n - 1] !== x.bytes.length) return false; }
+  }
+  return true;
+};
+function mergeGroup(g) {
+  const n = g.reduce((a, c) => a + c.n, 0), nc = g[0].cols.length, cols = [];
+  for (let k = 0; k < nc; k++) {
+    const sh = colShape(g[0].cols[k]);
+    if (sh === 0) { const o = new Float64Array(n); let at = 0; for (const c of g) { o.set(c.cols[k], at); at += c.n; } cols.push(o); }
+    else if (sh === 1) {
+      let tb = 0; for (const c of g) tb += c.cols[k].bytes.length;
+      const bytes = new Uint8Array(tb), off = new Int32Array(n + 1); let at = 0, base = 0;
+      for (const c of g) { const x = c.cols[k]; bytes.set(x.bytes, base); for (let i = 0; i < c.n; i++) off[at + i] = x.start[i] + base; at += c.n; base += x.bytes.length; }
+      off[n] = tb; cols.push({ bytes, start: off.subarray(0, n), end: off.subarray(1, n + 1) });
+    } else {   // dictionary columns: the labels of all chunks are joined (first seen first), the codes are renumbered
+      const dec = new TextDecoder('latin1'), ids = new Map(), labs = []; const codes = new Uint16Array(n); let at = 0;
+      for (const c of g) {
+        const x = c.cols[k], lb = x.lb, map = new Uint16Array(lb.start.length);
+        for (let q = 0; q < map.length; q++) { const key = dec.decode(lb.bytes.subarray(lb.start[q], lb.end[q])); let id = ids.get(key); if (id === undefined) { id = labs.length; ids.set(key, id); labs.push(lb.bytes.subarray(lb.start[q], lb.end[q])); } map[q] = id; }
+        for (let i = 0; i < c.n; i++) codes[at + i] = map[x.codes[i]]; at += c.n;
+      }
+      if (labs.length > 4096) return null;
+      let tb = 0; for (const l of labs) tb += l.length; const bytes = new Uint8Array(tb), start = new Uint32Array(labs.length), end = new Uint32Array(labs.length); let lo = 0;
+      for (let q = 0; q < labs.length; q++) { start[q] = lo; bytes.set(labs[q], lo); lo += labs[q].length; end[q] = lo; }
+      cols.push({ codes, lb: { bytes, start, end } });
+    }
+  }
+  return { n, bytes: g.reduce((a, c) => a + c.bytes, 0), cols };
+}
+function mergeSmall(list) {
+  if (!list || list.length < 3) return list;
+  const out = []; let g = [];
+  const flush = () => { if (g.length > 1) { const m = mergeGroup(g); if (m) out.push(m); else out.push(...g); } else out.push(...g); g = []; };
+  for (const c of list) {
+    if (g.length && (!mergeable(c, g[0]) || g.reduce((a, x) => a + x.n, 0) + c.n > MERGE_MAX)) flush();
+    if (mergeable(c, c)) g.push(c); else { flush(); out.push(c); }
+  }
+  flush(); return out;
+}
 const dupChunk = (c) => c.slab ? dupSlab(c) : ({ n: c.n, bytes: c.bytes, cols: c.cols.map((x) => (x.codes ? { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } } : x.bytes ? dupText(x) : x.slice())) });
 const chunkBuffers = (c) => { if (c.slab) return c.extra ? [c.slab].concat(c.extra) : [c.slab]; const o = []; for (const x of c.cols) { if (x.codes) o.push(x.codes.buffer, x.lb.bytes.buffer, x.lb.start.buffer, x.lb.end.buffer); else if (x.bytes) { o.push(x.bytes.buffer, x.start.buffer); if (x.end.buffer !== x.start.buffer) o.push(x.end.buffer); } else o.push(x.buffer); } return o; };
 // Dictionary chunk column to the text shape (a code per row to start and end offsets into joined bytes).
@@ -601,6 +648,7 @@ async function packBlockJob(m) {
 async function segJob(m) {
   try {
     const r = await parseSegment(m);
+    if (r.chunks && m.merge !== false && !isFirefox) r.chunks = mergeSmall(r.chunks);   // not in Firefox: parse is faster there too, but the early text decode then holds the writer for 1.3-1.5 s and the import ends 20% later
     if (m.dup) r.chunks2 = r.chunks.map(dupChunk);   // live columns: a second copy made here, in parallel, so the import worker keeps one and forwards the other to the pack workers
     // A piece with many small buffers (a wide table: 36,000 per piece) is copied into one slab so it travels as one transfer; a piece with few (a narrow table) travels as it is: the slab copy was 20% of the helpers' time on a 4-column list.
     if (r.chunks && r.chunks.length) { let nb = 0; for (const c of r.chunks) nb += c.slab ? 1 : chunkBuffers(c).length; if (nb > 1024 || m.slabAll) { r.chunks = r.chunks.map(slabChunk); if (r.chunks2) r.chunks2 = r.chunks2.map(slabChunk); } }
