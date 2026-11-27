@@ -682,10 +682,11 @@ async function segJob(m) {
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
 // Overlapped start (Chromium, WebKit): the parse helpers are started and the header is read while the sample plan runs on this thread, so their start-up (70-90 ms) no longer waits for it.
 // Not in Firefox: its four cores are already busy with the sample plan, and first rows came 6-10% later there.
+// A zip entry still being unpacked (LazyFile) sends only its first 4 MiB for the header read: posting the LazyFile itself cloned every chunk unpacked so far (taxi zip: ~0.27 s on this thread before first rows).
 function startPre(file, delimiter, nhOpt) {
   const nh = Math.max(2, Math.min(8, nhOpt | 0 || autoHelpers())), helpers = [];
   try { for (let i = 0; i < nh; i++) helpers.push(mkWorker()); } catch { helpers.forEach((h) => h.terminate()); return null; }
-  let resHdr; const hdr = new Promise((res) => { resHdr = res; const h = helpers[0]; h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone' && d.rid === -1) res(d.r); }; h.onerror = () => res({ error: 'start' }); h.postMessage({ type: 'seg', rid: -1, file, delimiter, headerOnly: true, e: 0 }); });
+  let resHdr; const hdr = new Promise((res) => { resHdr = res; const h = helpers[0]; h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone' && d.rid === -1) res(d.r); }; h.onerror = () => res({ error: 'start' }); if (file && file.lazy) { file.bytes(0, Math.min(file.size, 4194304)).then((u) => h.postMessage({ type: 'seg', rid: -1, file: { mem: true, size: file.size, base: 0, buf: u.buffer }, delimiter, headerOnly: true, e: 0 }, [u.buffer]), () => res({ error: 'start' })); } else h.postMessage({ type: 'seg', rid: -1, file, delimiter, headerOnly: true, e: 0 }); });
   return { helpers, hdr, nh, resHdr };
 }
 async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict, nh, survey, pre) {
