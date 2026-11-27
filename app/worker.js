@@ -609,15 +609,23 @@ async function segJob(m) {
 
 // Import-worker side: cut the file into pieces, let two helpers parse them at the same time, pack the pieces in file order.
 // Returns null when this is not possible here (helpers cannot start, no usable header break); the caller then uses the one-helper path.
-async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict, nh, survey) {
+// Overlapped start (Chromium, WebKit): the parse helpers are started and the header is read while the sample plan runs on this thread, so their start-up (70-90 ms) no longer waits for it.
+// Not in Firefox: its four cores are already busy with the sample plan, and first rows came 6-10% later there.
+function startPre(file, delimiter, nhOpt) {
+  const nh = Math.max(2, Math.min(8, nhOpt | 0 || autoHelpers())), helpers = [];
+  try { for (let i = 0; i < nh; i++) helpers.push(mkWorker()); } catch { helpers.forEach((h) => h.terminate()); return null; }
+  let resHdr; const hdr = new Promise((res) => { resHdr = res; const h = helpers[0]; h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone' && d.rid === -1) res(d.r); }; h.onerror = () => res({ error: 'start' }); h.postMessage({ type: 'seg', rid: -1, file, delimiter, headerOnly: true, e: 0 }); });
+  return { helpers, hdr, nh, resHdr };
+}
+async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, plan, col, dict, nh, survey, pre) {
   nh = Math.max(2, Math.min(8, nh | 0 || autoHelpers()));   // parse helpers: chosen from the core count; the page option parseHelpers (tests) overrides
   await loadCore(); const { TypeTracker } = core;
   const helpers = [], pending = new Map(); let rid = 0;
   const closeAll = () => helpers.forEach((h) => h.terminate());
-  try { for (let i = 0; i < nh; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; }
+  if (pre && pre.nh === nh && !(file && file.lazy)) helpers.push(...pre.helpers); else { if (pre) pre.helpers.forEach((h) => h.terminate()); pre = null; try { for (let i = 0; i < nh; i++) helpers.push(mkWorker()); } catch { closeAll(); return null; } }
   const failAll = (err) => { for (const p of pending.values()) p.rej(err); pending.clear(); };
   const wire = (h) => {
-    h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); p.res(d.r); } } };
+    h.onmessage = (e) => { const d = e.data || {}; if (d.type === 'segdone' && d.rid === -1 && pre) pre.resHdr(d.r); else if (d.type === 'segdone') { const p = pending.get(d.rid); if (p) { pending.delete(d.rid); p.res(d.r); } } };
     h.onerror = (e) => failAll(new Error('The import helper failed: ' + (e && e.message || 'unknown error')));
   };
   for (const h of helpers) wire(h);
@@ -634,7 +642,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
   job.abort = () => { closeAll(); failAll(Object.assign(new Error('Import cancelled.'), { cancelled: true })); };
   const t0 = performance.now();
   try {
-    let hdr; try { hdr = await rpc(helpers[0], { file, delimiter, headerOnly: true, e: 0 }); } catch { closeAll(); return null; }
+    let hdr; try { hdr = pre ? await pre.hdr : await rpc(helpers[0], { file, delimiter, headerOnly: true, e: 0 }); } catch { closeAll(); return null; }
     if (hdr.error || !hdr.header || hdr.eof) { closeAll(); return null; }
     const headers = hdr.header, hdrEnd = hdr.endPos, total = Math.ceil((file.size - hdrEnd) / SEGB);
     if (col && headers.length > 1024) col = null;   // the column builder takes up to 1,024 columns
@@ -2391,10 +2399,12 @@ async function importOnce(m) {
       };
       var packWorkersToStop = ws;
     }
+    let pre = null; if (!isFirefox && m.prewarm !== false && !m.untyped && !m.ndjson && !m.parquet && useSegments(m, file)) { try { pre = startPre(file, delimiter, m.parseHelpers); } catch { pre = null; } }
     let plan = m.untyped ? null : await samplePlan(file, delimiter); t.headRows = m.untyped ? 0 : samplePlan.headRows || 0; t.seed = m.untyped ? null : samplePlan.seed; t.plainTidy = !m.untyped && !!samplePlan.plainTidy; if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
     let res = null;
-    if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null, m.parseHelpers);
+    if (!m.ndjson && !m.parquet && useSegments(m, file)) res = await runSegmented(file, delimiter, job, packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, m.segBytes || SEG_BYTES, plan, col, col ? dictPlan : null, m.parseHelpers, undefined, pre); pre = null;
     if (res && col && col.release) col.release();   // chunks held back after a column turned to text: pack them now
+    if (pre) { pre.helpers.forEach((h) => h.terminate()); pre = null; }
     if (!res && !m.ndjson && !m.parquet) try { helper = m.inline ? null : mkWorker(); } catch { helper = null; }
         if (m.parquet) { res = await parseParquet(file, job, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t, write, packer, col, (p) => { plan = p; }, m.exact, m.forceColumns, m.forcePool); if (res.plan) plan = res.plan; } else if (m.ndjson) { res = await parseNdjson(file, () => stop(job), packBytes, (bytes, rows) => send('progress', m.id, { bytes, total: file.size, rows }), t); } else if (res) { /* parsed in pieces */ } else if (helper) {   // parse on the helper, pack and write here: both run at once
       res = await new Promise((resolve, reject) => {
