@@ -241,3 +241,21 @@ console.log(`ok: staged columns through packBlock equal the JSON-lines values ($
   assert.equal(idx, 12000); assert.ok(sawBail && dictChunks >= 1 && textChunks >= 1, 'dict then text chunks, bail seen');
   console.log(`ok: dictionary columns read back as text (${dictChunks} dictionary chunks, ${textChunks} text chunks after the bail)`);
 }
+
+{   // free-format number columns (plan 'f'): the builder writes the same doubles numFromText would, String(value) is the cell's text, anything else is a bail 'mixed'
+  const { readFileSync } = await import('node:fs');
+  const wasm = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../wasm/colbuild.wasm'));
+  const { make } = await import('../src/ingest/colbuild.mjs');
+  const good = ['0', '1', '-1', '1.5', '2.75', '-0.25', '0.000001', '123456789012345', '12345678901234.5', '0.1', '100', '3.14159', '', '9.99'];
+  const text = good.map((g, i) => 'a' + i + ',' + g + ',x').join('\n') + '\n';
+  const B = await make(wasm, ['k', 'v', 'z'], [false, 'f', false], ',', { capRows: 64 });
+  const w = B.build(enc.encode(text));
+  assert.equal(w.bail, null); assert.equal(w.n, good.length);
+  const v = w.cols.v; assert.ok(v instanceof Float64Array);
+  good.forEach((g, i) => { if (g === '') assert.ok(Number.isNaN(v[i])); else { assert.equal(v[i], Number(g)); assert.equal(String(v[i]), g); } });
+  for (const bad of ['1.50', '007', '-0', '1e3', '0.0000001', '1234567890123456', '.5', '5.', '+1', '1,5x', '0.0', 'abc', '1 ']) {
+    const w2 = B.build(enc.encode('a,' + bad + ',x\n'));
+    assert.ok(w2.bail === 'mixed' || w2.n === 0, 'bails: ' + bad);
+  }
+  console.log('ok: free-format number columns match numFromText, other cells bail');
+}

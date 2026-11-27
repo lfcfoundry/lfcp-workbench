@@ -148,6 +148,23 @@ static int is_num(const u8* b, u32 l){   // -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)
   return p == f;
 }
 typedef double f64;
+static const double P10c[16] = {1,10,100,1000,10000,100000,1000000,10000000,100000000,1000000000,10000000000.0,100000000000.0,1000000000000.0,10000000000000.0,100000000000000.0,1000000000000000.0};
+// Free-format number (plan kind 3): exactly what numFromText in the pack worker accepts: -?(0|[1-9]\d*)(\.\d*[1-9])?, at most 15 digits, not -0, not below 1e-6. The value is the text's own double (digits / 10^k, one rounding), so String(value) is the text.
+static int free_val(const u8* b, u32 l, double* out){
+  u32 neg = b[0] == 45, p = neg; if (p >= l) return 0;
+  if (b[p] == 48 && p + 1 < l && b[p + 1] != 46) return 0;
+  u32 digs = 0, dot = 0xffffffffu, last = 0; u64 v = 0;
+  for (u32 q = p; q < l; q++) {
+    u32 c = b[q];
+    if (c == 46) { if (dot != 0xffffffffu || q == p || q == l - 1) return 0; dot = digs; continue; }
+    u32 d = c - 48; if (d > 9) return 0;
+    if (++digs > 15) return 0; v = v * 10 + d; last = d;
+  }
+  double x = (double)v;
+  if (dot != 0xffffffffu) { if (last == 0) return 0; x = x / P10c[digs - dot]; if (x != 0 && x < 1e-6) return 0; }
+  if (neg) { if (v == 0) return 0; x = -x; }
+  *out = x; return 1;
+}
 
 static inline void cpy(u8* d, const u8* s, u32 l){   // small copies without a byte loop: overlapping wide loads and stores, never past the end
   if (l >= 16) { u32 k = 0; for (; k + 16 <= l; k += 16) wasm_v128_store(d + k, wasm_v128_load(s + k)); if (k < l) wasm_v128_store(d + l - 16, wasm_v128_load(s + l - 16)); }
@@ -159,6 +176,7 @@ static u8 fastc[MAXC];
 // One pass for a planned number cell: checks exactly what is_int / is_num, plain_int and plain_dec check together and returns the value the conversion would write. 0 = use the separate passes.
 static inline int fast_plan(const u8* b, u32 l, u32 pl, u32 f, double* out){
   u32 neg = b[0] == 45; if (l <= neg) return 0;
+  if (pl == 3) return f == 2 ? free_val(b, l, out) : 0;
   if (pl == 1) {
     u8 c0 = b[neg]; if (c0 == 48) { if (l != 1) return 0; *out = 0; return 1; }
     if (c0 < 49 || c0 > 57) return 0; if (l - neg > 15) return 0;
@@ -275,6 +293,7 @@ EXPORT("build") u32 build(const u8* in, u32 len, u32 cap){
     for (u32 c = 0; c < n; c++) {
       u8 pl = isplan[c]; if (!pl) continue;
       u32 s0 = fs[c], l = fe[c] - s0; if (l == 0 || fastc[c]) continue;
+      if (pl == 3) { double fv3; if (!free_val(in + s0, l, &fv3)) { g_bail = 2; goto stop; } dnum[c] = fv3; fastc[c] = 1; continue; }
       if (pl == 1 ? !plain_int(in + s0, l) : !plain_dec(in + s0, l, pl - 16)) { g_bail = 2; goto stop; }
     }
     for (u32 c = 0; c < n; c++) if (dtmode[c] && !isplan[c]) { if (!iso_ms(in + fs[c], fe[c] - fs[c], &dnum[c])) { g_bail = 5; g_bailcol = c; goto stop; } }

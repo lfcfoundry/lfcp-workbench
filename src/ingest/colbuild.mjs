@@ -12,7 +12,7 @@ export function placeColumns(X, headers, plan, delimiter, opts = {}) {
   const capRows = opts.capRows || 65536, CH = opts.chunkBytes || 2097152, TC = opts.textCap && X.set_tcap ? Math.min(CH, opts.textCap) : 0;   // textCap: a smaller text area per column (wide tables); the builder ends a chunk when one fills
   if (X.set_tcap) X.set_tcap(TC);
   let p = (X.__heap_base.value + 15) & ~15; const IN = p; p += CH + 64;
-  const kinds = headers.map((_, c) => (plan && plan[c] === true ? 1 : plan && typeof plan[c] === 'number' && plan[c] > 0 ? 16 + plan[c] : 0)), pls = [];
+  const kinds = headers.map((_, c) => (plan && plan[c] === true ? 1 : plan && plan[c] === 'f' ? 3 : plan && typeof plan[c] === 'number' && plan[c] > 0 ? 16 + plan[c] : 0)), pls = [];
   const need = (z) => { const a = p; p = (p + z + 15) & ~15; return a; };
   const enc = new TextEncoder(), kp = X.keys_ptr(); let koff = 0;
   for (let c = 0; c < n; c++) {
