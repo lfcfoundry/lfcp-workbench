@@ -65,6 +65,7 @@ self.onmessage = async (e) => {
   else if (m.type === 'packBlock') packBlockJob(m);
   else if (m.type === 'packPlain') packPlainJob(m);
   else if (m.type === 'packCols') packColsJob(m);
+  else if (m.type === 'dropParse') { C = null; X = null; LT = null; scratch = new Uint8Array(0); }   // a parse helper turned pack worker lets go of its parse memory (wasm memory never shrinks, so the instances go)
   else if (m.type === 'pqGroup') pqGroupJob(m);
   else if (m.type === 'pqCol') pqColJob(m);
   else if (m.type === 'pqPackPart') pqPartJob(m);
@@ -759,7 +760,7 @@ async function runSegmented(file, delimiter, job, packBytes, progress, t, SEGB, 
     }
     t.parseMs = performance.now() - t0; t.readMs = 0;
     return { headers, types: agg.map((x) => ({ type: x.type, nullable: x.nullable })), rows, sample, pieces: total };
-  } finally { closeAll(); }
+  } finally { const nHand = typeof t.wantHand === 'function' ? t.wantHand() : t.wantHand || 0; if (nHand && !job.cancelled && !redoH) { for (const h of helpers.splice(0, nHand)) { h.onmessage = null; h.postMessage({ type: 'dropParse' }); (t.hand ||= []).push(h); } } closeAll(); }
 }
 
 // Which columns are stored as numbers: those whose first 2,000 rows (from the first MB) are all plain whole numbers or empty, with at least one number.
@@ -828,10 +829,19 @@ async function notUtf8(file) {
   }
   return false;
 }
+// Windows-1252 bytes to UTF-8 bytes in one pass (the same bytes as TextEncoder(TextDecoder('windows-1252')) in the WHATWG encoding standard), no string in between
+const CP1252_HI = Uint16Array.from([0x20AC, 0x81, 0x201A, 0x192, 0x201E, 0x2026, 0x2020, 0x2021, 0x2C6, 0x2030, 0x160, 0x2039, 0x152, 0x8D, 0x17D, 0x8F, 0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x2DC, 0x2122, 0x161, 0x203A, 0x153, 0x9D, 0x17E, 0x178]);
+function cp1252ToUtf8(u) {
+  const n = u.length; let extra = 0;
+  for (let i = 0; i < n; i++) { const b = u[i]; if (b >= 0x80) extra += b < 0xA0 && CP1252_HI[b - 0x80] >= 0x800 ? 2 : 1; }
+  if (!extra) return u;
+  const o = new Uint8Array(n + extra); let p = 0;
+  for (let i = 0; i < n; i++) { const b = u[i]; if (b < 0x80) { o[p++] = b; continue; } const c = b < 0xA0 ? CP1252_HI[b - 0x80] : b; if (c < 0x800) { o[p++] = 0xC0 | (c >> 6); o[p++] = 0x80 | (c & 63); } else { o[p++] = 0xE0 | (c >> 12); o[p++] = 0x80 | ((c >> 6) & 63); o[p++] = 0x80 | (c & 63); } }
+  return o;
+}
 async function toUtf8File(file) {
-  const dec = new TextDecoder('windows-1252'), enc = new TextEncoder(), parts = [], rd = file.stream().getReader();
-  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(enc.encode(dec.decode(value, { stream: true }))); }
-  parts.push(enc.encode(dec.decode()));
+  const parts = [], rd = file.stream().getReader();
+  for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(cp1252ToUtf8(value)); }   // one byte in, one to three out: no state carries across reads
   return new File(parts, file.name);
 }
 // UTF-16 (with a byte order mark, or without one when the text is mostly ASCII and every other byte is zero) is converted to UTF-8 in 4 MB pieces that the parser can slice like any file.
@@ -2361,7 +2371,7 @@ async function importOnce(m) {
     let inlScan = null, packBytes = async (bytes) => { stop(job); const s = performance.now(); if (t.scanPack && !t.flatPack) { inlScan ||= flatTransform(); const sc = inlScan.scan(bytes); for (const k of sc.keys) (t.keys ||= new Set()).add(k); if (sc.maybeBig) { inlScan.reset(0); const tb = inlScan(bytes), bg = inlScan.big(); if (bg) { t.big = (t.big || 0) + bg; bytes = tb; } } } const parts = packer.push(bytes); t.packMs += performance.now() - s; await write(parts); };
     let dkBlocks = null;
     let tsJobs = null;
-    let finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
+    let drainNow = () => {}, finishPacking = async () => {}, col = null, colFlush = async () => {}, liveChunks = null, morePack = null;
     const packWorkers = m.packWorkers != null ? m.packWorkers : (m.live === true && file.size <= LIVE_MAX && columnsOk(m) ? 1 : 2);   // live columns: Firefox packs with one worker while parsing (the cores go to the parse helpers) and gets three more when parsing is done; Chromium also packs with one while parsing and gets one more (measured: each is the best of the variants in its browser)   // measured faster in Firefox, WebKitGTK and Chromium together with the byte-level parser
     let pws = null;   // pack threads; some pages (a downloaded file on Chrome) cannot start a worker from inside a worker, then packing stays on this thread
     dropKeep(); if (packWorkers > 0 && (useSegments(m, file) || (m.parquet && columnsOk(m)))) { try { pws = []; for (let i = 0; i < packWorkers; i++) pws.push(mkWorker()); } catch { if (pws) pws.forEach((w) => w.terminate()); pws = null; } }
@@ -2377,7 +2387,7 @@ async function importOnce(m) {
         pump();
       };
       for (const w of pws) { w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
-      morePack = (k) => { try { for (let i = 0; i < k; i++) { const w = mkWorker(); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); } pump(); } catch { /* the workers we have keep going */ } };   // parsing is done: its cores join the packing
+      morePack = (k) => { try { for (let i = 0; i < k; i++) { const w = t.hand && t.hand.length ? t.hand.shift() : mkWorker(); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); } pump(); } catch { /* the workers we have keep going */ } };   // parsing is done: its cores join the packing
       job.abort = () => { failed = Object.assign(new Error('Import cancelled.'), { cancelled: true }); pump(); };
       const send1 = async (msg, tr) => {
         while (!idle.length && !failed) await new Promise((r) => { wake = r; });
@@ -2390,12 +2400,14 @@ async function importOnce(m) {
         return send1({ type: 'packBlock', c: chunk, o: popts, flat, chk: t.chk }, [chunk.buffer]);
       };
       if (columnsOk(m)) {   // staged columns: chunks of typed columns are grouped into blocks of about colBlock bytes of CSV and packed by the pack workers
+        const DUP_AHEAD = m.dupAhead != null ? m.dupAhead : 134217728; let qBytes = 0, dupOff = false; const qAdd = (list) => { for (const c of list) qBytes += c.bytes; return list; };
         let colBlock = m.colBlockBytes || 8388608, cq = [], cqBytes = 0, cqRows = 0, colHeaders = null;
         // Live columns (desktop, file up to LIVE_MAX): the chunks are kept so the grid can read them as soon as parsing ends, while the pack workers still work through their queue.
         // Blocks wait in blockQ and go to the pack workers as copies (the kept chunks are not transferred), so parsing never waits for packing.
         liveChunks = m.live === true && file.size <= LIVE_MAX ? [] : null; let blockQ = [], pumping = null, pumpErr = null;
-        const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b = blockQ.shift(); await send1({ type: 'packCols', chunks: b, headers: colHeaders, num: numPlan, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
-        const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; if (liveChunks) { blockQ.push(list); pump(); } else await send1({ type: 'packCols', chunks: list, headers: colHeaders, num: numPlan, o: popts }, [].concat(...list.map(chunkBuffers))); };
+        const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b0 = blockQ.shift(); for (const c of b0) qBytes -= c.bytes; const b = b0.map((c) => (c.lazy ? dupChunk(c.lazy) : c)); await send1({ type: 'packCols', chunks: b, headers: colHeaders, num: numPlan, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
+        const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; if (liveChunks) { blockQ.push(qAdd(list)); pump(); } else await send1({ type: 'packCols', chunks: list, headers: colHeaders, num: numPlan, o: popts }, [].concat(...list.map(chunkBuffers))); };
+        drainNow = () => { if (!liveChunks || held) return; if (cq.length) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(qAdd(list)); } pump(); };
         colFlush = async () => { if (cq.length) await sendCols(); while (pumping) await pumping; if (pumpErr) throw pumpErr; };
         // Early view: the grid opens on the first parsed chunks and the row count grows while the file is still being read (a preview: no sort or filter until the end).
         const pvStarts = [0], pvDec = new TextDecoder(); let pvSent = 0, pvKind = null, pvOn = liveChunks !== null && m.preview !== false;
@@ -2449,7 +2461,7 @@ async function importOnce(m) {
           for (const c of liveChunks) retext(c);
           if (pvKind) { pvKind[k] = false; if (view && view.preview && view.columns[k]) { view.columns[k].type = 'string'; delete view.columns[k].decimals; } }
           if (!held) {
-            held = true; col.dup = false; cq = []; cqBytes = 0; cqRows = 0; blockQ.length = 0; while (pumping) await pumping;
+            held = true; col.dup = false; cq = []; cqBytes = 0; cqRows = 0; blockQ.length = 0; qBytes = 0; while (pumping) await pumping;
             while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
             await wchain; if (failed) throw failed;
             try { await writable.abort(); } catch { /* a new file replaces it */ } writable = await store.create(name); outBytes = 0;
@@ -2457,8 +2469,8 @@ async function importOnce(m) {
           }
           return true;
         };
-        const release = () => { if (!held) return; held = false; for (const c of liveChunks) { if (cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(list); } cq.push(dupChunk(c)); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 256) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(list); } } pump(); };
-        col = { demote, release, begin: async (h) => { colHeaders = h; if (h.length > 128) { t.wide = true; if (!m.colBlockBytes) colBlock = 16777216; } },   /* wide tables: LFC-pack has a fixed cost per column per block, so fewer, larger blocks (measured on a 703-column table) */ dup: !!liveChunks, push: async (c, c2) => { stop(job); if (liveChunks) { if (demoted.size) retext(c); liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } if (held) return; if (t.wide && cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) await sendCols(); cq.push(c2 || dupChunk(c)); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= (colHeaders.length > 128 ? 256 : 4096)) await sendCols(); } };
+        const release = () => { if (!held) return; held = false; for (const c of liveChunks) { if (cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(qAdd(list)); } cq.push(dupChunk(c)); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 256) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(qAdd(list)); } } pump(); };
+        col = { demote, release, begin: async (h) => { colHeaders = h; if (h.length > 128) { t.wide = true; if (!m.colBlockBytes) colBlock = 16777216; } },   /* wide tables: LFC-pack has a fixed cost per column per block, so fewer, larger blocks (measured on a 703-column table) */ get dup() { return !!liveChunks && !dupOff && qBytes < DUP_AHEAD; }, set dup(v) { dupOff = !v; }, push: async (c, c2) => { stop(job); if (liveChunks) { if (demoted.size) retext(c); liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } if (held) return; if (t.wide && cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) await sendCols(); cq.push(c2 || { lazy: c, n: c.n, bytes: c.bytes }); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= (colHeaders.length > 128 ? 256 : 4096)) await sendCols(); } };
       }
       const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
       packBytes = async (bytes) => {
@@ -2478,6 +2490,7 @@ async function importOnce(m) {
       };
       var packWorkersToStop = ws;
     }
+    if (pws && m.live === true) t.wantHand = () => (m.handHelpers != null ? m.handHelpers : !(isFirefox || /Chrome\//.test((self.navigator && navigator.userAgent) || '')) ? 0 : m.morePack || (((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8) ? (isFirefox ? 5 : 3) : isFirefox ? 3 : t.wide ? 3 : 1));   // WebKitGTK: new pack code on a fresh thread starts slowly there (first block 0.6-1.9 s), so it keeps its usual new pack workers
     let pre = null; if (!isFirefox && m.prewarm !== false && !m.untyped && !m.ndjson && !m.parquet && useSegments(m, file)) { try { pre = startPre(file, delimiter, m.parseHelpers); } catch { pre = null; } }
     let plan = m.untyped ? null : await samplePlan(file, delimiter); t.headRows = m.untyped ? 0 : samplePlan.headRows || 0; t.seed = m.untyped ? null : samplePlan.seed; t.plainTidy = !m.untyped && !!samplePlan.plainTidy; if (plan && m.demote) { plan = plan.map((x, c) => (m.demote.includes(c) ? false : x)); if (!plan.some(Boolean)) plan = null; } const dictPlan = !m.untyped && m.dict !== false ? samplePlan.dict || null : null, numPlan = !m.untyped && m.numFree !== false && samplePlan.num ? samplePlan.num.map((x, c) => x && !(plan && plan[c])) : null;
     let res = null;
@@ -2505,8 +2518,8 @@ async function importOnce(m) {
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
-    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) { view.cols.set(c.name, view.live.column(c.name)); (tsJobs ||= []).push([view, c.name, view.live]); }   /* typed seconds for Save are made after 'done' (not on the import's critical path) */   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ const wide = ((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);   // owner laptop (16 cores): Chrome is best at 4 pack workers in all (2 before), Firefox keeps gaining to 6; 4-core machines keep the old counts
-    if (morePack && m.morePack !== 0) morePack(m.morePack || (wide ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? (t.wide ? 3 : 1) : 2)); }   /* wide tables pack long after parsing ends, so Chromium gets three more pack workers there too */
+    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (morePack && m.morePack !== 0) { t.mpEarly = true; morePack((m.morePack || ((((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8)) ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? (t.wide ? 3 : 1) : 2))); } drainNow(); if (view && view.live) for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) { const v0 = view, g = v0.live.columnGen(c.name); let r, k = 0; while (!(r = g.next()).done) { if (++k % 4 === 0) await yieldNow(); } if (view === v0) { v0.cols.set(c.name, r.value); (tsJobs ||= []).push([v0, c.name, v0.live]); } }   /* typed seconds for Save are made after 'done' (not on the import's critical path) */   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ const wide = ((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);   // owner laptop (16 cores): Chrome is best at 4 pack workers in all (2 before), Firefox keeps gaining to 6; 4-core machines keep the old counts
+    if (!t.mpEarly && morePack && m.morePack !== 0) morePack(m.morePack || (wide ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? (t.wide ? 3 : 1) : 2)); }   /* wide tables pack long after parsing ends, so Chromium gets three more pack workers there too */
     if (view && view.preview && view.name === name && !(view.live)) { view = null; send('liveclosed', m.id, {}); }
     if (file && file.lazy) await file.settle(); await finishPacking(); if (res.refine) { res.refine(types); for (let i = 0; i < headers.length; i++) { cols[i].type = types[i].type; if (meta.tables[0].columns[i]) meta.tables[0].columns[i].type = types[i].type; } }
     if (res.lateKeys) {   // keys that first appear after the sampled rows become columns too (text type; the packed blocks hold the real values)
@@ -2741,7 +2754,7 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   };
   view = { name, R: null, f: null, total: rows, rows: null, columns: colsMeta, indices: null, filtered: false, cols: nums, flat: true, cache: new Map(), live: L };
   send('live', id, { name, total: rows, columns: colsMeta });
-  setTimeout(() => { if (colMod.primeTopN) for (const a of nums.values()) colMod.primeTopN(a); }, 0);
+  if (colMod.primeTopN) { const pl = [...nums.values()]; let pi = 0; const step = () => { if (pi < pl.length) { colMod.primeTopN(pl[pi++]); setTimeout(step, 0); } }; setTimeout(step, 0); }
   // The text columns the import does not keep as dictionary ids are made from the kept chunks as soon as the import has finished (see textFromChunks): a Save as LFCP or a text sort
   // right after the import finds them in memory instead of decoding them from the file (6 columns: 0.7-0.9 s). Done after, not during, the import so the import time does not change.
   const restK = []; for (let k = 0; k < n; k++) if (!kindOf[k] && !chunks.every((c) => c.cols[k].codes)) restK.push(k);
@@ -3179,6 +3192,7 @@ async function exportSummary(m) {
 function dropKeep(force) { if (self.__keepBusy && !force) { self.__keepDrop = true; return; }   // a Save is packing on them: dropped when it ends
   clearTimeout(self.__keepT); self.__keepBusy = false; self.__keepDrop = false; if (self.__keep) { for (const w of self.__keep) w.terminate(); self.__keep = null; } }
 function keepWorkers(ws, wide) { dropKeep(); if (!ws.length || !(isFirefox || wide)) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
+const SAVE_IDS = /Chrome\//.test((self.navigator && navigator.userAgent) || '');   // Chromium: Firefox's repeat Save was 20% slower this way (its first Save level)
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let writable = null, name = null, closed = false;
@@ -3186,14 +3200,14 @@ async function exportLfcp(m) {
     await LfcPack.init(); ensureFull();
     const t0 = performance.now();
     const cols0 = view.columns, LV = view.live || view.liveL || null, liveB = !m.noLiveBytes && !!(LV && LV.gather) && (cols0.length > 128 || !m.noBytesSave) && cols0.every((c) => view.cols.has(c.name) || LV.isText(c.name));   // a wide table still held as imported chunks: its text cells go to LFC-pack as bytes, so no column is turned into strings first
-    if (!liveB) await warmAll(); const tWarm = performance.now() - t0;
+    if (!liveB && !SAVE_IDS) await warmAll(); else if (!liveB && view.total <= 3000000) await warmCols(cols0.filter((c) => !(!c.derived && !view.cols.has(c.name) && view.dictCols && view.dictCols[c.name] && view.dictCols[c.name].ids.length === view.total)).map((c) => c.name)); const tWarm = performance.now() - t0;
     const cols = view.columns, count = view.filtered ? view.indices.length : view.total, keyQ = cols.map((c, i) => (i ? ',' : '{') + JSON.stringify(c.name) + ':');
     name = safe(view.name.replace(/-[0-9a-f-]{36}\.json\.lfc$/, '')) + '-view-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
-    const wideS = liveB && cols0.length > 128 && !m.noWideSave, BATCH = m.batch || 16384, PIECE = wideS ? (m.piece || 1024) : 0, tm = { rows: 0, text: 0, pack: 0 }, dOf = (c) => { if (c.type !== 'string' || c.derived) return null; const d = view.dictCols ? view.dictCols[c.name] : null; return d && d.ids.length === view.total ? d : null; }, LT = !liveB && !m.noKeptText && view.liveT ? view.liveT : null, tOf = (c) => !!LT && LT.names.has(c.name) && !view.cols.has(c.name), allWarm = liveB || cols.every((c) => view.cols.has(c.name) || dOf(c) || tOf(c)),   /* a column kept as dictionary ids counts as in memory: its cells for the saved rows come from the ids */ popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
+    const wideS = liveB && cols0.length > 128 && !m.noWideSave, BATCH = m.batch || 16384, PIECE = wideS ? (m.piece || 1024) : 0, tm = { rows: 0, text: 0, pack: 0 }, dOf = (c) => { if (c.derived || (c.type !== 'string' && (view.cols.has(c.name) || !SAVE_IDS))) return null; const d = view.dictCols ? view.dictCols[c.name] : null; return d && d.ids.length === view.total ? d : null; }, LT = !liveB && !m.noKeptText && view.liveT ? view.liveT : null, tOf = (c) => !!LT && LT.names.has(c.name) && !view.cols.has(c.name), allWarm = liveB || cols.every((c) => view.cols.has(c.name) || dOf(c) || tOf(c)),   /* a column kept as dictionary ids counts as in memory: its cells for the saved rows come from the ids */ popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
     const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
     // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
     const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / (PIECE || BATCH)) >= (wideS ? 2 : 13) ? self.__keep : null;
