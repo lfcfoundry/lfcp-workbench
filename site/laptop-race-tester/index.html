@@ -43,15 +43,15 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2322, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.27.2323, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
-<div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
+<div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its test files itself (about 180 MB, once; the real-file races add about 36 MB).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
 <div class="score"><div><b id="s1">-</b><span>H6 exoplanets: Workbench share of DuckDB base's time</span></div><div><b id="s2">-</b><span>H4 Wikimedia: share of DuckDB base's time</span></div><div><b id="s3">-</b><span>H4: share of DuckDB threaded's time</span></div><div><b id="s4">0</b><span>runs finished</span></div></div>
 <div class="card"><h2 id="head">Total time start to finish, by race</h2><p class="note">Shorter is better. Grey is DuckDB, blue is Workbench (counted when its table is usable and saved). Each dot is one run.</p>
 <div class="key"><span><i style="background:var(--us)"></i>Workbench (middle run)</span><span><i style="background:var(--rival)"></i>DuckDB</span><span><i style="background:var(--dot);width:10px;border-radius:5px"></i>each run</span></div>
 <div class="panels" id="panels"><p class="note">The charts appear here as runs finish.</p></div></div>
-<details><summary>Options: pick races or use my own files</summary><label><input type="checkbox" id="runh4" checked> H4 Wikimedia pageviews (15.3 million rows)</label><label><input type="checkbox" id="runh6" checked> H6 NASA exoplanets (6,473 rows, 703 columns)</label><label><input type="checkbox" id="runpq" checked> Parquet import, old against new (two made-up 21 MB files and the public NYC taxi file, 50 MB)</label><p class="note">Wikimedia file: <input type="file" id="fwiki"> &nbsp; Exoplanets file: <input type="file" id="fexo"></p></details>
+<details><summary>Options: pick races or use my own files</summary><label><input type="checkbox" id="runh4" checked> H4 Wikimedia pageviews (15.3 million rows)</label><label><input type="checkbox" id="runh6" checked> H6 NASA exoplanets (6,473 rows, 703 columns)</label><label><input type="checkbox" id="runrf" checked> Real files: e-commerce (45.6 MB, Latin-1), NYC taxi CSV (163 MB) and the same taxi file zipped (29 MB)</label><label><input type="checkbox" id="runpq" checked> Parquet import, old against new (two made-up 21 MB files and the public NYC taxi file, 50 MB)</label><p class="note">Wikimedia file: <input type="file" id="fwiki"> &nbsp; Exoplanets file: <input type="file" id="fexo"></p></details>
 <details><summary>What is measured</summary><p class="note">Two public Wikimedia pageview hours joined (H4, 15.3 million rows) and the NASA exoplanet table (H6, 6,473 rows by 703 columns), fetched by this page and kept in browser storage. Each run starts from a fresh page. Workbench is timed from import start until its table is usable and saved as a view; its stored copy finishes later and is reported on its own line. DuckDB-WASM (base build, plus a self-built threaded build, labeled estimated performance) imports the file, adds the first-letter column, filters, sorts, summarizes and writes Parquet. Runs alternate, the order swaps each round, and the threaded runs go last because they can stall on some machines. The parse-thread sweep runs Workbench with 2, 4, 6 and 8 reading threads (8 is the most Workbench uses).</p></details>
 <details id="chkd"><summary>Browser check (use it if a tab crashes)</summary><div class="card"><p class="note">Runs the browser calls the races use, one at a time, and notes each step before it runs. If the tab dies, reload this page: it says which step it died in. Nothing is sent anywhere.</p><div class="bar"><button id="chk">Browser check<small>about 20 seconds</small></button></div><pre id="chkout" style="white-space:pre-wrap;font:12.5px/1.45 var(--mono);margin:0"></pre></div></details>
 <details id="rawd"><summary>Results as text</summary><textarea id="out" readonly rows="14" autocomplete="off"></textarea></details>
@@ -68,6 +68,13 @@ const CFG = {
     rc: ", delim=' ', quote=''", derive: 'substr(page,1,1)', filter: "project='en' AND views>=100", sort: 'views DESC, project, page', agg: 'SELECT project AS k, count(*)::INT AS n, 0 AS a FROM c GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', rows: 15324510 },
   exo: { name: 'H6 exoplanets', wb: { derive: { source: 'hostname', fn: 'first', name: 'pfx' }, f: { discoverymethod: '=Transit', pl_rade: '>=1' }, sort: { col: 'pl_rade', dir: 'desc' }, key: 'discoverymethod', aggs: [{ fn: 'count' }] },
     rc: ", delim=',', strict_mode=false", derive: 'substr(hostname,1,1)', filter: "discoverymethod='Transit' AND pl_rade>=1", sort: 'pl_rade DESC, pl_name', agg: 'SELECT discoverymethod AS k, count(*)::INT AS n, 0 AS a FROM c GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', rows: 6473 } };
+const TAXI = { wb: { derive: { source: 'tpep_pickup_datetime', fn: 'hour', name: 'hour' }, f: { payment_type: '=1', trip_distance: '>=5' }, sort: { col: 'tip_amount', dir: 'desc' }, key: 'PULocationID', aggs: [{ fn: 'count' }] },
+  rc: ", delim=','", derive: 'hour(tpep_pickup_datetime)', filter: 'payment_type=1 AND trip_distance>=5', sort: 'tip_amount DESC, tpep_pickup_datetime', agg: 'SELECT PULocationID AS k, count(*)::INT AS n, 0 AS a FROM c GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', rows: 1500000 };
+CFG.ecom = { name: 'E-commerce, 541,909 rows (real file, Latin-1)', wb: { derive: { source: 'InvoiceDate', fn: 'hour', name: 'hour' }, f: { Country: '=United Kingdom', Quantity: '>=10' }, sort: { col: 'UnitPrice', dir: 'desc' }, key: 'StockCode', aggs: [{ fn: 'count' }] },
+  rc: ", delim=',', encoding='latin-1'", derive: "hour(try_strptime(CAST(InvoiceDate AS VARCHAR), '%m/%d/%Y %H:%M'))", filter: "Country='United Kingdom' AND Quantity>=10", sort: 'UnitPrice DESC, InvoiceNo, StockCode', agg: 'SELECT StockCode AS k, count(*)::INT AS n, 0 AS a FROM c GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', rows: 541909 };
+CFG.taxi = Object.assign({ name: 'NYC taxi CSV, 1.5 million rows (real file)' }, TAXI);
+CFG.taxz = Object.assign({ name: 'NYC taxi zipped CSV (DuckDB unzips it first, counted)' }, TAXI);
+const DSN = { exo: 'H6', wiki: 'H4', ecom: 'E-commerce', taxi: 'Taxi CSV', taxz: 'Taxi zip' }, RF = ['ecom', 'taxi', 'taxz'], DSW = { exo: 1, wiki: 3, ecom: 1, taxi: 2, taxz: 2 };
 let ST = null, threadedOk = false, curLabel = '', curW = 1, tNow0 = Date.now();
 const dl = { on: false, got: 0, total: 0, t: 0, label: '' };   // the download phase: the bar and the text show bytes, speed and time left
 const setBar = (f) => { $('bar').style.width = Math.round(100 * f) + '%'; };
@@ -145,8 +152,22 @@ async function hosted(name, parts, header, label, plain) {
 const getWiki = () => hosted('lt-h4-wiki.txt', ['./data/pageviews-20240115-110000.gz', './data/pageviews-20240115-120000.gz'], 'project page views bytes\n', 'H4');
 const getExo = () => hosted('lt-h6-exo.csv', ['./data/exo.csv.gz'], null, 'H6');
 const getPq1 = () => hosted('lt-pq1.parquet', ['./data/standin-1group.parquet'], null, 'Parquet', true), getPq3 = () => hosted('lt-pq3.parquet', ['./data/standin-3groups.parquet'], null, 'Parquet', true), getPq4 = () => hosted('lt-pq4.parquet', ['./data/yellow_tripdata_2024-01.parquet'], null, 'Parquet', true);
-const NEED = { wiki: 850, exo: 100, pq1: 100, pq3: 100, pq4: 180 };   // MB of browser storage one race needs: its test file unpacked plus Workbench's stored copy
-const dataOf = { wiki: 'lt-h4-wiki.txt', exo: 'lt-h6-exo.csv', pq1: 'lt-pq1.parquet', pq3: 'lt-pq3.parquet', pq4: 'lt-pq4.parquet' };
+const getEcom = () => hosted('lt-ecom.csv', ['./data/ecom-latin1.csv.gz'], null, 'E-commerce');
+const getTaxiZip = () => hosted('lt-taxi.zip', ['./data/taxi-1p5m.zip'], null, 'Taxi zip', true);
+async function zipEntryStream(zf) {   // the single deflate entry of a zip file, as a stream of inflated bytes (the zip is read from its central directory)
+  const tail = new Uint8Array(await zf.slice(Math.max(0, zf.size - 65557)).arrayBuffer()), tv = new DataView(tail.buffer); let e = tail.length - 22; while (e >= 0 && tv.getUint32(e, true) !== 0x06054b50) e--; if (e < 0) throw new Error('not a zip file');
+  const cdOff = tv.getUint32(e + 16, true), cd = new Uint8Array(await zf.slice(cdOff, cdOff + 46).arrayBuffer()), cv = new DataView(cd.buffer), csz = cv.getUint32(20, true), lho = cv.getUint32(42, true);
+  const lh = new Uint8Array(await zf.slice(lho, lho + 30).arrayBuffer()), lv = new DataView(lh.buffer), start = lho + 30 + lv.getUint16(26, true) + lv.getUint16(28, true);
+  return zf.slice(start, start + csz).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+}
+async function getTaxiCsv() {   // the taxi CSV is the zip's entry, unpacked once into browser storage
+  const dir = await navigator.storage.getDirectory(), name = 'lt-taxi.csv';
+  try { const have = await (await dir.getFileHandle(name)).getFile(); if (have.size > 0) { const mark = await (await dir.getFileHandle(name + '.ok')).getFile(); if (mark.size) return have; } } catch (e) { /* not there yet */ }
+  const zf = await getTaxiZip(), w = await (await dir.getFileHandle(name, { create: true })).createWritable(); await (await zipEntryStream(zf)).pipeTo(w);
+  const ok = await (await dir.getFileHandle(name + '.ok', { create: true })).createWritable(); await ok.write('1'); await ok.close(); return (await dir.getFileHandle(name)).getFile();
+}
+const NEED = { ecom: 120, taxi: 500, taxz: 330, wiki: 850, exo: 100, pq1: 100, pq3: 100, pq4: 180 };   // MB of browser storage one race needs: its test file unpacked plus Workbench's stored copy
+const dataOf = { ecom: 'lt-ecom.csv', taxi: 'lt-taxi.csv', taxz: 'lt-taxi.zip', wiki: 'lt-h4-wiki.txt', exo: 'lt-h6-exo.csv', pq1: 'lt-pq1.parquet', pq3: 'lt-pq3.parquet', pq4: 'lt-pq4.parquet' };
 async function dropData(keep) { try { const d = await navigator.storage.getDirectory(); for (const k in dataOf) { if (k === keep) continue; await d.removeEntry(dataOf[k]).catch(() => {}); await d.removeEntry(dataOf[k] + '.ok').catch(() => {}); } } catch (e) { /* none */ } }   // a small-storage browser keeps one test file at a time
 async function storageQuotaMB() { try { const e = await navigator.storage.estimate(); return Math.round((e.quota || 0) / 1048576); } catch (e) { return 0; } }
 // ---- Workbench: the app's own worker, the same messages as the app (import live, open, group, add column, filter, sort, summarize, Save) ----
@@ -206,6 +227,7 @@ async function duckRun(kind, file, c, extra) {
     const abs = (p) => new URL(p, location.href).href;
     await T('start', async () => { if (thr) { await db.instantiate(abs('./duck/duckdb-threads.wasm'), abs('./duck/duckdb-browser-threads.pthread.worker.js')); await db.open({ allowUnsignedExtensions: true }); } else await db.instantiate(abs('./duck/duckdb-base.wasm')); });
     const cn = await db.connect(); const q = (s) => cn.query(s); stage('setup'); const nth = (extra && extra.threads) || duckThreads(); if (thr) await q('SET threads=' + nth);
+    if (/\.zip$/i.test(file.name || '')) await T('unzip', async () => { file = new File([await new Response(await zipEntryStream(file)).blob()], 'data.csv'); });   // DuckDB does not read zips: the unzip is inside its time
     stage('open file'); await db.registerFileHandle('data.csv', file, duck.DuckDBDataProtocol.BROWSER_FILEREADER, true);
     let rows; await T('import', async () => { await q("CREATE TABLE raw AS SELECT * FROM read_csv('data.csv', header=true" + c.rc + ')'); rows = (await q('SELECT count(*)::INT AS n FROM raw')).get(0).n; });
     await T('add_column', async () => { await q('CREATE TABLE c AS SELECT *, ' + c.derive + ' AS pfx FROM raw'); await q('DROP TABLE raw'); });
@@ -221,11 +243,11 @@ async function duckRun(kind, file, c, extra) {
 const ENG = { workbench: (f, c) => wbRun(f, c, null, true), base: (f, c) => duckRun('base', f, c), threaded: (f, c) => duckRun('threaded', f, c) };
 const LAB = { wb: 'Workbench', base: 'DuckDB base', thr: 'DuckDB threaded (self-built extension, estimated performance)' };
 const sweepNs = (full) => { const cores = navigator.hardwareConcurrency || 4; return [2, 4, 6, 8].filter((x) => x <= Math.max(2, cores)); };
-function buildJobs(full, hasWiki, hasExo, hasPq, pqSets) {
+function buildJobs(full, hasWiki, hasExo, hasPq, pqSets, rfSets) {
   const J = [], add = (ds, eng, label, w, extra, chart, grp, to) => J.push({ ds, eng, label, w, extra: extra || null, chart: !!chart, grp, to: to || 420 });
-  const dsn = (ds) => ds === 'wiki' ? 'H4' : 'H6';
-  for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) {
-    if (!ds) continue; const w = ds === 'wiki' ? 3 : 1, cw = full ? 3 : 2, cb = full || ds === 'exo' ? cw : 1, n = Math.max(cw, cb);
+  const dsn = (ds) => DSN[ds];
+  for (const ds of [hasExo ? 'exo' : null, ...(rfSets || []), hasWiki ? 'wiki' : null]) {
+    if (!ds) continue; const w = DSW[ds], cw = full ? 3 : 2, cb = full || ds !== 'wiki' ? cw : 1, n = Math.max(cw, cb);
     for (let i = 0; i < n; i++) { const order = [i < cw ? 'wb' : null, i < cb ? 'base' : null].filter(Boolean); if (i % 2) order.reverse(); for (const e of order) add(ds, e, dsn(ds) + ' ' + LAB[e] + ', run ' + (i + 1) + ' of ' + (e === 'wb' ? cw : cb), w, null, e === 'wb', 'race'); }
     if (ds === 'wiki') {
       for (let i = 0; i < (full ? 2 : 1); i++) for (const v of (i % 2 ? ['off', 'on'] : ['on', 'off'])) add('wiki', 'wb', 'Early chart ' + v + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), 3, v === 'off' ? { noEarlyChart: true } : null, v === 'on', 'chart-' + v);
@@ -233,7 +255,7 @@ function buildJobs(full, hasWiki, hasExo, hasPq, pqSets) {
     }
   }
   if (hasPq) for (const ds of (pqSets || ['pq1', 'pq3', 'pq4'])) { const n = full ? 3 : 1; for (let i = 0; i < n; i++) for (const e of (ds === 'pq1' ? ['pqold', 'pq132', 'pqcur', 'pqnew', 'pqpool'].map((_, q, a) => a[(q + (i * 2) % 5) % 5]) : (i % 2 ? ['pqnew', 'pqold'] : ['pqold', 'pqnew']))) add(ds, e, (ds === 'pq1' ? 'Parquet 1 group, ' : ds === 'pq3' ? 'Parquet 3 groups, ' : 'Parquet taxi, ') + (e === 'pqold' ? 'old import' : e === 'pq132' ? 'build 2240 import' : e === 'pqcur' ? 'build 2250 import' : e === 'pqpool' ? 'new import, pack pool forced on' : 'new import') + ', run ' + (i + 1) + ' of ' + n, 1, null, false, 'race', 150); }
-  if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), ds === 'wiki' ? 3 : 1, null, false, 'race', 120);   // last: it is the one that hangs on some machines
+  if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null, ...(full ? (rfSets || []) : [])]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), DSW[ds], null, false, 'race', 120);   // last: it is the one that hangs on some machines
   if (threadedOk && hasWiki && (navigator.hardwareConcurrency || 4) > 8) add('wiki', 'thr', 'H4 DuckDB threaded limited to 4 threads', 3, { threads: 4 }, false, 'thr4', 120);   // shows whether the full thread count is what stalls
   return J;
 }
@@ -241,16 +263,16 @@ function report(final) {
   const L = [], R = ST.results, get = (ds, grp, eng) => R.filter((r) => ST.jobs[r.i].ds === ds && ST.jobs[r.i].grp === grp && ST.jobs[r.i].eng === eng && !r.err).map((r) => r.r);
   if (ST.low) L.push('Storage this browser allows: ' + ST.qmb + ' MB (small), so test files were fetched one at a time. Skipped because they need more: ' + ((ST.skipped || []).join(', ') || 'nothing') + '.', '');
   L.push(coresLine(), 'Threaded DuckDB runs with ' + duckThreads() + ' threads (half the reported threads at 8 or fewer, all above 8).', '', (final ? '' : 'PARTIAL RESULTS (' + R.length + ' of ' + ST.jobs.length + ' runs finished)\n') + 'Laptop race tester ' + (ST.ver || '') + ', ' + new Date(ST.t0).toString(), 'Browser: ' + ST.ua, 'Cores: ' + ST.cores + '   deviceMemory: ' + (ST.mem || 'n/a') + '   threaded DuckDB ' + (ST.threaded ? 'available' : 'NOT available (page not cross-origin isolated)') + '   plan: ' + (ST.full ? 'full' : 'quick') + '   every run in a fresh page', '');
-  const wbN = ['import', 'open', 'summarize_first', 'add_column', 'filter', 'sort', 'summarize', 'save'], dkN = ['start', 'import', 'add_column', 'filter', 'sort', 'summarize', 'save_parquet'];
+  const wbN = ['import', 'open', 'summarize_first', 'add_column', 'filter', 'sort', 'summarize', 'save'], dkN = ['unzip', 'start', 'import', 'add_column', 'filter', 'sort', 'summarize', 'save_parquet'];
   const stepLine = (a, names) => names.filter((n) => a.some((r) => r.steps[n] !== undefined)).map((n) => n + ' ' + sec(med(a.filter((r) => r.steps[n] !== undefined).map((r) => r.steps[n])))).join(', ');
-  for (const ds of ['exo', 'wiki']) {
+  for (const ds of ['exo', 'ecom', 'taxi', 'taxz', 'wiki']) {
     if (!R.some((r) => ST.jobs[r.i].ds === ds)) continue; const c = CFG[ds], res = { wb: get(ds, 'race', 'wb'), base: get(ds, 'race', 'base'), thr: get(ds, 'race', 'thr') };
     L.push(c.name + ': total time start to finish, median of the finished runs, alternating');
     for (const e of ['wb', 'base', 'thr']) { const a = res[e]; if (!a.length) { if (e !== 'thr' || ST.threaded) L.push('  ' + LAB[e] + ': no finished run'); continue; } L.push('  ' + LAB[e] + ': ' + sec(med(a.map((r) => r.total))) + '   (runs ' + a.map((r) => sec(r.total)).join(', ') + ')   [' + stepLine(a, e === 'wb' ? wbN : dkN) + ']'); }
     const t4 = get(ds, 'thr4', 'thr'); if (t4.length) L.push('  DuckDB threaded limited to 4 threads: ' + sec(med(t4.map((r) => r.total))) + '   [' + stepLine(t4, dkN) + ']');
     if (res.wb.length && res.base.length) { const w = med(res.wb.map((r) => r.total)), b = med(res.base.map((r) => r.total)); L.push('  Verdict: Workbench ' + (w < b ? 'WINS' : 'LOSES') + ' against DuckDB base by ' + sec(Math.abs(w - b)) + ' (' + pct(w, b) + ')'); }
     if (res.wb.length && res.thr.length) { const w = med(res.wb.map((r) => r.total)), t = med(res.thr.map((r) => r.total)); L.push('  Verdict: Workbench ' + (w < t ? 'WINS' : 'LOSES') + ' against DuckDB threaded by ' + sec(Math.abs(w - t)) + ' (' + pct(w, t) + ')'); }
-    if (res.wb.length) { const wr = res.wb[0]; L.push('  Workbench is usable (table, group, add column, filter, sort, Save) at the time shown; its stored copy in the browser finished at ' + sec(med(res.wb.map((r) => r.storedAt))) + '. DuckDB keeps nothing.', '  Rows: ' + wr.rows + ' (expected ' + c.rows + '), filter keeps ' + wr.filterRows + ', Save wrote ' + wr.saveRows + ' rows' + (wr.rows === c.rows ? '' : '  <-- ROW COUNT DIFFERS')); }
+    if (res.wb.length) { const tm = (k) => { const v = res.wb.map((r) => r.timing && r.timing[k]).filter((x) => typeof x === 'number'); return v.length ? sec(med(v)) : '-'; }; L.push('  Stage line, Workbench: import usable at ' + sec(med(res.wb.map((r) => r.steps.import))) + ', parse ' + tm('parseMs') + ', pack on the import thread ' + tm('packMs') + ', pack workers and write ' + tm('writeMs') + ' (these overlap), stored copy done at ' + sec(med(res.wb.map((r) => r.storedAt))) + ', Save ' + sec(med(res.wb.map((r) => r.steps.save))) + (res.base.length ? '. DuckDB base: ' + stepLine(res.base, ['unzip', 'start', 'import', 'save_parquet']) : '')); const wr = res.wb[0]; L.push('  Two times for Workbench: usable (import, group, add column, filter, sort, Save, the number in the verdict) ' + sec(med(res.wb.map((r) => r.total))) + ', and stored copy done ' + sec(med(res.wb.map((r) => r.storedAt))) + '. DuckDB keeps nothing.', '  Rows: ' + wr.rows + ' (expected ' + c.rows + '), filter keeps ' + wr.filterRows + ', Save wrote ' + wr.saveRows + ' rows' + (wr.rows === c.rows ? '' : '  <-- ROW COUNT DIFFERS')); }
     L.push('');
   }
   const on = get('wiki', 'chart-on', 'wb'), off = get('wiki', 'chart-off', 'wb');
@@ -261,7 +283,7 @@ function report(final) {
   { const o1 = get('pq1', 'race', 'pqold'); if (o1.length) for (const [eg, nm] of [['pq132', 'build 2240'], ['pqcur', 'build 2250 (before the fix)'], ['pqpool', 'new, pack pool forced on (measure only)']]) { const v = get('pq1', 'race', eg); if (v.length) pqL.push('  Parquet, one row group, ' + nm + ': ' + sec(med(v.map((r) => r.total))) + ' (' + v.map((r) => sec(r.total)).join(', ') + '), against old ' + pct(med(v.map((r) => r.total)), med(o1.map((r) => r.total)))); } }
   if (pqL.length) { L.push('Parquet import, whole import to the stored file, old code against new (' + ST.cores + ' cores)', ...pqL, ''); }
   const bad = R.filter((r) => r.err); if (bad.length) { L.push('Runs that failed (' + bad.length + '):'); for (const r of bad) L.push('  ' + ST.jobs[r.i].label + ': ' + r.err); L.push(''); }
-  L.push('Not measured here: overlap of column unpack and Save with parse (not built yet). The DuckDB Parquet extension install is outside the timing.', '', 'Raw:'); for (const r of R) L.push('  ' + ST.jobs[r.i].label + ' ' + (r.err ? 'FAILED ' + r.err : JSON.stringify({ total: r.r.total, steps: r.r.steps, storedAt: r.r.storedAt, rows: r.r.rows, filterRows: r.r.filterRows })));
+  L.push('Not measured here: overlap of column unpack and Save with parse (not built yet). The DuckDB Parquet extension install is outside the timing.', '', 'Raw:'); for (const r of R) L.push('  ' + ST.jobs[r.i].label + ' ' + (r.err ? 'FAILED ' + r.err : JSON.stringify({ total: r.r.total, steps: r.r.steps, storedAt: r.r.storedAt, timing: r.r.timing, rows: r.r.rows, filterRows: r.r.filterRows })));
   return L.join('\n');
 }
 
@@ -269,10 +291,10 @@ const fmtS = (ms) => (ms / 1000).toFixed(1) + ' s';
 function draw() {
   if (!ST) return; const R = ST.results.filter((r) => !r.err), host = $('panels'); let html = '';
   const vals = (ds, eng) => R.filter((r) => ST.jobs[r.i].ds === ds && ST.jobs[r.i].grp === 'race' && ST.jobs[r.i].eng === eng).map((r) => r.r.total);
-  for (const ds of ['exo', 'wiki']) {
+  for (const ds of ['exo', 'ecom', 'taxi', 'taxz', 'wiki']) {
     const rows = [['wb', 'Workbench'], ['base', 'DuckDB base'], ['thr', 'DuckDB threaded']].map(([e, n]) => [e, n, vals(ds, e)]).filter((x) => x[2].length); if (!rows.length) continue;
     const top = Math.max(...rows.map((x) => Math.max(...x[2]))) * 1.18, W = 360, L = 112, Rm = 52, rh = 40, H = rows.length * rh + 30, pw = W - L - Rm, X = (v) => L + v / top * pw;
-    let s = '<div><h3>' + (ds === 'wiki' ? 'H4 Wikimedia, 15.3 million rows' : 'H6 exoplanets, 703 columns') + '</h3><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Total time by engine">';
+    let s = '<div><h3>' + (ds === 'wiki' ? 'H4 Wikimedia, 15.3 million rows' : ds === 'exo' ? 'H6 exoplanets, 703 columns' : CFG[ds].name) + '</h3><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Total time by engine">';
     rows.forEach(([e, n, v], k) => { const so = v.slice().sort((a, b) => a - b), mid = so[so.length >> 1], y = 6 + k * rh, col = e === 'wb' ? 'var(--us)' : 'var(--rival)';
       s += '<text x="' + (L - 8) + '" y="' + (y + 17) + '" font-size="11.5" fill="var(--fg)" text-anchor="end">' + n + '</text><rect x="' + L + '" y="' + y + '" width="' + (X(mid) - L) + '" height="24" rx="2" fill="' + col + '"/>';
       v.forEach((q) => { s += '<circle cx="' + X(q) + '" cy="' + (y + 12) + '" r="3" fill="var(--dot)" stroke="var(--bg)" stroke-width="1"/>'; });
@@ -309,7 +331,7 @@ async function copyText(t) {
   if (!ok) { $('rawd').open = true; const o = $('out'); o.focus(); o.select(); }
 }
 function downloadText(t) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([t], { type: 'text/plain' })); a.download = 'laptop-race-results.txt'; document.body.appendChild(a); a.click(); a.remove(); }
-const FILES = { wiki: () => getWiki(), exo: () => getExo(), pq1: () => getPq1(), pq3: () => getPq3(), pq4: () => getPq4() };
+const FILES = { ecom: () => getEcom(), taxi: () => getTaxiCsv(), taxz: () => getTaxiZip(), wiki: () => getWiki(), exo: () => getExo(), pq1: () => getPq1(), pq3: () => getPq3(), pq4: () => getPq4() };
 async function runNext() {
   while (ST.idx < ST.jobs.length && !ST.stopped) {
     const job = ST.jobs[ST.idx]; curLabel = job.label; panel(); ST.cur = ST.idx; ST.stage = ''; saveState();   // marks the run as started: if the page dies mid-run (out of memory), the reload sees the mark and records that run as crashed
@@ -332,12 +354,14 @@ async function ownFile(file, name) {   // a picked file is copied into browser s
 async function start(fullFlag, pqOnly) {
   busy(true); $('copy').disabled = true; $('save').disabled = true; $('copied').textContent = ''; $('panel').className = ''; $('panel').textContent = 'Starting: checking for the test files...';
   const full = fullFlag || !!pqOnly || !!Q.get('full'), pw = $('fwiki').files[0], pe = $('fexo').files[0];
-  let hasWiki = !pqOnly && ($('runh4').checked || !!pw), hasExo = !pqOnly && ($('runh6').checked || !!pe); const hasPq = pqOnly || $('runpq').checked;
+  const rfOnly = Q.get('only') === 'rf';   // a link switch for short checks: H6 and the real files only
+  let hasWiki = !pqOnly && !rfOnly && ($('runh4').checked || !!pw), hasExo = !pqOnly && ($('runh6').checked || !!pe); const hasPq = !rfOnly && (pqOnly || $('runpq').checked); let rfSets = pqOnly || !$('runrf').checked ? [] : ['ecom', 'taxi', 'taxz'];
   const qmb = await storageQuotaMB(), low = qmb > 0 && qmb < 2048, skipped = []; let pqSets = ['pq1', 'pq3', 'pq4'];
   if (low) {   // this browser allows little storage (a nearly full disk): fetch one test file at a time and skip the races that cannot fit
     const fit = (k) => NEED[k] <= qmb * 0.9;
     if (hasWiki && !fit('wiki')) { hasWiki = false; skipped.push('H4 Wikimedia (needs about ' + NEED.wiki + ' MB)'); }
     if (hasExo && !fit('exo')) { hasExo = false; skipped.push('H6 exoplanets (needs about ' + NEED.exo + ' MB)'); }
+    if (rfSets.length) { const out = rfSets.filter((k) => !fit(k)); out.forEach((k) => skipped.push(DSN[k] + ' (needs about ' + NEED[k] + ' MB)')); rfSets = rfSets.filter(fit); }
     if (hasPq) { const out = pqSets.filter((k) => !fit(k)); out.forEach((k) => skipped.push('Parquet ' + k + ' (needs about ' + NEED[k] + ' MB)')); pqSets = pqSets.filter(fit); }
     $('panel').textContent = 'This browser allows only ' + qmb + ' MB of storage here, so the test files are fetched one at a time.' + (skipped.length ? ' Skipped: ' + skipped.join(', ') + '.' : '');
   }
@@ -347,11 +371,12 @@ async function start(fullFlag, pqOnly) {
     else {
     if (pw) { await ownFile(pw, 'lt-h4-wiki.txt'); } else if (hasWiki) await getWiki();
     if (pe) { await ownFile(pe, 'lt-h6-exo.csv'); } else if (hasExo) await getExo();
+    if (rfSets.length) { await getEcom(); await getTaxiZip(); await getTaxiCsv(); }
     if (hasPq) { await getPq1(); await getPq3(); await getPq4(); }
     }
   } catch (e) { $('panel').textContent = 'Could not get the test files: ' + (e && e.message || e) + '. Use the "my own files" box instead.'; $('panel').className = 'bad'; dl.on = false; busy(false); return; }
-  if (!hasWiki && !hasExo && !hasPq2) { $('panel').textContent = 'Tick at least one race, or pick a file.'; busy(false); return; }
-  const jobs = buildJobs(full, hasWiki, hasExo, hasPq2, pqSets);
+  if (!hasWiki && !hasExo && !hasPq2 && !rfSets.length) { $('panel').textContent = 'Tick at least one race, or pick a file.'; busy(false); return; }
+  const jobs = buildJobs(full, hasWiki, hasExo, hasPq2, pqSets, rfSets);
   ST = { running: true, full, jobs, results: [], idx: 0, t0: Date.now(), tRace: Date.now(), wTot: jobs.reduce((a, j) => a + j.w, 0), stopped: false, ua: navigator.userAgent, cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory, threaded: threadedOk, ver: document.getElementById('ver').textContent, last: '', low, qmb, skipped };
   saveState(); $('stop').disabled = false; await runNext();
 }
