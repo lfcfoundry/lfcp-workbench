@@ -43,7 +43,7 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2239, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.26.2250, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its two test files itself (about 140 MB, once).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -194,6 +194,7 @@ async function pqRun(workerUrl, file, ds, extra) {   // whole import to the stor
     });
   } finally { try { w.terminate(); } catch (e) { /* gone */ } }
 }
+const duckThreads = () => { const n = navigator.hardwareConcurrency || 4; return n <= 8 ? Math.max(1, n >> 1) : n; };   // owner card 11.26: half the reported threads at 8 or fewer (hyperthreads), all above 8
 let duckStage = '';
 const stage = (n) => { duckStage = n; if (ST) { ST.stage = n; saveState(); } };   // the step the run is in is kept, so a dead page can say where it stopped
 async function duckRun(kind, file, c, extra) {
@@ -203,7 +204,7 @@ async function duckRun(kind, file, c, extra) {
   try {
     const abs = (p) => new URL(p, location.href).href;
     await T('start', async () => { if (thr) { await db.instantiate(abs('./duck/duckdb-threads.wasm'), abs('./duck/duckdb-browser-threads.pthread.worker.js')); await db.open({ allowUnsignedExtensions: true }); } else await db.instantiate(abs('./duck/duckdb-base.wasm')); });
-    const cn = await db.connect(); const q = (s) => cn.query(s); stage('setup'); const nth = (extra && extra.threads) || navigator.hardwareConcurrency || 4; if (thr) await q('SET threads=' + nth);
+    const cn = await db.connect(); const q = (s) => cn.query(s); stage('setup'); const nth = (extra && extra.threads) || duckThreads(); if (thr) await q('SET threads=' + nth);
     stage('open file'); await db.registerFileHandle('data.csv', file, duck.DuckDBDataProtocol.BROWSER_FILEREADER, true);
     let rows; await T('import', async () => { await q("CREATE TABLE raw AS SELECT * FROM read_csv('data.csv', header=true" + c.rc + ')'); rows = (await q('SELECT count(*)::INT AS n FROM raw')).get(0).n; });
     await T('add_column', async () => { await q('CREATE TABLE c AS SELECT *, ' + c.derive + ' AS pfx FROM raw'); await q('DROP TABLE raw'); });
@@ -232,13 +233,13 @@ function buildJobs(full, hasWiki, hasExo, hasPq, pqSets) {
   }
   if (hasPq) for (const ds of (pqSets || ['pq1', 'pq3', 'pq4'])) { const n = full ? 3 : 1; for (let i = 0; i < n; i++) for (const e of (ds === 'pq1' ? [['pqold', 'pqnew', 'pqforce'], ['pqforce', 'pqold', 'pqnew'], ['pqnew', 'pqforce', 'pqold']][i % 3] : (i % 2 ? ['pqnew', 'pqold'] : ['pqold', 'pqnew']))) add(ds, e, (ds === 'pq1' ? 'Parquet 1 group, ' : ds === 'pq3' ? 'Parquet 3 groups, ' : 'Parquet taxi, ') + (e === 'pqold' ? 'old import' : e === 'pqforce' ? 'new import, column chunks forced' : 'new import') + ', run ' + (i + 1) + ' of ' + n, 1, null, false, 'race', 150); }
   if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), ds === 'wiki' ? 3 : 1, null, false, 'race', 120);   // last: it is the one that hangs on some machines
-  if (threadedOk && hasWiki && (navigator.hardwareConcurrency || 4) > 4) add('wiki', 'thr', 'H4 DuckDB threaded limited to 4 threads', 3, { threads: 4 }, false, 'thr4', 120);   // shows whether the full thread count is what stalls
+  if (threadedOk && hasWiki && (navigator.hardwareConcurrency || 4) > 8) add('wiki', 'thr', 'H4 DuckDB threaded limited to 4 threads', 3, { threads: 4 }, false, 'thr4', 120);   // shows whether the full thread count is what stalls
   return J;
 }
 function report(final) {
   const L = [], R = ST.results, get = (ds, grp, eng) => R.filter((r) => ST.jobs[r.i].ds === ds && ST.jobs[r.i].grp === grp && ST.jobs[r.i].eng === eng && !r.err).map((r) => r.r);
   if (ST.low) L.push('Storage this browser allows: ' + ST.qmb + ' MB (small), so test files were fetched one at a time. Skipped because they need more: ' + ((ST.skipped || []).join(', ') || 'nothing') + '.', '');
-  L.push(coresLine(), '', (final ? '' : 'PARTIAL RESULTS (' + R.length + ' of ' + ST.jobs.length + ' runs finished)\n') + 'Laptop race tester ' + (ST.ver || '') + ', ' + new Date(ST.t0).toString(), 'Browser: ' + ST.ua, 'Cores: ' + ST.cores + '   deviceMemory: ' + (ST.mem || 'n/a') + '   threaded DuckDB ' + (ST.threaded ? 'available' : 'NOT available (page not cross-origin isolated)') + '   plan: ' + (ST.full ? 'full' : 'quick') + '   every run in a fresh page', '');
+  L.push(coresLine(), 'Threaded DuckDB runs with ' + duckThreads() + ' threads (half the reported threads at 8 or fewer, all above 8).', '', (final ? '' : 'PARTIAL RESULTS (' + R.length + ' of ' + ST.jobs.length + ' runs finished)\n') + 'Laptop race tester ' + (ST.ver || '') + ', ' + new Date(ST.t0).toString(), 'Browser: ' + ST.ua, 'Cores: ' + ST.cores + '   deviceMemory: ' + (ST.mem || 'n/a') + '   threaded DuckDB ' + (ST.threaded ? 'available' : 'NOT available (page not cross-origin isolated)') + '   plan: ' + (ST.full ? 'full' : 'quick') + '   every run in a fresh page', '');
   const wbN = ['import', 'open', 'summarize_first', 'add_column', 'filter', 'sort', 'summarize', 'save'], dkN = ['start', 'import', 'add_column', 'filter', 'sort', 'summarize', 'save_parquet'];
   const stepLine = (a, names) => names.filter((n) => a.some((r) => r.steps[n] !== undefined)).map((n) => n + ' ' + sec(med(a.filter((r) => r.steps[n] !== undefined).map((r) => r.steps[n])))).join(', ');
   for (const ds of ['exo', 'wiki']) {
