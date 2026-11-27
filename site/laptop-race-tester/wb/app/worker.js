@@ -550,7 +550,7 @@ async function parseJob(m) {
 // A piece starts at the first line break after its cut point, which is a guess (the break may sit inside quotes), and runs to the first
 // line break at or after the next cut where the parser is outside quotes. The pieces fit together only if each piece ends exactly where
 // the next one started; otherwise the rest of the file is parsed in order from the last verified spot, so the result is always the same.
-const SEG_BYTES = 8 * 1048576, SEG_MIN_FILE = 48 * 1048576, SEG_WINDOW = 5;
+const SEG_BYTES = 8 * 1048576, SEG_MIN_FILE = 32 * 1048576, SEG_WINDOW = 5;
 // Pieces need two parsing helpers that really run side by side. They do in all three test browsers now that rows are built as text
 // (when each row was an object, Firefox ran two helpers at half speed each). Tests can force pieces on small files with m.segBytes.
 // Parse helpers by machine (no setting): 2 below 8 cores, on phones and under 8 GB; from 8 cores half the cores, up to 8 (16 cores: 8).
