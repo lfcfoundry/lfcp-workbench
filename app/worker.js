@@ -3146,8 +3146,8 @@ async function warmCols(names, background) {
   const fly = (v.inflight ||= new Map()), waits = [];
   const want = [];
   for (const c of v.columns) { if (c.derived || !names.includes(c.name) || v.cols.has(c.name)) continue; const p = fly.get(c.name); if (p) waits.push(p); else want.push(c); }
-  const isNum = (c) => c.type === 'integer' || c.type === 'number', rest = [];
-  for (const c of want) { const d = v.dictCols && v.dictCols[c.name]; if (d && !isNum(c) && d.ids.length === v.total) { const arr = new Array(v.total), dict = d.dict, ids = d.ids; for (let i = 0; i < arr.length; i++) arr[i] = dict[ids[i]]; v.cols.set(c.name, arr); } else rest.push(c); }
+  const isNum = (c) => c.type === 'integer' || c.type === 'number', rest = [];   // a column kept as dictionary text is filled from its dictionary, number columns too (taxi: 7; the decode of the stored file gave the same strings, checked row by row, at ~0.28 s)
+  for (const c of want) { const d = v.dictCols && v.dictCols[c.name]; if (d && (!isNum(c) || d.dict.every((x) => typeof x === 'string')) && d.ids.length === v.total) { const arr = new Array(v.total), dict = d.dict, ids = d.ids; for (let i = 0; i < arr.length; i++) arr[i] = dict[ids[i]]; v.cols.set(c.name, arr); } else rest.push(c); }
   if (rest.length) {
     let done; const p = new Promise((r) => { done = r; }); for (const c of rest) fly.set(c.name, p);
     try {
@@ -3194,7 +3194,7 @@ async function exportSummary(m) {
 function dropKeep(force) { if (self.__keepBusy && !force) { self.__keepDrop = true; return; }   // a Save is packing on them: dropped when it ends
   clearTimeout(self.__keepT); self.__keepBusy = false; self.__keepDrop = false; if (self.__keep) { for (const w of self.__keep) w.terminate(); self.__keep = null; } }
 function keepWorkers(ws, wide) { dropKeep(); if (!ws.length || !(isFirefox || wide)) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
-const SAVE_IDS = /Chrome\//.test((self.navigator && navigator.userAgent) || '');   // Chromium: Firefox's repeat Save was 20% slower this way (its first Save level)
+const SAVE_IDS = false;   // off: Save gathered dictionary text per batch and LFC-pack packed it ~0.25 s slower (first Save +10% in Chromium); warmCols now fills number columns kept as dictionaries from the dictionary instead
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   let writable = null, name = null, closed = false;

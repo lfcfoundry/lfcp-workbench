@@ -43,7 +43,7 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.27.2323, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.27.2324, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its test files itself (about 180 MB, once; the real-file races add about 36 MB).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -129,7 +129,7 @@ const panel = () => {
   setBar(ST.jobs.length ? ST.results.length / ST.jobs.length : 0);
 };
 setInterval(() => { if (ST && ST.running) panel(); }, 500);
-async function wipe() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }); } catch (e) { /* none */ } }
+async function wipe() { try { const d = await navigator.storage.getDirectory(); await d.removeEntry('lfcfoundry-workbench', { recursive: true }).catch(() => {}); await d.removeEntry('lt-unzip.csv').catch(() => {}); } catch (e) { /* none */ } }
 // ---- test files: downloaded from this site (the public Wikimedia and NASA servers do not allow downloads from other sites), unpacked in the browser, kept in browser storage ----
 async function hosted(name, parts, header, label, plain) {
   const dir = await navigator.storage.getDirectory();
@@ -215,7 +215,7 @@ async function pqRun(workerUrl, file, ds, extra) {   // whole import to the stor
     });
   } finally { try { w.terminate(); } catch (e) { /* gone */ } }
 }
-const duckThreads = () => { const n = navigator.hardwareConcurrency || 4; return n <= 8 ? Math.max(1, n >> 1) : n; };   // owner card 11.26: half the reported threads at 8 or fewer (hyperthreads), all above 8
+const duckThreads = () => { if (+Q.get('dthreads')) return +Q.get('dthreads'); const n = navigator.hardwareConcurrency || 4; return n <= 8 ? Math.max(1, n >> 1) : n; };   // owner card 11.26: half the reported threads at 8 or fewer (hyperthreads), all above 8
 const PQW = { pqold: ['./wb-old/app/worker.js'], pq132: ['./wb-132/app/worker.js'], pqcur: ['./wb-cur/app/worker.js'], pqnew: ['./wb/app/worker.js'], pqpool: ['./wb/app/worker.js', { forcePool: true }] };   // pq132 = the build of PR 132 (2240), pqcur = the build of 2250 before the one-group fix
 let duckStage = '';
 const stage = (n) => { duckStage = n; if (ST) { ST.stage = n; saveState(); } };   // the step the run is in is kept, so a dead page can say where it stopped
@@ -226,19 +226,23 @@ async function duckRun(kind, file, c, extra) {
   try {
     const abs = (p) => new URL(p, location.href).href;
     await T('start', async () => { if (thr) { await db.instantiate(abs('./duck/duckdb-threads.wasm'), abs('./duck/duckdb-browser-threads.pthread.worker.js')); await db.open({ allowUnsignedExtensions: true }); } else await db.instantiate(abs('./duck/duckdb-base.wasm')); });
-    const cn = await db.connect(); const q = (s) => cn.query(s); stage('setup'); const nth = (extra && extra.threads) || duckThreads(); if (thr) await q('SET threads=' + nth);
-    if (/\.zip$/i.test(file.name || '')) await T('unzip', async () => { file = new File([await new Response(await zipEntryStream(file)).blob()], 'data.csv'); });   // DuckDB does not read zips: the unzip is inside its time
+    const cn = await db.connect(); const q = (s) => cn.query(s);
+    stage('parquet extension'); await q("SET custom_extension_repository='" + abs('./repo') + "'"); await q('INSTALL parquet'); await q('LOAD parquet');   // outside the timing, as in the benchmark harness; done before SET threads: LOAD hangs in the threaded build once more than about 4 threads are set (reproduced with 6 and 8), so the extension goes in first
+    stage('setup'); const nth = (extra && extra.threads) || duckThreads(); if (thr) await q('SET threads=' + nth);
+    if (/\.zip$/i.test(file.name || '')) await T('unzip', async () => { if (!(extra && extra.unzipDisk)) { file = new File([await new Response(await zipEntryStream(file)).blob()], 'data.csv'); return; } const d = await navigator.storage.getDirectory(), w = await (await d.getFileHandle('lt-unzip.csv', { create: true })).createWritable(); await (await zipEntryStream(file)).pipeTo(w); file = await (await d.getFileHandle('lt-unzip.csv')).getFile(); });   // DuckDB does not read zips: the unzip is inside its time
     stage('open file'); await db.registerFileHandle('data.csv', file, duck.DuckDBDataProtocol.BROWSER_FILEREADER, true);
     let rows; await T('import', async () => { await q("CREATE TABLE raw AS SELECT * FROM read_csv('data.csv', header=true" + c.rc + ')'); rows = (await q('SELECT count(*)::INT AS n FROM raw')).get(0).n; });
     await T('add_column', async () => { await q('CREATE TABLE c AS SELECT *, ' + c.derive + ' AS pfx FROM raw'); await q('DROP TABLE raw'); });
     let fr; await T('filter', async () => { await q('CREATE TABLE f AS SELECT * FROM c WHERE ' + c.filter); fr = (await q('SELECT count(*)::INT AS n FROM f')).get(0).n; });
     await T('sort', async () => { await q('CREATE TABLE s AS SELECT * FROM f ORDER BY ' + c.sort); });
     await T('summarize', async () => { await q(c.agg); });
-    stage('parquet extension'); await q("SET custom_extension_repository='" + abs('./repo') + "'"); await q('INSTALL parquet'); await q('LOAD parquet');   // outside the timing, as in the benchmark harness
     let bytes; await T('save_parquet', async () => { await q("COPY s TO 'out.parquet' (FORMAT PARQUET)"); bytes = (await db.copyFileToBuffer('out.parquet')).byteLength; });
     const total = Object.values(steps).reduce((a, b) => a + b, 0);
     return { total, steps, rows, filterRows: fr, saveBytes: bytes, threads: thr ? nth : 0 };
   } finally { try { worker.terminate(); } catch (e) { /* gone */ } }
+}
+async function duckRunSafe(kind, file, c, extra) {   // one machine answered "Failed to fetch" when DuckDB read the 163 MB unzipped Blob: that run is repeated with the unzipped bytes in browser storage (slower, and said so)
+  try { return await duckRun(kind, file, c, extra); } catch (e) { if (/\.zip$/i.test(file.name || '') && /Failed to fetch/i.test(String(e && e.message || e))) { await wipe(); const r = await duckRun(kind, file, c, Object.assign({}, extra, { unzipDisk: true })); r.note = 'unzipped into browser storage after the in-memory unzip failed (its time is higher)'; return r; } throw e; }
 }
 const ENG = { workbench: (f, c) => wbRun(f, c, null, true), base: (f, c) => duckRun('base', f, c), threaded: (f, c) => duckRun('threaded', f, c) };
 const LAB = { wb: 'Workbench', base: 'DuckDB base', thr: 'DuckDB threaded (self-built extension, estimated performance)' };
@@ -255,7 +259,7 @@ function buildJobs(full, hasWiki, hasExo, hasPq, pqSets, rfSets) {
     }
   }
   if (hasPq) for (const ds of (pqSets || ['pq1', 'pq3', 'pq4'])) { const n = full ? 3 : 1; for (let i = 0; i < n; i++) for (const e of (ds === 'pq1' ? ['pqold', 'pq132', 'pqcur', 'pqnew', 'pqpool'].map((_, q, a) => a[(q + (i * 2) % 5) % 5]) : (i % 2 ? ['pqnew', 'pqold'] : ['pqold', 'pqnew']))) add(ds, e, (ds === 'pq1' ? 'Parquet 1 group, ' : ds === 'pq3' ? 'Parquet 3 groups, ' : 'Parquet taxi, ') + (e === 'pqold' ? 'old import' : e === 'pq132' ? 'build 2240 import' : e === 'pqcur' ? 'build 2250 import' : e === 'pqpool' ? 'new import, pack pool forced on' : 'new import') + ', run ' + (i + 1) + ' of ' + n, 1, null, false, 'race', 150); }
-  if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null, ...(full ? (rfSets || []) : [])]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), DSW[ds], null, false, 'race', 120);   // last: it is the one that hangs on some machines
+  if (threadedOk) for (const ds of [hasExo ? 'exo' : null, hasWiki ? 'wiki' : null, ...(rfSets || [])]) if (ds) for (let i = 0; i < (full ? 2 : 1); i++) add(ds, 'thr', dsn(ds) + ' ' + LAB.thr.split(' (')[0] + ', run ' + (i + 1) + ' of ' + (full ? 2 : 1), DSW[ds], null, false, 'race', 120);   // last: it is the one that hangs on some machines
   if (threadedOk && hasWiki && (navigator.hardwareConcurrency || 4) > 8) add('wiki', 'thr', 'H4 DuckDB threaded limited to 4 threads', 3, { threads: 4 }, false, 'thr4', 120);   // shows whether the full thread count is what stalls
   return J;
 }
@@ -283,7 +287,7 @@ function report(final) {
   { const o1 = get('pq1', 'race', 'pqold'); if (o1.length) for (const [eg, nm] of [['pq132', 'build 2240'], ['pqcur', 'build 2250 (before the fix)'], ['pqpool', 'new, pack pool forced on (measure only)']]) { const v = get('pq1', 'race', eg); if (v.length) pqL.push('  Parquet, one row group, ' + nm + ': ' + sec(med(v.map((r) => r.total))) + ' (' + v.map((r) => sec(r.total)).join(', ') + '), against old ' + pct(med(v.map((r) => r.total)), med(o1.map((r) => r.total)))); } }
   if (pqL.length) { L.push('Parquet import, whole import to the stored file, old code against new (' + ST.cores + ' cores)', ...pqL, ''); }
   const bad = R.filter((r) => r.err); if (bad.length) { L.push('Runs that failed (' + bad.length + '):'); for (const r of bad) L.push('  ' + ST.jobs[r.i].label + ': ' + r.err); L.push(''); }
-  L.push('Not measured here: overlap of column unpack and Save with parse (not built yet). The DuckDB Parquet extension install is outside the timing.', '', 'Raw:'); for (const r of R) L.push('  ' + ST.jobs[r.i].label + ' ' + (r.err ? 'FAILED ' + r.err : JSON.stringify({ total: r.r.total, steps: r.r.steps, storedAt: r.r.storedAt, timing: r.r.timing, rows: r.r.rows, filterRows: r.r.filterRows })));
+  L.push('Not measured here: overlap of column unpack and Save with parse (not built yet). The DuckDB Parquet extension install is outside the timing.', '', 'Raw:'); for (const r of R) L.push('  ' + ST.jobs[r.i].label + ' ' + (r.err ? 'FAILED ' + r.err : JSON.stringify({ total: r.r.total, note: r.r.note || undefined, steps: r.r.steps, storedAt: r.r.storedAt, timing: r.r.timing, rows: r.r.rows, filterRows: r.r.filterRows })));
   return L.join('\n');
 }
 
@@ -337,7 +341,7 @@ async function runNext() {
     const job = ST.jobs[ST.idx]; curLabel = job.label; panel(); ST.cur = ST.idx; ST.stage = ''; saveState();   // marks the run as started: if the page dies mid-run (out of memory), the reload sees the mark and records that run as crashed
     const watchdog = setTimeout(() => { ST.results.push({ i: ST.idx, err: 'stalled for more than ' + job.to + ' s' + (job.eng === 'thr' ? ' (last stage reached: ' + duckStage + ')' : '') + ', the page was reloaded and the test went on' }); ST.idx++; ST.last = job.label + ' FAILED (timeout)'; saveState(); location.reload(); }, (job.to || 420) * 1000);
     let res;
-    try { await wipe(); if (ST.low) await dropData(job.ds); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = PQW[job.eng] ? await pqRun(PQW[job.eng][0], file, job.ds, PQW[job.eng][1]) : job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRun(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
+    try { await wipe(); if (ST.low) await dropData(job.ds); const file = await FILES[job.ds](), c = CFG[job.ds]; const r = PQW[job.eng] ? await pqRun(PQW[job.eng][0], file, job.ds, PQW[job.eng][1]) : job.eng === 'wb' ? await wbRun(file, c, job.extra, job.chart) : await duckRunSafe(job.eng === 'thr' ? 'threaded' : 'base', file, c, job.extra); res = { i: ST.idx, r }; ST.last = job.label + ': ' + sec(r.total); }
     catch (e) { res = { i: ST.idx, err: String(e && e.message || e).slice(0, 160) }; ST.last = job.label + ' FAILED ' + res.err; }
     clearTimeout(watchdog); ST.results.push(res); ST.idx++; saveState(); showReport(false);
     if (ST.idx < ST.jobs.length && !ST.stopped) { $('panel').textContent = 'Finished ' + job.label + '. Starting a fresh page for the next run...'; await sleep(400); location.reload(); return; }   // a page turn between runs: nothing is kept in memory from the run before
