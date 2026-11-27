@@ -1,2 +1,0 @@
-# PR 76 import tester (round 5)
-tester.html times before (main 24c052f) and after (main 1f0f958, PR 76) importing a taxi-shaped CSV (1.5M rows) and NDJSON (400k rows) made in the page, plus a Parquet file if picked. 3 runs per build, order before after, after before, before after. Elapsed timer stops at the end. Progress panel, Copy results button, noindex. Needs http(s). Add ?crows=N and ?rows=N for smaller runs.
