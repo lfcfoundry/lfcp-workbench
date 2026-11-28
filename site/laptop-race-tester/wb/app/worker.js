@@ -2820,6 +2820,22 @@ async function warmColumn(n) {
   if (view === v && got[n] && !v.cols.has(n)) { v.cols.set(n, got[n]); if (ArrayBuffer.isView(got[n]) && colMod && colMod.primeTopN) colMod.primeTopN(got[n]); }
 }
 // Date column as epoch numbers (NaN = empty) for sorting: lfc-pack reads it as numbers; a column with an empty cell is stored as text and returns null here (the text sort stays).
+// A date filter (> >= < <=) on a date column held as epoch seconds (tsColumn) compares the seconds as numbers: no date text and no Date.parse per row (1.5M rows: 0.3 to 0.4 s becomes 0.02 to 0.06 s,
+// same kept rows). The bound is read as the same clock as the stored seconds, so a date-only filter no longer shifts with the browser's time zone. Anything else (= != contains, a derived or unready column) keeps the old path.
+function tsFilters(filters, active, skip) {
+  const tsF = {}; if (!view || !view.tsCache) return tsF;
+  for (const nm of active) {
+    if (nm === skip) continue; const c = view.columns.find((x) => x.name === nm), ts = c && c.type === 'date' && !c.derived && view.tsCache.get(nm); if (!ts || !ts.fmt || ts.length !== view.total) continue;
+    const mm = /^(>=|<=|>|<)\s*(\d{4})-(\d\d)-(\d\d)(?:[ T](\d\d):(\d\d)(?::(\d\d))?)?$/.exec(String(filters[nm]).trim()); if (!mm) continue;
+    tsF[nm] = { ts, text: mm[1] + Date.UTC(+mm[2], +mm[3] - 1, +mm[4], +(mm[5] || 0), +(mm[6] || 0), +(mm[7] || 0)) / 1000 };
+  }
+  return tsF;
+}
+function useTsFilters(tsF, cols, qcols, filters) {   // the seconds stand in for the text; the filter becomes a number filter on them
+  if (!Object.keys(tsF).length) return { qcols, filters };
+  for (const nm in tsF) cols[nm] = tsF[nm].ts;
+  return { qcols: qcols.map((c) => (tsF[c.name] ? Object.assign({}, c, { type: 'number' }) : c)), filters: Object.assign({}, filters, ...Object.keys(tsF).map((nm) => ({ [nm]: tsF[nm].text }))) };
+}
 async function dateKeys(n) {
   const v = view, c = v.columns.find((x) => x.name === n); if (!c || c.type !== 'date' || !LfcPack.unpackColumnsParallel) return null;
   v.dateKeys ||= new Map(); if (v.dateKeys.has(n)) return v.dateKeys.get(n);
@@ -2972,9 +2988,10 @@ async function queryView(m) {
     const dcAll = m.noCodes || m.stream ? null : view.dictCols || null, codes = {}; for (const nm of active) { if (m.sort && m.sort.col === nm) continue; const c = view.columns.find((x) => x.name === nm); if (!c || c.type !== 'string' || c.derived || view.cols.has(nm)) continue; const d = dcAll ? dcAll[nm] : view.live && view.live.dictOf ? view.live.dictOf(nm) : null; if (d && d.ids.length === view.total) codes[nm] = d; }
     const selKey = JSON.stringify(active.map((k) => [k, m.filters[k]])), base = !m.noCodes && m.sort && view.sel && view.sel.key === selKey ? view.sel.idx : null;
     const tsSort = m.sort && !m.filters[m.sort.col] && !m.stream && view.tsCache && view.tsCache.get(m.sort.col) && view.tsCache.get(m.sort.col).fmt && !view.cols.has(m.sort.col) ? m.sort.col : null;   // a date sort held as seconds needs no date text (dateKeys reads the seconds)
-    const cols = await loadColumns(names.filter((nm) => !codes[nm] && nm !== tsSort && !(base && !(m.sort && m.sort.col === nm))), m.stream); let qcols = view.columns;
+    const tsF = m.stream ? {} : tsFilters(m.filters, active, m.sort && m.sort.col);
+    const cols = await loadColumns(names.filter((nm) => !codes[nm] && nm !== tsSort && !tsF[nm] && !(base && !(m.sort && m.sort.col === nm))), m.stream); let qcols = view.columns;
     if (m.sort && !m.filters[m.sort.col] && !m.stream) { const dk = await dateKeys(m.sort.col); if (dk && dk.length === view.total) { cols[m.sort.col] = dk; qcols = view.columns.map((c) => (c.name === m.sort.col ? Object.assign({}, c, { type: 'number' }) : c)); } }   // a date column sorts as numbers (epoch values read straight from the file), not as 3 million text values parsed one by one
-    const tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), r = colMod.runColumnQuery(cols, view.total, qcols, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS }, { codes, base });
+    const tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), tq = useTsFilters(tsF, cols, qcols, m.filters), r = colMod.runColumnQuery(cols, view.total, tq.qcols, { filters: tq.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS }, { codes, base });
     if (r.first) {   // first page first: the best rows now, the full order only when a page beyond them (or an export) needs it
       view.indices = new Uint32Array(r.count); view.indices.set(r.first); view.pending = { topN: r.first.length, full: r.full }; view.filtered = true;
       return send('queried', m.id, { count: r.count, total: view.total, errors: r.errors, ms: Math.round(performance.now() - t0), decodedAll: false, columnsOnly: names, firstPage: r.first.length, loadMs: tLoad, selMs: Math.round(performance.now() - tq0) });
@@ -3203,12 +3220,12 @@ async function groupView(m) {
     let dcL = null; if (!m.noDict && !view.dictCols && view.live && view.live.dictOf) { dcL = {}; for (const n of names) { const d = view.live.dictOf(n); if (d) dcL[n] = d; } }
     const dc = (!m.noDict && (view.dictCols || dcL)) || {}, useIds = !m.key2 && !!dc[m.key], two = !!m.key2;
     // a column kept as dictionary ids from the import is counted by id: no text is decoded for it (the key, or an equal-to column in a 'share equal to' aggregate)
-    const need = Array.from(new Set(names.concat(active))).filter((n) => !((useIds || two) && dc[n] && !active.includes(n)));
+    const tsF = tsFilters(m.filters, active, null); for (const n of names) delete tsF[n]; const need = Array.from(new Set(names.concat(active))).filter((n) => !((useIds || two) && dc[n] && !active.includes(n)) && !tsF[n]);   // a date filter on seconds needs no date text (tsFilters)
     if (!/AppleWebKit(?!.*Chrome)/.test(self.navigator.userAgent || '') && !m.noParallel) await warmSome(need);   // missing columns decoded on helper threads at once (not in WebKitGTK: slower there)
     const cols = await loadColumns(need, false), tLoad = performance.now() - t0, tg = performance.now();
     // a number column that the import kept as text (a decimal with mixed digits after the point): sum, avg, min and max read it as numbers (NaN = empty), made once and kept
     for (const a of aggs) { const c = a.col && a.fn !== 'rate' && a.fn !== 'count' && view.columns.find((x) => x.name === a.col); if (c && (c.type === 'integer' || c.type === 'number') && !c.decimals && cols[a.col] && !ArrayBuffer.isView(cols[a.col])) { const nc = (view.numCache ||= new Map()); let f = nc.get(a.col); if (!f) { const t = cols[a.col]; f = new Float64Array(t.length); for (let i = 0; i < f.length; i++) { const x = t[i]; f[i] = x == null || x === '' ? NaN : +x; } nc.set(a.col, f); } cols[a.col] = f; } }
-    let rows = null; if (active.length) rows = colMod.runColumnQuery(cols, view.total, view.columns, { filters: m.filters }).indices;
+    let rows = null; if (active.length) { const tq = useTsFilters(tsF, cols, view.columns, m.filters); rows = colMod.runColumnQuery(cols, view.total, tq.qcols, { filters: tq.filters }).indices; }
     const codeCols = {}; for (const a of aggs) if (a.col && dc[a.col] && a.fn === 'rate' && !m.noDict) codeCols[a.col] = dc[a.col];
     const g = two ? groupMod.groupBy2(cols, view.total, rows, { key: m.key, key2: m.key2, aggs, forceMap: !!m.forceMap, codeCols, cache: m.noKeyCache ? null : (view.keyCache ||= new Map()), ids1: dc[m.key] && dc[m.key].ids, dict1: dc[m.key] && dc[m.key].dict, ids2: dc[m.key2] && dc[m.key2].ids, dict2: dc[m.key2] && dc[m.key2].dict }) : useIds ? groupMod.groupByCodes(dc[m.key].ids, dc[m.key].dict, cols, view.total, rows, { aggs, codeCols }) : groupMod.groupBy(cols, view.total, rows, { key: m.key, aggs }), order = topGroups(g, two, 1000);
     const head = (two ? [m.key, m.key2] : [m.key]).concat(aggs.map((a) => (a.fn === 'count' ? 'count' : a.fn + '_' + a.col)));
