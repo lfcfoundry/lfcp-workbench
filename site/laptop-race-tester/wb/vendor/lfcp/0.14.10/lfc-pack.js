@@ -1472,8 +1472,7 @@
   function manyDistinctBC(B, S, E, a) { var T = MDB_T || (MDB_T = new Int32Array(2048)), nd = 0, i, j, h, x, y, L, q, eq; T.fill(-1);   // distinct byte strings first (no text made); only more than 900 decodes, as before (equal bytes decode equal, so the byte count is never lower)
     for (i = 0; i < 1024; i++) { x = S[a + i]; L = E[a + i] - x; h = L; for (q = 0; q < L; q++) h = Math.imul(h ^ B[x + q], 16777619); h = (h >>> 21) & 2047;
       for (;;) { j = T[h]; if (j < 0) { T[h] = i; nd++; break; } y = S[a + j]; if (E[a + j] - y === L) { eq = true; for (q = 0; q < L; q++) if (B[x + q] !== B[y + q]) { eq = false; break; } if (eq) break; } h = (h + 1) & 2047; } }
-    if (nd <= 900) return false;
-    var s = new Set(); for (i = 0; i < 1024; i++) s.add(td.decode(B.subarray(S[a + i], E[a + i]))); return s.size > 900; }   // the same test on a byte column: fast skips the dictionary count of a column whose first 1,024 values are nearly all different
+    return nd > 900; }   // the byte count is exact (bytes compared, not only hashes); a column that is valid UTF-8 has as many distinct strings as distinct byte strings, and one that is not throws in utf8Check on either path, so no text is made here   // the same test on a byte column: fast skips the dictionary count of a column whose first 1,024 values are nearly all different
   function manyDistinctDC(dc, a) { var D0 = dc.labels, NL0 = D0.start.length; if (NL0 <= 900) return false; var seen = new Uint8Array(NL0), nd = 0, i0, c0, oob = 0; for (i0 = 0; i0 < 1024; i0++) { c0 = dc.ids[a + i0]; if (c0 >= 0 && c0 < NL0) { if (!seen[c0]) { seen[c0] = 1; nd++; } } else oob++; } if (nd + oob <= 900) return false; var s = new Set(), i, D = dc.labels; for (i = 0; i < 1024; i++) { var c = dc.ids[a + i]; s.add(c >= 0 && c < D.start.length ? td.decode(D.bytes.subarray(D.start[c], D.end[c])) : c); } return s.size > 900; }
   // B45: hex and IPv4 string columns checked and packed in one pass, no regex, no slices; the same acceptance as RX_HEX (lowercase) and RX_IP with parts under 256, the same bytes
   var HEXN = (function () { var t = new Int8Array(128), c; t.fill(-1); for (c = 48; c < 58; c++) t[c] = c - 48; for (c = 97; c < 103; c++) t[c] = c - 87; return t; })();
@@ -1969,11 +1968,14 @@
   }
   // Well-formed UTF-8 (the same bytes TextDecoder fatal accepts: no overlongs, no surrogates, nothing past U+10FFFF), checked in place: no string is made. ASCII runs go 4 bytes at a time.
   function utf8Valid(u) {
-    var n = u.length, i = 0, w = null, c, c1, c2, c3;
-    if (n >= 64) { var off = u.byteOffset; w = (off & 3) === 0 ? new Uint32Array(u.buffer, off, n >> 2) : null; }
+    var n = u.length, i = 0, w = null, wb = 0, off = u.byteOffset, c, c1, c2, c3, k, m;
+    if (n >= 64) { wb = off & ~3; w = new Uint32Array(u.buffer, wb, (off + n - wb) >> 2); }   // whole words of the buffer: an ASCII run is read 4 bytes at a time whatever the view's offset
     while (i < n) {
       c = u[i];
-      if (c < 128) { if (w && (i & 3) === 0) { var k = i >> 2, m = w.length; while (k < m && (w[k] & 0x80808080) === 0) k++; i = k << 2; if (i >= n) break; c = u[i]; if (c < 128) { i++; continue; } } else { i++; continue; } }
+      if (c < 128) {
+        if (w !== null && ((off + i) & 3) === 0) { k = (off + i - wb) >> 2; m = w.length; while (k < m && (w[k] & 0x80808080) === 0) k++; i = (k << 2) + wb - off; if (i >= n) break; c = u[i]; if (c < 128) { i++; continue; } }
+        else { i++; continue; }
+      }
       if (c < 0xC2) return false;
       if (c < 0xE0) { if (i + 1 >= n || (u[i + 1] & 0xC0) !== 0x80) return false; i += 2; continue; }
       if (c < 0xF0) { if (i + 2 >= n) return false; c1 = u[i + 1]; c2 = u[i + 2]; if ((c1 & 0xC0) !== 0x80 || (c2 & 0xC0) !== 0x80 || (c === 0xE0 && c1 < 0xA0) || (c === 0xED && c1 > 0x9F)) return false; i += 3; continue; }
