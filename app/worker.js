@@ -483,7 +483,7 @@ async function packColsJob(m) {
     }
     const r = await LfcPack.packBlock(cols, m.o), tr = [r.buffer]; for (const x of Object.values(dk)) tr.push(x.ids.buffer, x.bytes.buffer, x.start.buffer, x.end.buffer);
     self.postMessage({ type: 'packed', rid: m.rid, r, dk }, tr);
-    freeBufs(m.chunks); freeBufs(cols);
+    if (isFirefox) { freeBufs(m.chunks); freeBufs(cols); }   // Chromium: the early free raised the taxi zip peak about 40-90 MB (it gave nothing back sooner), so only Firefox does it
   } catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
 }
 
