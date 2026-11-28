@@ -2808,6 +2808,7 @@ async function warmColumn(n) {
 async function dateKeys(n) {
   const v = view, c = v.columns.find((x) => x.name === n); if (!c || c.type !== 'date' || !LfcPack.unpackColumnsParallel) return null;
   v.dateKeys ||= new Map(); if (v.dateKeys.has(n)) return v.dateKeys.get(n);
+  const ts = v.tsCache && v.tsCache.get(n); if (ts && ts.fmt && ts.length === v.total) { v.dateKeys.set(n, ts); return ts; }   // epoch seconds made from the kept bytes at import (tsColumn): the same order, no decode and no date text (live too)
   let out = null;
   try { const got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), { keys: [n], dates: 'numbers', nulls: 'NaN' }); if (got[n] instanceof Float64Array) out = got[n]; } catch { out = null; }
   if (view === v) v.dateKeys.set(n, out); return out;
@@ -2955,7 +2956,8 @@ async function queryView(m) {
     // a filter on a column kept as dictionary ids is answered from the ids (one test per distinct value): its text is not made for every row. A sort that follows with the same filters reuses the rows the filter kept.
     const dcAll = m.noCodes || m.stream ? null : view.dictCols || null, codes = {}; for (const nm of active) { if (m.sort && m.sort.col === nm) continue; const c = view.columns.find((x) => x.name === nm); if (!c || c.type !== 'string' || c.derived || view.cols.has(nm)) continue; const d = dcAll ? dcAll[nm] : view.live && view.live.dictOf ? view.live.dictOf(nm) : null; if (d && d.ids.length === view.total) codes[nm] = d; }
     const selKey = JSON.stringify(active.map((k) => [k, m.filters[k]])), base = !m.noCodes && m.sort && view.sel && view.sel.key === selKey ? view.sel.idx : null;
-    const cols = await loadColumns(names.filter((nm) => !codes[nm] && !(base && !(m.sort && m.sort.col === nm))), m.stream); let qcols = view.columns;
+    const tsSort = m.sort && !m.filters[m.sort.col] && !m.stream && view.tsCache && view.tsCache.get(m.sort.col) && view.tsCache.get(m.sort.col).fmt && !view.cols.has(m.sort.col) ? m.sort.col : null;   // a date sort held as seconds needs no date text (dateKeys reads the seconds)
+    const cols = await loadColumns(names.filter((nm) => !codes[nm] && nm !== tsSort && !(base && !(m.sort && m.sort.col === nm))), m.stream); let qcols = view.columns;
     if (m.sort && !m.filters[m.sort.col] && !m.stream) { const dk = await dateKeys(m.sort.col); if (dk && dk.length === view.total) { cols[m.sort.col] = dk; qcols = view.columns.map((c) => (c.name === m.sort.col ? Object.assign({}, c, { type: 'number' }) : c)); } }   // a date column sorts as numbers (epoch values read straight from the file), not as 3 million text values parsed one by one
     const tLoad = Math.round(performance.now() - t0), tq0 = performance.now(), r = colMod.runColumnQuery(cols, view.total, qcols, { filters: m.filters, sort: m.sort, top: m.noFirst ? 0 : FIRST_PAGE_ROWS }, { codes, base });
     if (r.first) {   // first page first: the best rows now, the full order only when a page beyond them (or an export) needs it
