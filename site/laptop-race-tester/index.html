@@ -43,7 +43,7 @@ label{display:block;margin:4px 0}
 .key i{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 </style></head><body>
 <header><div class="in"><div class="tag">LFC Foundry tester</div><h1>LFCP Workbench against DuckDB</h1>
-<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.27.2153, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
+<p>Races Workbench against DuckDB-WASM on this device, same files, taking turns, and draws the result as it goes. Measure only; nothing is sent anywhere. <span id="ver">version 2026.11.27.2204, a fresh page for every run</span> <span id="cores"></span></p><div class="verbar" id="verbar">Checking that this is the newest version...</div></div></header>
 <main><div class="in">
 <div class="bar"><button id="start" class="primary">Quick run<small>about 3 to 6 minutes</small></button><button id="startfull">Full run<small>about 3 times longer</small></button><button id="startpq">Parquet only<small>3 runs each, about 4 minutes</small></button><button id="stop" disabled>Stop<small>keeps results</small></button><button id="copy" disabled>Copy results<small>as text</small></button><button id="save" disabled>Download<small>as .txt file</small></button></div>
 <div class="card"><div id="panel">Ready. Close other tabs and keep the screen on, then tap Quick run. The page fetches its test files itself (about 180 MB, once; the real-file races add about 36 MB).</div><div class="prog"><i id="bar"></i></div><div id="copied" role="status"></div></div>
@@ -222,6 +222,7 @@ const stage = (n) => { duckStage = n; if (ST) { ST.stage = n; saveState(); } }; 
 async function duckRun(kind, file, c, extra) {
   duckMod ||= await import('./duck/duckdb-browser.mjs'); const duck = duckMod, steps = {}, thr = kind === 'threaded';
   const worker = new Worker(thr ? './duck/duckdb-browser-threads.worker.js' : './duck/duckdb-browser-base.worker.js'); const db = new duck.AsyncDuckDB({ log: () => {} }, worker);
+  let memBuf = null;   // the unzipped taxi CSV in memory (zip legs only)
   const T = async (name, f) => { stage(name); const s = performance.now(); const r = await f(); steps[name] = Math.round(performance.now() - s); return r; };
   try {
     const abs = (p) => new URL(p, location.href).href;
@@ -232,8 +233,8 @@ async function duckRun(kind, file, c, extra) {
     { const extStep = async () => { stage('parquet extension (settings)'); await q("SET custom_extension_repository='" + abs('./repo') + "'"); stage('parquet extension (install)'); await q('INSTALL parquet'); stage('parquet extension (load)'); await q('LOAD parquet'); };   // outside the timing, as in the benchmark harness
       if (thr) { let tmo; await Promise.race([extStep(), new Promise((_, rej) => { tmo = setTimeout(() => rej(Object.assign(new Error('parquet extension load hung at ' + duckStage), { extHung: true })), 20000); })]).finally(() => clearTimeout(tmo)); } else await extStep(); }
     stage('setup'); const nth = (extra && extra.threads) || duckThreads(); if (thr) await q('SET threads=' + nth);
-    if (/\.zip$/i.test(file.name || '')) await T('unzip', async () => { if (!(extra && extra.unzipDisk)) { file = new File([await new Response(await zipEntryStream(file)).blob()], 'data.csv'); return; } const d = await navigator.storage.getDirectory(), w = await (await d.getFileHandle('lt-unzip.csv', { create: true })).createWritable(); await (await zipEntryStream(file)).pipeTo(w); file = await (await d.getFileHandle('lt-unzip.csv')).getFile(); });   // DuckDB does not read zips: the unzip is inside its time
-    stage('open file'); await db.registerFileHandle('data.csv', file, duck.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+    if (/\.zip$/i.test(file.name || '')) await T('unzip', async () => { if (!(extra && extra.unzipDisk)) { const rd = (await zipEntryStream(file)).getReader(), parts = []; let n = 0; for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); n += value.byteLength; } memBuf = new Uint8Array(n); let o = 0; for (const p of parts) { memBuf.set(p, o); o += p.byteLength; } return; }   /* plain memory, no Blob: Response.blob() of the 163 MB stream failed with "Failed to fetch" on the owner's Chrome 158 (browser blob storage), and DuckDB reads a registered buffer at least as fast */ const d = await navigator.storage.getDirectory(), w = await (await d.getFileHandle('lt-unzip.csv', { create: true })).createWritable(); await (await zipEntryStream(file)).pipeTo(w); file = await (await d.getFileHandle('lt-unzip.csv')).getFile(); });   // DuckDB does not read zips: the unzip is inside its time
+    stage('open file'); if (memBuf) await db.registerFileBuffer('data.csv', memBuf); else await db.registerFileHandle('data.csv', file, duck.DuckDBDataProtocol.BROWSER_FILEREADER, true);
     let rows; await T('import', async () => { await q("CREATE TABLE raw AS SELECT * FROM read_csv('data.csv', header=true" + c.rc + ')'); rows = (await q('SELECT count(*)::INT AS n FROM raw')).get(0).n; });
     await T('add_column', async () => { await q('CREATE TABLE c AS SELECT *, ' + c.derive + ' AS pfx FROM raw'); await q('DROP TABLE raw'); });
     let fr; await T('filter', async () => { await q('CREATE TABLE f AS SELECT * FROM c WHERE ' + c.filter); fr = (await q('SELECT count(*)::INT AS n FROM f')).get(0).n; });
