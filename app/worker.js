@@ -2388,14 +2388,18 @@ async function importOnce(m) {
       const bb = m.blockBytes || 2097152, popts = Object.assign({ level: m.level || 3 }, { blockBytes: bb, share: false });
       packer = LfcPack.packStream(Object.assign({}, popts, { meta }));
       const ws = [], idle = [], done = new Map(); dkBlocks = new Map(); let seq = 0, emit = 0, parts = [], plen = 0, wake = null, wchain = Promise.resolve(), failed = null;
-      const pump = () => { if (wake) { const r = wake; wake = null; r(); } };
+      const pump = () => { if (wake) { const r = wake; wake = null; r(); } }; let lendTo = null;
       const onPacked = (w) => (e) => {
         const d = e.data; if (d.error) failed = new Error('Pack worker failed: ' + d.error); else { done.set(d.rid, d.r); if (d.keys) for (const k of d.keys) (t.keys ||= new Set()).add(k); if (d.big) t.big = (t.big || 0) + d.big; if (d.dk) dkBlocks.set(d.rid, d.dk); if (d.chk) { for (const x of d.chk.dec) (t.chkDec ||= new Set()).add(x); for (const x of d.chk.bad) (t.chkBad ||= new Set()).add(x); } }
-        idle.push(w);
+        if (lendTo) lendTo(w); else idle.push(w);
         wchain = wchain.then(async () => { while (done.has(emit)) { const r = done.get(emit); done.delete(emit); emit++; await write(packer.pushPacked(r)); } pump(); });
         pump();
       };
       for (const w of pws) { w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); }
+      self.__lend = {   // a Save while this import is still storing borrows its pack workers as each one comes free (the block pump holds while the Save runs) and gives them back after
+        want: (cb) => { if (failed) return false; lendTo = cb; for (const w of idle.splice(0, idle.length)) cb(w); return true; },
+        give: (list) => { lendTo = null; for (const w of list) { w.onmessage = onPacked(w); idle.push(w); } pump(); },
+      };
       morePack = (k) => { try { for (let i = 0; i < k; i++) { const w = t.hand && t.hand.length ? t.hand.shift() : mkWorker(); w.onmessage = onPacked(w); w.onerror = (e) => { failed = new Error('Pack worker failed: ' + (e && e.message || 'unknown')); pump(); }; ws.push(w); idle.push(w); } pump(); } catch { /* the workers we have keep going */ } };   // parsing is done: its cores join the packing
       job.abort = () => { failed = Object.assign(new Error('Import cancelled.'), { cancelled: true }); pump(); };
       const send1 = async (msg, tr) => {
@@ -2495,7 +2499,7 @@ async function importOnce(m) {
         await colFlush(); if (plen) await dispatch(take(plen));
         while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
         await wchain; if (failed) throw failed;
-        keepWorkers(ws, t.wide, file.size > KEEP_MAX);
+        self.__lend = null; keepWorkers(ws, t.wide, file.size > KEEP_MAX);
       };
       var packWorkersToStop = ws;
     }
@@ -3326,10 +3330,12 @@ async function exportLfcp(m) {
     // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
     const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / (PIECE || BATCH)) >= (wideS ? 2 : 13) ? self.__keep : null;
     let pool = null; const npool = m.noPool || !(isFirefox || kept || wideS) || !allWarm || !LfcPack.packBlock ? 0 : Math.min(kept ? kept.length : 3, Math.ceil(count / (PIECE || BATCH)));   // Firefox only: in Chromium the helper threads were no faster (pack 0.44-0.62 s against 0.36-0.50 s on this thread)
+    let lent = null; if (!npool && !m.noLend && self.__lend && allWarm && LfcPack.packBlock && view.live && Math.ceil(count / (PIECE || BATCH)) >= 2) { const L0 = self.__lend, l = { L: L0, ws: [], wp: new Map() }; pool = []; if (L0.want((w) => { l.ws.push(w); l.wp.set(w, 0); w.onmessage = saveMsg(w); pool.push(w); })) lent = l; else pool = null; }   // Chromium: the import's own pack workers join this Save as they come free
     if (npool > 1 && kept) { clearTimeout(self.__keepT); self.__keepBusy = true; pool = kept; } else if (npool > 1) { try { pool = []; for (let i = 0; i < npool; i++) pool.push(new Worker(self.location.href)); } catch { if (pool) pool.forEach((w) => w.terminate()); pool = null; } }
     const results = new Map(); let nextW = 0, emit = 0, pending = 0, wake = null, failed = null;
     const drain = async () => { while (results.has(emit)) { const r = results.get(emit); results.delete(emit); emit++; await write(packer2.pushPacked(r)); } };
-    if (pool) for (const w of pool) w.onmessage = (e) => { const d = e.data || {}; pending--; if (d.error) failed = new Error(d.error); else results.set(d.rid, d.r); if (wake) { const r = wake; wake = null; r(); } };
+    function saveMsg(w) { return (e) => { if (lent) lent.wp.set(w, lent.wp.get(w) - 1); const d = e.data || {}; pending--; if (d.error) failed = new Error(d.error); else results.set(d.rid, d.r); if (wake) { const r = wake; wake = null; r(); } }; }
+    if (pool) for (const w of pool) w.onmessage = saveMsg(w);
     let seq = 0;
     for (let start = 0; start < count; start += BATCH) {
       const end = Math.min(count, start + BATCH); let ts = performance.now();
@@ -3362,12 +3368,13 @@ async function exportLfcp(m) {
         const pieces = []; if (PZ) { for (let q = 0, a = 0; a < n; a += PZ, q++) { const b = Math.min(n, a + PZ), o2 = {}; for (const c of cols) { const key = c.name, v = PP && outs[q][key] ? outs[q][key] : out[key]; if (PP && outs[q][key]) o2[key] = v; else if (ArrayBuffer.isView(v) || Array.isArray(v)) o2[key] = v.slice(a, b); else if (v.bytes) { const s0 = v.start[a], off = new Int32Array(b - a + 1); for (let i = a; i < b; i++) off[i - a] = v.start[i] - s0; off[b - a] = v.end[b - 1] - s0; o2[key] = { bytes: v.bytes.slice(s0, v.end[b - 1]), start: off.subarray(0, b - a), end: off.subarray(1, b - a + 1) }; } else if (v.kind === 'ts') o2[key] = { kind: 'ts', unit: v.unit, values: v.values.slice(a, b), fmt: v.fmt }; else throw new Error('Save: unexpected column shape'); } pieces.push(o2); } } else pieces.push(out);
         const cap = wideS ? Math.max(1, ((self.navigator && navigator.hardwareConcurrency) || 4) - 1) : 64;
         for (const pc of pieces) {
-          if (pool) {
+          if (pool && pool.length) {
             while (pending >= Math.min(pool.length, m.wideCap || cap)) { await new Promise((r) => { wake = r; }); if (failed) throw failed; await drain(); }
             const tr = []; if (wideS) { const seen = new Set(), add = (b) => { if (b && !seen.has(b)) { seen.add(b); tr.push(b); } }; for (const v of Object.values(pc)) { if (ArrayBuffer.isView(v)) add(v.buffer); else if (v && v.bytes) { add(v.bytes.buffer); add(v.start.buffer); add(v.end.buffer); } else if (v && v.values) add(v.values.buffer); } }
-            pending++; pool[nextW++ % pool.length].postMessage({ type: 'packPlain', rid: seq++, cols: pc, o: popts }, tr);
+            pending++; if (lent) { const w0 = pool[nextW % pool.length]; lent.wp.set(w0, lent.wp.get(w0) + 1); } pool[nextW++ % pool.length].postMessage({ type: 'packPlain', rid: seq++, cols: pc, o: popts }, tr);
             await drain();
-          } else { const r = await LfcPack.packBlock(pc, popts); await write(packer2.pushPacked(r)); }
+          } else if (pool) { const r = await LfcPack.packBlock(pc, popts); results.set(seq++, r); await drain(); }   // no borrowed worker free yet: this thread packs, in the same order
+          else { const r = await LfcPack.packBlock(pc, popts); await write(packer2.pushPacked(r)); }
         }
         tm.pack += performance.now() - ts; continue;
       }
@@ -3377,7 +3384,7 @@ async function exportLfcp(m) {
       for (const r of objs) { let line = ''; for (let k = 0; k < cols.length; k++) { const v = r[cols[k].name]; line += keyQ[k] + (v == null ? 'null' : JSON.stringify(v)); } text += line + '}\n'; }
       tm.text += performance.now() - ts; ts = performance.now(); await write(packer2.push(enc.encode(text))); tm.pack += performance.now() - ts;
     }
-    if (pool) { const ts = performance.now(); while (pending > 0 || results.size) { if (failed) throw failed; await drain(); if (pending > 0) await new Promise((r) => { wake = r; }); } tm.pack += performance.now() - ts; if (kept) { self.__keepBusy = false; if (self.__keepDrop) dropKeep(); else self.__keepT = setTimeout(dropKeep, 60000); } else pool.forEach((w) => w.terminate()); }
+    if (pool) { const ts = performance.now(); while (pending > 0 || results.size) { if (failed) throw failed; await drain(); if (pending > 0) await new Promise((r) => { wake = r; }); } tm.pack += performance.now() - ts; if (kept) { self.__keepBusy = false; if (self.__keepDrop) dropKeep(); else self.__keepT = setTimeout(dropKeep, 60000); } else if (lent) { const l = lent; lent = null; l.L.give(l.ws); } else pool.forEach((w) => w.terminate()); }
     await write(packer2.finish()); await writable.close(); closed = true; writable = null;
     const outCols = cols.map((c) => { const o = Object.assign({}, c); delete o.derived; delete o.from; delete o.fn; return o; }), srcName = view.name;
     // the footer check, the catalog read and the file handle are asked for together (in Firefox each waits its turn behind an import that is still storing its copy)
@@ -3385,6 +3392,7 @@ async function exportLfcp(m) {
     if (!v.ok) throw new Error('The written file failed footer validation: ' + v.reason);
     send('exportedLfcp', m.id, { name, rows: count, bytes: outBytes, blob, ms: Math.round(performance.now() - t0), warmMs: Math.round(tWarm), rowsMs: Math.round(tm.rows), textMs: Math.round(tm.text), packMs: Math.round(tm.pack) });
   } catch (err) {
+    if (lent) { const l = lent; lent = null; l.L.want(() => {}); const back = []; for (const w of l.ws) { if (!l.wp.get(w)) back.push(w); else w.onmessage = () => { l.wp.set(w, l.wp.get(w) - 1); if (!l.wp.get(w)) l.L.give([w]); }; } l.L.give(back); }   // a failed Save: each borrowed worker goes back once its last Save job has answered (a late answer must not reach the import)
     if (self.__keepBusy) dropKeep(true);   // a failed Save: the kept threads may hold unfinished jobs, so they go
     if (writable && !closed) { try { await writable.abort(); } catch {} } if (name) await store.remove(name);
     send('error', m.id, { message: String(err && err.message || err) });
