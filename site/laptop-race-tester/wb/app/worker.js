@@ -440,6 +440,8 @@ function numFromText(bytes, start, end, n) {
   }
   return out;
 }
+// Frees a message's arrays at once (ArrayBuffer.prototype.transfer(0) releases the memory now instead of at this worker's next garbage collection).
+const freeBufs = (o, d = 0) => { if (!o || d > 5 || typeof o !== 'object') return; if (ArrayBuffer.isView(o)) { const b = o.buffer; try { if (b.transfer && !b.detached && !(typeof SharedArrayBuffer !== 'undefined' && b instanceof SharedArrayBuffer)) b.transfer(0); } catch { /* wasm memory or not detachable */ } return; } if (o instanceof ArrayBuffer) { try { if (o.transfer && !o.detached) o.transfer(0); } catch {} return; } if (Array.isArray(o)) { for (const x of o) freeBufs(x, d + 1); return; } for (const k in o) freeBufs(o[k], d + 1); };
 async function packColsJob(m) {
   try {
     await LfcPack.init();
@@ -481,6 +483,7 @@ async function packColsJob(m) {
     }
     const r = await LfcPack.packBlock(cols, m.o), tr = [r.buffer]; for (const x of Object.values(dk)) tr.push(x.ids.buffer, x.bytes.buffer, x.start.buffer, x.end.buffer);
     self.postMessage({ type: 'packed', rid: m.rid, r, dk }, tr);
+    freeBufs(m.chunks); freeBufs(cols);
   } catch (err) { self.postMessage({ type: 'packed', rid: m.rid, error: String(err && err.message || err) }); }
 }
 
@@ -2408,7 +2411,7 @@ async function importOnce(m) {
         // Live columns (desktop, file up to LIVE_MAX): the chunks are kept so the grid can read them as soon as parsing ends, while the pack workers still work through their queue.
         // Blocks wait in blockQ and go to the pack workers as copies (the kept chunks are not transferred), so parsing never waits for packing.
         liveChunks = m.live === true && file.size <= LIVE_MAX ? [] : null; let blockQ = [], pumping = null, pumpErr = null;
-        const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b0 = blockQ.shift(); for (const c of b0) qBytes -= c.bytes; const b = b0.map((c) => (c.lazy ? dupChunk(c.lazy) : c)); await send1({ type: 'packCols', chunks: b, headers: colHeaders, num: numPlan, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
+        const pump = () => { if (!pumping) pumping = (async () => { while (blockQ.length) { const b0 = blockQ.shift(); for (const c of b0) qBytes -= c.bytes; const b = b0.map((c) => (c.lazy ? dupChunk(c.lazy) : c)); for (const c of b0) if (c.lazy) { c.lazy.pend = false; if (liveChunks && liveChunks.numsReady) compactChunk(c.lazy, liveChunks); } await send1({ type: 'packCols', chunks: b, headers: colHeaders, num: numPlan, o: popts }, [].concat(...b.map(chunkBuffers))); } })().catch((e) => { pumpErr = e; }).finally(() => { pumping = null; }); };
         const sendCols = async () => { const list = cq; cq = []; cqBytes = 0; cqRows = 0; if (liveChunks) { blockQ.push(qAdd(list)); pump(); } else await send1({ type: 'packCols', chunks: list, headers: colHeaders, num: numPlan, o: popts }, [].concat(...list.map(chunkBuffers))); };
         drainNow = () => { if (!liveChunks || held) return; if (cq.length) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(qAdd(list)); } pump(); };
         colFlush = async () => { if (cq.length) await sendCols(); while (pumping) await pumping; if (pumpErr) throw pumpErr; };
@@ -2454,13 +2457,13 @@ async function importOnce(m) {
           // A free-format number column that meets a cell like "1.50": it is text from here on, and nothing is packed again. LFC-pack keeps a column's kind per block (packColsJob turns text into
           // numbers only for a block where every cell reads back exactly), so the blocks packed so far stay numbers, as they would have been written had the column been text all along.
           if (plan && plan[k] === 'f' && !demoted.has(k) && k >= 0 && k < colHeaders.length) {
-            demoted.set(k, 0); plan[k] = false; if (numPlan) numPlan[k] = true;
+            demoted.set(k, 0); plan[k] = false; if (numPlan) numPlan[k] = true; if (liveChunks) liveChunks.noCompact = true;
             if (liveChunks) for (const c of liveChunks) retext(c);
             if (pvKind) { pvKind[k] = false; if (view && view.preview && view.columns[k]) { view.columns[k].type = 'string'; delete view.columns[k].decimals; } }
             return true;
           }
           if (!liveChunks || !plan || k < 0 || !t.wide || k >= colHeaders.length || demoted.has(k) || !(plan[k] === true || plan[k] === 'f' || (typeof plan[k] === 'number' && plan[k] > 0))) return false;
-          demoted.set(k, plan[k] === true || plan[k] === 'f' ? 0 : plan[k]); plan[k] = false; if (numPlan && samplePlan.num) numPlan[k] = !!samplePlan.num[k];
+          if (liveChunks) liveChunks.noCompact = true; demoted.set(k, plan[k] === true || plan[k] === 'f' ? 0 : plan[k]); plan[k] = false; if (numPlan && samplePlan.num) numPlan[k] = !!samplePlan.num[k];
           for (const c of liveChunks) retext(c);
           if (pvKind) { pvKind[k] = false; if (view && view.preview && view.columns[k]) { view.columns[k].type = 'string'; delete view.columns[k].decimals; } }
           if (!held) {
@@ -2473,7 +2476,7 @@ async function importOnce(m) {
           return true;
         };
         const release = () => { if (!held) return; held = false; for (const c of liveChunks) { if (cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(qAdd(list)); } cq.push(dupChunk(c)); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= 256) { const list = cq; cq = []; cqBytes = 0; cqRows = 0; blockQ.push(qAdd(list)); } } pump(); };
-        col = { demote, release, begin: async (h) => { colHeaders = h; if (h.length > 128) { t.wide = true; if (!m.colBlockBytes) colBlock = 16777216; } },   /* wide tables: LFC-pack has a fixed cost per column per block, so fewer, larger blocks (measured on a 703-column table) */ get dup() { return !!liveChunks && !dupOff && qBytes < DUP_AHEAD; }, set dup(v) { dupOff = !v; }, push: async (c, c2) => { stop(job); if (liveChunks) { if (demoted.size) retext(c); liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } if (held) return; if (t.wide && cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) await sendCols(); cq.push(c2 || { lazy: c, n: c.n, bytes: c.bytes }); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= (colHeaders.length > 128 ? 256 : 4096)) await sendCols(); } };
+        col = { demote, release, begin: async (h) => { colHeaders = h; if (h.length > 128) { t.wide = true; if (!m.colBlockBytes) colBlock = 16777216; } },   /* wide tables: LFC-pack has a fixed cost per column per block, so fewer, larger blocks (measured on a 703-column table) */ get dup() { return !!liveChunks && !dupOff && qBytes < DUP_AHEAD; }, set dup(v) { dupOff = !v; }, push: async (c, c2) => { stop(job); if (liveChunks) { if (demoted.size) retext(c); liveChunks.push(c); pvStarts.push(pvStarts[pvStarts.length - 1] + c.n); if (pvOn) { try { pvTick(); } catch { pvOn = false; if (view && view.preview) { view = null; send('liveclosed', m.id, {}); } } } if (held) return; if (t.wide && cq.length && cqRows + c.n > 1024 && cqBytes >= WIDE_MIN) await sendCols(); if (!c2) c.pend = true; cq.push(c2 || { lazy: c, n: c.n, bytes: c.bytes }); } else cq.push(c); cqBytes += c.bytes; cqRows += c.n; if (cqBytes >= colBlock && cqRows >= (colHeaders.length > 128 ? 256 : 4096)) await sendCols(); } };
       }
       const take = (n) => { const out = new Uint8Array(n); let at = 0; while (at < n) { const p = parts[0], need = n - at; if (p.length <= need) { out.set(p, at); at += p.length; parts.shift(); } else { out.set(p.subarray(0, need), at); parts[0] = p.subarray(need); at = n; } } plen -= n; return out; };
       packBytes = async (bytes) => {
@@ -2489,7 +2492,7 @@ async function importOnce(m) {
         await colFlush(); if (plen) await dispatch(take(plen));
         while ((emit < seq || done.size) && !failed) await new Promise((r) => { wake = r; });
         await wchain; if (failed) throw failed;
-        keepWorkers(ws, t.wide);
+        keepWorkers(ws, t.wide, file.size > KEEP_MAX);
       };
       var packWorkersToStop = ws;
     }
@@ -2669,6 +2672,23 @@ function makeInterner() {
     },
   };
 }
+// Live import, once the number columns are copied into the live view's own arrays (startLive): a kept chunk whose block has gone to a pack worker keeps only its text and dictionary columns,
+// copied out end to end, and its old buffer is let go at once (transfer(0)). Before, every chunk held its numbers twice until the import ended (Wikimedia, 15M rows: about 230 MB).
+const chunkBufs = (ch) => { const o = []; if (ch.slab) o.push(ch.slab); if (ch.extra) o.push(...ch.extra); for (const x of ch.cols) { if (!x) continue; if (ArrayBuffer.isView(x)) o.push(x.buffer); else for (const v of [x.codes, x.bytes, x.start, x.end, x.lb && x.lb.bytes, x.lb && x.lb.start, x.lb && x.lb.end]) if (v && ArrayBuffer.isView(v)) o.push(v.buffer); } return o; };
+function compactChunk(ch, chunks) {
+  if (ch.compact || ch.pend || !chunks.numsReady || chunks.noCompact) return;
+  const kindOf = chunks.kindOf, n = ch.cols.length, m = ch.n, cols = new Array(n).fill(null), old = chunkBufs(ch);
+  for (let k = 0; k < n; k++) {
+    const x = ch.cols[k]; if (kindOf[k] || !x) continue;
+    if (x.codes) { cols[k] = { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } }; continue; }
+    const st = x.start, en = x.end, off = new Uint32Array(m + 1); let tot = 0, run = true; for (let r = 0; r < m; r++) { off[r] = tot; tot += en[r] - st[r]; if (r && st[r] !== en[r - 1]) run = false; } off[m] = tot; const b = new Uint8Array(tot);
+    if (run && m) b.set(x.bytes.subarray(st[0], en[m - 1])); else for (let r = 0; r < m; r++) b.set(x.bytes.subarray(st[r], en[r]), off[r]);
+    cols[k] = { bytes: b, start: off.subarray(0, m), end: off.subarray(1, m + 1) };
+  }
+  ch.cols = cols; ch.compact = true; delete ch.slab; delete ch.extra;
+  const rc = chunks.refc; if (rc) for (const b of old) { const c = rc.get(b); if (c === undefined) continue; if (c <= 1) { rc.delete(b); if (b instanceof ArrayBuffer && !b.detached && b.transfer) { try { b.transfer(0); } catch { /* not detachable */ } } } else rc.set(b, c - 1); }
+}
+async function compactAll(chunks) { for (let i = 0; i < chunks.length; i++) { if (chunks.noCompact) return; compactChunk(chunks[i], chunks); if ((i & 7) === 7) await yieldNow(); } }
 async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   queryMod ||= MODS() || await import('../src/query/query.mjs'); colMod ||= MODS() || await import('../src/query/columnar.mjs');
   const n = headers.length, starts = new Uint32Array(chunks.length + 1); for (let i = 0; i < chunks.length; i++) starts[i + 1] = starts[i] + chunks[i].n;
@@ -2700,12 +2720,15 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
     keepText(v) { if (n > 128 || v.liveRest || v.liveL) return null; const names = new Set(); for (let k = 0; k < n; k++) { const nm = headers[k], c = v.columns.find((x) => x.name === nm); if (!kindOf[k] && c && c.type === 'string' && !v.cols.has(nm) && !(v.dictCols && v.dictCols[nm]) && !(v.inflight && v.inflight.has(nm))) names.add(nm); } return names.size ? { names, L: this, bytes: 0 } : null; },
     // ...and lets go of everything else: each chunk is one buffer holding all its columns, so the kept columns are copied out (their bytes end to end, one offset per row) and the chunk buffers are freed
     async slim(kt) { const ks = [...kt.names].map((nm) => headers.indexOf(nm)); let bytes = 0;
-      for (let i = 0; i < chunks.length; i++) { const ch = chunks[i], m = ch.n, cols = new Array(n).fill(null);
+      // a chunk already compacted (see compactChunk) keeps its arrays; any other chunk's old buffers are let go (transfer(0)) right after the last chunk that uses them is copied
+      const last = new Map(), canFree = isFirefox && typeof ArrayBuffer.prototype.transfer === 'function';   /* Chromium: letting go early raised the peak (2.22 to 2.37 GB) */ if (canFree) for (let i = 0; i < chunks.length; i++) if (!chunks[i].compact) for (const b of chunkBufs(chunks[i])) if (b instanceof ArrayBuffer) last.set(b, i);
+      for (let i = 0; i < chunks.length; i++) { const ch = chunks[i], m = ch.n, cols = new Array(n).fill(null), old = canFree && !ch.compact ? chunkBufs(ch) : null;
+        if (ch.compact) { for (const k of ks) { const x = ch.cols[k]; cols[k] = x; bytes += x.codes ? x.codes.byteLength + x.lb.bytes.byteLength + 8 * x.lb.start.length : x.bytes.length + 4 * (m + 1); } chunks[i] = { n: m, cols }; if ((i & 3) === 3) await yieldNow(); continue; }
         for (const k of ks) { const x = ch.cols[k]; if (x.codes) { cols[k] = { codes: x.codes.slice(), lb: { bytes: x.lb.bytes.slice(), start: x.lb.start.slice(), end: x.lb.end.slice() } }; bytes += x.codes.byteLength + x.lb.bytes.byteLength + 8 * x.lb.start.length; continue; }
           const st = x.start, en = x.end, off = new Uint32Array(m + 1); let tot = 0, run = true; for (let r = 0; r < m; r++) { off[r] = tot; tot += en[r] - st[r]; if (r && st[r] !== en[r - 1]) run = false; } off[m] = tot; const b = new Uint8Array(tot);
           if (run && m) b.set(x.bytes.subarray(st[0], en[m - 1])); else for (let r = 0; r < m; r++) b.set(x.bytes.subarray(st[r], en[r]), off[r]);
           cols[k] = { bytes: b, start: off.subarray(0, m), end: off.subarray(1, m + 1) }; bytes += tot + 4 * (m + 1); }
-        chunks[i] = { n: m, cols }; if ((i & 3) === 3) await yieldNow(); }
+        chunks[i] = { n: m, cols }; if (old) for (const b of old) if (last.get(b) === i && !b.detached) { try { b.transfer(0); } catch { /* not detachable */ } } if ((i & 3) === 3) await yieldNow(); }
       kt.bytes = bytes; },
     // first letter or length of every cell of a text column, straight from the kept bytes (no string per cell)
     deriveBytes(nm, num, one) { const k = headers.indexOf(nm); if (k < 0 || kindOf[k]) return null; const out = num ? new Float64Array(rows) : new Array(rows); let at = 0; for (const ch of chunks) { const x = ch.cols[k], n = ch.n; if (x.codes) { const lb = x.lb, nl = lb.start.length, lab = num ? new Float64Array(nl) : new Array(nl); for (let q = 0; q < nl; q++) lab[q] = one(lb.bytes, lb.start[q], lb.end[q]); const cd = x.codes; for (let r = 0; r < n; r++) out[at++] = lab[cd[r]]; } else { const b = x.bytes, st = x.start, en = x.end; for (let r = 0; r < n; r++) out[at++] = one(b, st[r], en[r]); } } return at === rows ? out : null; },
@@ -2763,9 +2786,11 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
   const restK = []; for (let k = 0; k < n; k++) if (!kindOf[k] && !chunks.every((c) => c.cols[k].codes)) restK.push(k);
   let restBytes = 0; for (const k of restK) for (const c of chunks) { const x = c.cols[k]; if (x.bytes) restBytes += x.bytes.length; }
   // Turning the kept text into strings costs about 30 to 60 ns a cell and 100 bytes or more of memory a cell: for a very tall or very long text column (a 15M-row title list: 9 to 13 s of thread time, 2 GB) it
-  // also holds up the import itself, so past 5M rows or 160 MB of text the strings are not made ahead in Chromium and Safari: a Save, a text sort or a derive reads that column from the saved file instead (first letter and length straight from the bytes). Firefox builds them in the idle pack tail at no cost to the import (measured on the real file: skipping them there made the whole run 30% slower), so it keeps them.
+  // also holds up the import itself, so past 5M rows or 160 MB of text the strings are not made ahead in any browser: the column's bytes are kept instead (keepText), and a Save, an export or a first-letter column reads them.
+  // Firefox used to build them anyway (skipping them made the run 30% slower only because the derive then read the saved file); with the kept bytes, real Wikimedia file, Firefox: whole path 9.7 to 5.6 s, peak memory down about 0.6 GB.
+  if (isFirefox && n <= 128 && typeof ArrayBuffer.prototype.transfer === 'function' && !chunks.noCompact) {   /* Firefox only: in Chromium the copies raised the Wikimedia peak 2.22 to 2.60 GB (the old buffers were not given back at once) */ const rc = new Map(); for (const ch of chunks) for (const b of new Set(chunkBufs(ch))) rc.set(b, (rc.get(b) || 0) + 1); chunks.refc = rc; for (const b of rc.keys()) if (!(b instanceof ArrayBuffer) || b.resizable) { chunks.noCompact = true; break; }   /* shared buffers cannot be let go early: a copy would only add memory (measured +0.35 GB in Chromium) */ chunks.kindOf = kindOf; chunks.numsReady = true; setTimeout(() => compactAll(chunks), 0); }
   if (n > 128) view.liveL = L;   // wide table: the chunks stay and answer for text (Save reads their bytes, a sort or filter makes one column); no strings for hundreds of columns up front
-  else if (restK.length && (isFirefox || (rows <= 5000000 && restBytes <= 160 * 1048576))) {
+  else if (restK.length && rows <= 5000000 && restBytes <= 160 * 1048576) {
     view.liveRest = { names: restK.map((k) => headers[k]), L };
     if (EARLY_TEXT) textFromChunks(view);
   }   // variant: start now, while the pack threads finish the file
@@ -2970,15 +2995,30 @@ async function exportView(m) {
     ensureFull();
     if (!m.noFast) await warmAll();   // columns decoded together on helper threads (when not already), then the CSV is written straight from them
     const count = view.filtered ? view.indices.length : view.total, parts = [...(m.bom ? ['\uFEFF'] : []), csvHeader(view.columns, d)];
-    if (!m.noFast && view.columns.length && view.columns.every((c) => view.cols.has(c.name))) {   // fast path: no row objects, no per-cell function calls
-      const srcs = view.columns.map((c) => ({ a: view.cols.get(c.name), dec: c.decimals || 0 })), idx = view.filtered ? view.indices : null, quote = new RegExp('["\\r\\n' + (d === '\t' ? '\\t' : d.replace(/[\\\]^-]/g, '\\$&')) + ']'), nc = srcs.length, arr = srcs.map((x) => x.a), dec = srcs.map((x) => x.dec), isT = arr.map((a) => ArrayBuffer.isView(a)), STEP = 20000;
+    // Text kept as bytes from the import (see keepText) and dictionary columns: only the exported rows' cells are made into strings, in row order, so the fast path below runs without decoding
+    // the saved file block by block (real Wikimedia file, 3,769 of 15M rows: 0.5 s to 0.02 s, same CSV).
+    let byPos = null; const LT = view.liveT && view.liveT.L && !view.live ? view.liveT : null, dcx = view.dictCols || {};
+    if (!m.noFast && LT && count <= 2000000 && view.columns.length) {
+      const miss = view.columns.filter((c) => !view.cols.has(c.name)), dictOk = (c) => { const d = dcx[c.name]; return !!(d && d.ids.length === view.total && c.type === 'string'); };
+      if (miss.length && miss.every((c) => !c.derived && (LT.names.has(c.name) || dictOk(c)))) {
+        byPos = new Map(); const fx = view.filtered ? view.indices.subarray(0, count) : null, dec = new TextDecoder(); let loc = null;
+        for (const c of miss) {
+          const a = new Array(count);
+          if (LT.names.has(c.name)) { loc ||= LT.L.locate(0, count, fx); const g = LT.L.gather(c.name, loc), b = g.bytes, st = g.start, en = g.end; for (let i = 0; i < count; i++) { const e = en[i], s0 = st[i]; let ascii = e - s0 <= 64; if (ascii) for (let p = s0; p < e; p++) if (b[p] > 127) { ascii = false; break; } a[i] = ascii ? String.fromCharCode.apply(null, b.subarray(s0, e)) : dec.decode(b.subarray(s0, e)); } }
+          else { const d = dcx[c.name], ids = d.ids, dict = d.dict; for (let i = 0; i < count; i++) a[i] = dict[ids[fx ? fx[i] : i]]; }
+          byPos.set(c.name, a);
+        }
+      }
+    }
+    if (!m.noFast && view.columns.length && view.columns.every((c) => view.cols.has(c.name) || (byPos && byPos.has(c.name)))) {   // fast path: no row objects, no per-cell function calls
+      const srcs = view.columns.map((c) => ({ a: byPos && byPos.has(c.name) ? byPos.get(c.name) : view.cols.get(c.name), pos: !!(byPos && byPos.has(c.name)), dec: c.decimals || 0 })), pos = srcs.map((x) => x.pos), idx = view.filtered ? view.indices : null, quote = new RegExp('["\\r\\n' + (d === '\t' ? '\\t' : d.replace(/[\\\]^-]/g, '\\$&')) + ']'), nc = srcs.length, arr = srcs.map((x) => x.a), dec = srcs.map((x) => x.dec), isT = arr.map((a) => ArrayBuffer.isView(a)), STEP = 20000;
       const tb0 = performance.now();
       for (let start = 0; start < count; start += STEP) {
         const end = Math.min(count, start + STEP); let text = '';
         for (let i = start; i < end; i++) {
           const r = idx ? idx[i] : i; let line = '';
           for (let k = 0; k < nc; k++) {
-            const x = arr[k][r]; let t;
+            const x = arr[k][pos[k] ? i : r]; let t;
             if (isT[k]) { line += (x !== x ? '' : dec[k] ? formatScaled(x, dec[k]) : '' + x); if (k < nc - 1) line += d; continue; }   // a typed number column: no quoting needed
             if (typeof x === 'string') t = x; else if (x !== x || x == null) t = ''; else t = dec[k] && typeof x === 'number' ? formatScaled(x, dec[k]) : '' + x;
             if (t.length !== 0 && quote.test(t)) t = '"' + t.replace(/"/g, '""') + '"';
@@ -3194,7 +3234,10 @@ async function exportSummary(m) {
 // The import's pack threads are kept for a minute after the import (their wasm is started and their memory paid) so a Save as LFCP of a big view can pack on them; dropKeep frees them.
 function dropKeep(force) { if (self.__keepBusy && !force) { self.__keepDrop = true; return; }   // a Save is packing on them: dropped when it ends
   clearTimeout(self.__keepT); self.__keepBusy = false; self.__keepDrop = false; if (self.__keep) { for (const w of self.__keep) w.terminate(); self.__keep = null; } }
-function keepWorkers(ws, wide) { dropKeep(); if (!ws.length || !(isFirefox || wide)) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
+// Pack workers are kept for a later Save only for files up to KEEP_MAX: each holds its LFC-pack memory (wasm memory never shrinks); on the 471 MB Wikimedia file the four kept
+// workers held about 190 MB in Firefox, while a Save there is long enough that a fresh worker's start (about 0.4 s) matters little.
+const KEEP_MAX = 268435456;
+function keepWorkers(ws, wide, big) { dropKeep(); if (!ws.length || big || !(isFirefox || wide)) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
 const SAVE_IDS = false;   // off: Save gathered dictionary text per batch and LFC-pack packed it ~0.25 s slower (first Save +10% in Chromium); warmCols now fills number columns kept as dictionaries from the dictionary instead
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
