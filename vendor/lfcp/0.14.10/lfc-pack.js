@@ -1955,7 +1955,7 @@
       codes[i] = c;
     }
     function joinOf(idx, cnt) { var len = 0, j, p = 0, o; for (j = 0; j < cnt; j++) len += E[a + idx(j)] - S[a + idx(j)]; o = new Uint8Array(len + (cnt ? cnt - 1 : 0)); for (j = 0; j < cnt; j++) { if (j) o[p++] = 0; var x = S[a + idx(j)], y = E[a + idx(j)]; if (y - x > 16) { o.set(B.subarray(x, y), p); p += y - x; } else while (x < y) o[p++] = B[x++]; } return o; }
-    function utf8Check(u) { if (hi & 128) { if (!BC_UTF8) BC_UTF8 = new TextDecoder('utf-8', { fatal: true }); try { BC_UTF8.decode(u); } catch (er) { throw new Error('LfcPack: text column "' + key + '" is not valid UTF-8'); } } }
+    function utf8Check(u) { if ((hi & 128) && !utf8Valid(u)) throw new Error('LfcPack: text column "' + key + '" is not valid UTF-8'); }
     function cand(t, p, frames, st) { best = addCand(zs, level, best, t, p, frames, n, st); }
     var nl = lab.length;
     if (stop || nl * 4 > n || nl >= 65536) { var all = KL ? bkJoin(bk, KL, null, n) : joinOf(function (j) { return j; }, n); utf8Check(all); cand('s', {}, dlOf([all], nl)); return settle(zs, level, best); }
@@ -1966,6 +1966,21 @@
     cand('D', { w: 0, wide: nl > 256 }, [lb, cb], { distinct: nl });
     cand('D', { w: wd, wide: false }, [lb, bitpack(ca, wd)], { distinct: nl });
     return settle(zs, level, best);
+  }
+  // Well-formed UTF-8 (the same bytes TextDecoder fatal accepts: no overlongs, no surrogates, nothing past U+10FFFF), checked in place: no string is made. ASCII runs go 4 bytes at a time.
+  function utf8Valid(u) {
+    var n = u.length, i = 0, w = null, c, c1, c2, c3;
+    if (n >= 64) { var off = u.byteOffset; w = (off & 3) === 0 ? new Uint32Array(u.buffer, off, n >> 2) : null; }
+    while (i < n) {
+      c = u[i];
+      if (c < 128) { if (w && (i & 3) === 0) { var k = i >> 2, m = w.length; while (k < m && (w[k] & 0x80808080) === 0) k++; i = k << 2; if (i >= n) break; c = u[i]; if (c < 128) { i++; continue; } } else { i++; continue; } }
+      if (c < 0xC2) return false;
+      if (c < 0xE0) { if (i + 1 >= n || (u[i + 1] & 0xC0) !== 0x80) return false; i += 2; continue; }
+      if (c < 0xF0) { if (i + 2 >= n) return false; c1 = u[i + 1]; c2 = u[i + 2]; if ((c1 & 0xC0) !== 0x80 || (c2 & 0xC0) !== 0x80 || (c === 0xE0 && c1 < 0xA0) || (c === 0xED && c1 > 0x9F)) return false; i += 3; continue; }
+      if (c < 0xF5) { if (i + 3 >= n) return false; c1 = u[i + 1]; c2 = u[i + 2]; c3 = u[i + 3]; if ((c1 & 0xC0) !== 0x80 || (c2 & 0xC0) !== 0x80 || (c3 & 0xC0) !== 0x80 || (c === 0xF0 && c1 < 0x90) || (c === 0xF4 && c1 > 0x8F)) return false; i += 4; continue; }
+      return false;
+    }
+    return true;
   }
   var B28_MIN = 8192;
   // B74p6: a Float64Array column with NaN (an empty cell) becomes the numbers-and-nulls state the row loop builds ({ nb: the numbers, np: null plane, m, c }), in one pass: the same bytes as a plain array with nulls, without the generic path (7-9x slower in Chromium and Firefox)
