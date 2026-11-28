@@ -12,11 +12,13 @@ LFCP Workbench is intended to become a browser-based environment for importing, 
 
 ## Development stage
 
-This repository currently establishes the project's documentation and experiment layout. It does not yet contain a production application, build system, installed dependencies, or production implementation.
+The repository now holds a working browser app and the documentation and experiments that led to it.
 
-The first implementation is preserved as an experiment in [`experiments/lfcp-first-spike/`](experiments/lfcp-first-spike/). It demonstrates a narrow CSV/TSV/JSONL-to-LFCP write path using the current LFC-pack API and OPFS. It is not production code. It does not demonstrate bounded end-to-end memory, production-scale ingestion, random-access or streaming LFCP reads, footer integrity validation, durable checkpoints or recovery, or performance superiority over Parquet.
+- **The app** is in [`app/`](app/) (page, worker, grid) on the ingestion core in [`src/`](src/). It imports local data files (the supported formats are listed in `app/README.md` and on the page) into LFCP datasets stored in OPFS where the browser has it, shows them in a window-rendered grid, sorts, filters, adds columns, groups, saves and exports. It runs on the vendored LFC-pack 0.14.10 ([`vendor/lfcp/0.14.10/`](vendor/lfcp/0.14.10/)). Details: [`app/README.md`](app/README.md).
+- **The hosted page and the race tester** are in [`site/`](site/). `site/laptop-race-tester/` races the Workbench against DuckDB-Wasm on real files; its threaded DuckDB leg is restarted when the extension load hangs (see the tester page's NOTE lines).
+- **The first experiment** stays in [`experiments/lfcp-first-spike/`](experiments/lfcp-first-spike/), frozen on LFC-pack 0.4.19 ([`vendor/lfcp/0.4.19/`](vendor/lfcp/0.4.19/)). It is not production code. Older pinned builds under `vendor/lfcp/` are kept for the tests and experiments that name them.
 
-The experiment uses the pinned LFC-pack 0.4.19/API 0 build in [`vendor/lfcp/0.4.19/`](vendor/lfcp/0.4.19/). Its provenance and notices are recorded there. LFCP is expected to evolve; the current implementation and format are not frozen by this repository.
+LFCP is expected to evolve; the current implementation and format are not frozen by this repository.
 
 ## Project map
 
@@ -52,6 +54,6 @@ The second test is intentionally expected to demonstrate the defect against the 
 
 ## Maturity and limitations
 
-Version 2026.11.14.1108 (date stamp, Eastern; carries LFC-pack 0.10.28). The Workbench is at the documented direction and feasibility-experiment stage. There is no production ingestion pipeline, query engine, SQL support, visualization layer, build system, or stable release. The spike demonstrates a narrow browser file-to-LFCP path and has significant storage, reader, recovery, and scale limits. LFCP architecture, schema, streaming contracts, and vendor update policy remain open; see [`docs/architecture/OPEN-DECISIONS.md`](docs/architecture/OPEN-DECISIONS.md).
+Version 2026.11.27.2112 (date stamp, Eastern; carries LFC-pack 0.14.10). The Workbench is a working import-and-explore app with no stable release yet. The spike demonstrates a narrow browser file-to-LFCP path and has significant storage, reader, recovery, and scale limits. LFCP architecture, schema, streaming contracts, and vendor update policy remain open; see [`docs/architecture/OPEN-DECISIONS.md`](docs/architecture/OPEN-DECISIONS.md).
 
 The LFC-pack correction remains an isolated proposal. Its issue draft and Phase 11 evidence package are preserved, and the Phase 14 audit says the draft is ready for submission while production integration remains NO-GO. The Codex-to-Claude handoff is on the `codex/lfc-pack-0419-empty-string-investigation-handoff` branch in [JS-modules](https://github.com/lfcfoundry/JS-modules/tree/codex/lfc-pack-0419-empty-string-investigation-handoff). No maintainer communication has been sent.
