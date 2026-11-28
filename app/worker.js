@@ -2524,7 +2524,7 @@ async function importOnce(m) {
     const { headers, types, rows, sample } = res; stop(job);
     meta.tables[0].rows = rows; meta.tables[0].columns = headers.slice(0, 128).map((h, i) => ({ id: 'field-' + (i + 1), name: h.slice(0, 100), type: types[i].type, nullable: types[i].nullable }));
     const cols = headers.map((h, i) => Object.assign({ name: h, type: types[i].type, nullable: types[i].nullable }, plan && typeof plan[i] === 'number' ? { decimals: plan[i] } : {}));
-    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (morePack && m.morePack !== 0) { t.mpEarly = true; morePack((m.morePack || ((((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8)) ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? (t.wide ? 3 : 1) : 2))); } drainNow(); if (view && view.live) { const dg = (async () => { for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) { const v0 = view, g = v0.live.columnGen(c.name); let r, k = 0; while (!(r = g.next()).done) { if (++k % 4 === 0) await yieldNow(); } if (view === v0) { v0.cols.set(c.name, r.value); (tsJobs ||= []).push([v0, c.name, v0.live]); try { const tsc = rows <= 3000000 ? v0.live.tsColumn(c.name) : null; if (tsc && view === v0) (v0.tsCache ||= new Map()).set(c.name, tsc); } catch { /* Save parses the text instead */ } }   /* epoch seconds straight from the kept bytes, here, so a Save at live time does not parse every date string again */ } })(); const gate = dg.finally(() => { if (dateGate === gate) dateGate = null; }); dateGate = gate; await gate; }   /* a Save, sort, filter or add-column that arrives while the date text is being made waits for it (the grid already shows rows) */   /* typed seconds for Save are made after 'done' (not on the import's critical path) */   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ const wide = ((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);   // owner laptop (16 cores): Chrome is best at 4 pack workers in all (2 before), Firefox keeps gaining to 6; 4-core machines keep the old counts
+    if (liveChunks && col && res.pieces && liveChunks.length && rows <= MAX_COLUMN_ROWS) { await startLive(m.id, name, headers, plan, liveChunks, rows, cols); if (morePack && m.morePack !== 0) { t.mpEarly = true; morePack((m.morePack || ((((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8)) ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? (t.wide ? 3 : 1) : 2))); } drainNow(); if (view && view.live) { const dg = (async () => { for (const c of cols) if (c.type === 'date' && !view.cols.has(c.name)) { const v0 = view; if (rows <= 3000000) { let tsc = null; try { tsc = v0.live.tsColumn(c.name); } catch { tsc = null; } if (tsc) { if (view === v0) (v0.tsCache ||= new Map()).set(c.name, tsc); continue; } } const g = v0.live.columnGen(c.name); let r, k = 0; while (!(r = g.next()).done) { if (++k % 4 === 0) await yieldNow(); } if (view === v0) { v0.cols.set(c.name, r.value); (tsJobs ||= []).push([v0, c.name, v0.live]); }   /* a fixed-width date column gets its epoch seconds straight from the kept bytes here (a Save at live time does not parse the strings) and no text before the first operation: the text comes from the idle text pass, or when a sort, filter or derive asks for it */ } })(); const gate = dg.finally(() => { if (dateGate === gate) dateGate = null; }); dateGate = gate; await gate; }   /* a Save, sort, filter or add-column that arrives while the date text is being made waits for it (the grid already shows rows) */   /* typed seconds for Save are made after 'done' (not on the import's critical path) */   /* date columns are the usual sort key: their text is made while the pack workers are still busy, so the first sort after the import has no decode */ const wide = ((self.navigator && navigator.hardwareConcurrency) || 4) >= 12 && !(self.navigator && navigator.deviceMemory && navigator.deviceMemory < 8);   // owner laptop (16 cores): Chrome is best at 4 pack workers in all (2 before), Firefox keeps gaining to 6; 4-core machines keep the old counts
     if (!t.mpEarly && morePack && m.morePack !== 0) morePack(m.morePack || (wide ? (isFirefox ? 5 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? 3 : 2) : isFirefox ? 3 : /Chrome\//.test((self.navigator && navigator.userAgent) || '') ? (t.wide ? 3 : 1) : 2)); }   /* wide tables pack long after parsing ends, so Chromium gets three more pack workers there too */
     if (view && view.preview && view.name === name && !(view.live)) { view = null; send('liveclosed', m.id, {}); }
     if (file && file.lazy) await file.settle(); await finishPacking(); if (res.refine) { res.refine(types); for (let i = 0; i < headers.length; i++) { cols[i].type = types[i].type; if (meta.tables[0].columns[i]) meta.tables[0].columns[i].type = types[i].type; } }
@@ -2766,7 +2766,8 @@ async function startLive(id, name, headers, plan, chunks, rows, colsMeta) {
         for (let q = 19; q < w; q++) { if (q === 19 ? b[a + q] !== 46 : b[a + q] !== 48) return undefined; }
         const c0 = b[a] - 48, c1 = b[a + 1] - 48, c2 = b[a + 2] - 48, c3 = b[a + 3] - 48, c5 = b[a + 5] - 48, c6 = b[a + 6] - 48, c8 = b[a + 8] - 48, c9 = b[a + 9] - 48, c11 = b[a + 11] - 48, c12 = b[a + 12] - 48, c14 = b[a + 14] - 48, c15 = b[a + 15] - 48, c17 = b[a + 17] - 48, c18 = b[a + 18] - 48;
         if ((c0 >>> 0) > 9 || (c1 >>> 0) > 9 || (c2 >>> 0) > 9 || (c3 >>> 0) > 9 || (c5 >>> 0) > 9 || (c6 >>> 0) > 9 || (c8 >>> 0) > 9 || (c9 >>> 0) > 9 || (c11 >>> 0) > 9 || (c12 >>> 0) > 9 || (c14 >>> 0) > 9 || (c15 >>> 0) > 9 || (c17 >>> 0) > 9 || (c18 >>> 0) > 9) return undefined;
-        const key = (((c0 * 10 + c1) * 10 + c2) * 10 + c3) * 10000 + (c5 * 10 + c6) * 100 + c8 * 10 + c9; if (key !== lastKey) { lastKey = key; lastDays = days(c0 * 1000 + c1 * 100 + c2 * 10 + c3, c5 * 10 + c6, c8 * 10 + c9); }
+        if (c11 * 10 + c12 > 23 || c14 > 5 || c17 > 5) return undefined;   // a real clock time only: then the seconds give back exactly the text's digits (an add-column of hour, minute, day, month or year reads them)
+        const key = (((c0 * 10 + c1) * 10 + c2) * 10 + c3) * 10000 + (c5 * 10 + c6) * 100 + c8 * 10 + c9; if (key !== lastKey) { const Y = c0 * 1000 + c1 * 100 + c2 * 10 + c3, M = c5 * 10 + c6, D = c8 * 10 + c9; if (M < 1 || M > 12 || D < 1 || D > [31, Y % 4 === 0 && (Y % 100 !== 0 || Y % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][M - 1]) return undefined; lastKey = key; lastDays = days(Y, M, D); }
         return (lastDays * 24 + c11 * 10 + c12) * 3600 + (c14 * 10 + c15) * 60 + c17 * 10 + c18;
       };
       for (const ch of chunks) {
@@ -2811,9 +2812,12 @@ async function dateKeys(n) {
   try { const got = await LfcPack.unpackColumnsParallel(new Uint8Array(await v.f.arrayBuffer()), { keys: [n], dates: 'numbers', nulls: 'NaN' }); if (got[n] instanceof Float64Array) out = got[n]; } catch { out = null; }
   if (view === v) v.dateKeys.set(n, out); return out;
 }
+// a date column held only as epoch seconds (tsColumn) gets its text back from them, exactly as read (tsText), when a sort, filter or warm asks for it
+function tsFill(v, n) { const c = v.columns.find((x) => x.name === n), ts = v.tsCache && v.tsCache.get(n); if (!c || c.type !== 'date' || !ts || !ts.fmt || v.cols.has(n) || ts.length !== v.total) return false; v.cols.set(n, tsText(ts, null, v.total, new Array(v.total))); return true; }
 async function loadColumns(names, stream, plain) {
   if (view.live) { for (const n of names) if (!view.cols.has(n)) view.cols.set(n, view.live.column(n)); const out = {}; for (const n of names) out[n] = view.cols.get(n); return out; }
   if (view.liveL) for (const n of names) { if (view.cols.has(n)) continue; const c = view.columns.find((x) => x.name === n); if (c && c.type === "string" && view.liveL.isText(n)) view.cols.set(n, view.liveL.column(n)); }   // wide table: the kept chunks answer for text columns (no decode of the saved file)
+  for (const n of names) tsFill(view, n);
   let want = names.filter((n) => !view.cols.has(n));
   if (view.dictCols && want.length && !plain) {   // a text column kept as dictionary ids from the import: its strings come from the distinct values (one lookup per row), no decode of the saved file
     for (const n of want) { const d = view.dictCols[n], c = view.columns.find((x) => x.name === n); if (d && c && c.type !== 'integer' && c.type !== 'number' && d.ids.length === view.total) { const a = new Array(view.total), dict = d.dict, ids = d.ids; for (let i = 0; i < a.length; i++) a[i] = dict[ids[i]]; view.cols.set(n, a); } }
@@ -2990,6 +2994,7 @@ async function pageView(m) {
 // Export: writes the rows now shown (filter and sort applied) as CSV, in batches, into one Blob. Memory is one batch plus the Blob (browsers keep large Blobs off the JS heap).
 async function exportView(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
+  opBusy++;
   try {
     const { csvHeader, csvLines } = MODS() || await import('../src/export/csv.mjs'), d = m.delim || ',', BATCH = view.filtered && !view.rows ? 100000 : 5000;   // scattered rows: a big batch decodes each block once
     ensureFull();
@@ -2998,13 +3003,15 @@ async function exportView(m) {
     // Text kept as bytes from the import (see keepText) and dictionary columns: only the exported rows' cells are made into strings, in row order, so the fast path below runs without decoding
     // the saved file block by block (real Wikimedia file, 3,769 of 15M rows: 0.5 s to 0.02 s, same CSV).
     let byPos = null; const LT = view.liveT && view.liveT.L && !view.live ? view.liveT : null, dcx = view.dictCols || {};
-    if (!m.noFast && LT && count <= 2000000 && view.columns.length) {
+    const tsOk = (c) => c.type === 'date' && !!(view.tsCache && view.tsCache.get(c.name) && view.tsCache.get(c.name).fmt);   // a date column held only as epoch seconds (see tsColumn): its text is written back from them
+    if (!m.noFast && count <= 2000000 && view.columns.length) {
       const miss = view.columns.filter((c) => !view.cols.has(c.name)), dictOk = (c) => { const d = dcx[c.name]; return !!(d && d.ids.length === view.total && c.type === 'string'); };
-      if (miss.length && miss.every((c) => !c.derived && (LT.names.has(c.name) || dictOk(c)))) {
+      if (miss.length && miss.every((c) => !c.derived && ((LT && LT.names.has(c.name)) || dictOk(c) || tsOk(c)))) {
         byPos = new Map(); const fx = view.filtered ? view.indices.subarray(0, count) : null, dec = new TextDecoder(); let loc = null;
         for (const c of miss) {
           const a = new Array(count);
-          if (LT.names.has(c.name)) { loc ||= LT.L.locate(0, count, fx); const g = LT.L.gather(c.name, loc), b = g.bytes, st = g.start, en = g.end; for (let i = 0; i < count; i++) { const e = en[i], s0 = st[i]; let ascii = e - s0 <= 64; if (ascii) for (let p = s0; p < e; p++) if (b[p] > 127) { ascii = false; break; } a[i] = ascii ? String.fromCharCode.apply(null, b.subarray(s0, e)) : dec.decode(b.subarray(s0, e)); } }
+          if (!(LT && LT.names.has(c.name)) && tsOk(c)) { const ts = view.tsCache.get(c.name); tsText(ts, fx, count, a); byPos.set(c.name, a); continue; }
+          if (LT && LT.names.has(c.name)) { loc ||= LT.L.locate(0, count, fx); const g = LT.L.gather(c.name, loc), b = g.bytes, st = g.start, en = g.end; for (let i = 0; i < count; i++) { const e = en[i], s0 = st[i]; let ascii = e - s0 <= 64; if (ascii) for (let p = s0; p < e; p++) if (b[p] > 127) { ascii = false; break; } a[i] = ascii ? String.fromCharCode.apply(null, b.subarray(s0, e)) : dec.decode(b.subarray(s0, e)); } }
           else { const d = dcx[c.name], ids = d.ids, dict = d.dict; for (let i = 0; i < count; i++) a[i] = dict[ids[fx ? fx[i] : i]]; }
           byPos.set(c.name, a);
         }
@@ -3039,7 +3046,7 @@ async function exportView(m) {
     }
     const blob = new Blob(parts, { type: 'text/csv;charset=utf-8' });
     send('exported', m.id, { blob, rows: count, bytes: blob.size });
-  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); }
+  } catch (err) { send('error', m.id, { message: String(err && err.message || err) }); } finally { opBusy--; }
 }
 
 // Big-file check support: builds a deterministic CSV of about m.mb megabytes, on disk (OPFS) when available.
@@ -3106,6 +3113,28 @@ async function deriveFromBytes(fn, name, total) {
   if (at !== total) throw new Error('Row count mismatch.');
   return out;
 }
+// the text a tsColumn date was read from, written back from its epoch seconds ('YYYY-MM-DD HH:MM:SS', then the same zero fraction); an empty cell stays empty
+function tsText(ts, fx, count, out) {
+  const fmt = ts.fmt, frac = fmt.length > 19 ? fmt.slice(19).replace(/f/g, '0') : '', p2 = (x) => (x < 10 ? '0' : '') + x; let lastD = NaN, ds = '';
+  for (let i = 0; i < count; i++) {
+    const s = ts[fx ? fx[i] : i]; if (s !== s) { out[i] = ''; continue; }
+    const d = Math.floor(s / 86400), sec = s - d * 86400;
+    if (d !== lastD) { lastD = d; const t = new Date(d * 86400000), y = t.getUTCFullYear(); ds = String(y).padStart(4, '0') + '-' + p2(t.getUTCMonth() + 1) + '-' + p2(t.getUTCDate()) + ' '; }
+    const h = Math.floor(sec / 3600), mi = Math.floor(sec / 60) % 60, se = sec % 60; out[i] = ds + p2(h) + ':' + p2(mi) + ':' + p2(se) + frac;
+  }
+  return out;
+}
+function fromSeconds(ts, fn) {   // hour, minute, day, month or year of UTC epoch seconds (NaN stays NaN); the calendar part is worked out once per day
+  const n = ts.length, out = new Float64Array(n); let lastD = NaN, dv = NaN;
+  for (let i = 0; i < n; i++) {
+    const s = ts[i]; if (s !== s) { out[i] = NaN; continue; }
+    const d = Math.floor(s / 86400), sec = s - d * 86400;
+    if (fn === 'hour') out[i] = Math.floor(sec / 3600); else if (fn === 'minute') out[i] = Math.floor(sec / 60) % 60;
+    else { if (d !== lastD) { lastD = d; const t = new Date(d * 86400000); dv = fn === 'day' ? t.getUTCDate() : fn === 'month' ? t.getUTCMonth() + 1 : t.getUTCFullYear(); } out[i] = dv; }
+  }
+  return out;
+}
+const DATE_AT = { month: [5, 7], day: [8, 10], hour: [11, 13], minute: [14, 16] };   // [first digit, shortest text]
 async function deriveColumn(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
   try {
@@ -3116,6 +3145,8 @@ async function deriveColumn(m) {
     let data = null;
     if ((m.fn === 'first' || m.fn === 'length') && src.type === 'string' && (view.live || (view.liveT && view.liveT.names.has(m.source))) && !view.cols.has(m.source)) { try { const num = m.fn === 'length', dec = new TextDecoder(); data = (view.live || view.liveT.L).deriveBytes(m.source, num, (b, s, e) => (num ? unitLength(b, s, e) : firstUnit(b, s, e, dec))); } catch { data = null; } }
     if (!data && !isFirefox && (m.fn === 'first' || m.fn === 'length') && src.type === 'string' && !view.live && view.f && view.flat && !view.cols.has(m.source) && !(view.dictCols && view.dictCols[m.source]) && view.f.size <= WHOLE_FILE_MAX && LfcPack.unpackColumns) { try { data = await deriveFromBytes(m.fn, m.source, view.total); } catch { data = null; } }   // first letter and length straight from the stored bytes: no string is built per cell (15M titles: 5.9 s of strings to about 2 s)
+    if (!data && src.type === 'date' && (DATE_AT[m.fn] || m.fn === 'year') && view.tsCache && view.tsCache.get(m.source) && !view.cols.has(m.source)) { try { data = fromSeconds(view.tsCache.get(m.source), m.fn); } catch { data = null; } }   // the epoch seconds made from the kept bytes (tsColumn checks every field is a real date and time, so they give back the text's own digits): live or after the import
+    if (!data && src.type === 'date' && DATE_AT[m.fn] && (view.live || (view.liveT && view.liveT.names.has(m.source))) && !view.cols.has(m.source)) { try { const [at, need] = DATE_AT[m.fn]; data = (view.live || view.liveT.L).deriveBytes(m.source, true, (b, s0, e) => { if (e - s0 < need) return NaN; const x = b[s0 + at] - 48, y = b[s0 + at + 1] - 48; return (x >>> 0) <= 9 && (y >>> 0) <= 9 ? x * 10 + y : NaN; }); } catch { data = null; } }   // hour, day, month and minute straight from the kept bytes: no date string is made (same digits and lengths as src/query/derive.mjs)
     if (!data) { const cols = await loadColumns([m.source], false, true); data = deriveMod.derive(cols[m.source], view.total, m.fn); }
     const isNum = ArrayBuffer.isView(data);
     let whole = isNum; if (isNum) for (let i = 0; i < data.length; i++) { const x = data[i]; if (x === x && x !== Math.floor(x)) { whole = false; break; } }
@@ -3176,17 +3207,18 @@ const yieldNow = (() => { const mc = new MessageChannel(), waiting = []; mc.port
 const EARLY_TEXT = /Firefox\//.test((self.navigator && navigator.userAgent) || '');   // CSV-parse thread Step C: the early text decode competes with the writer in Chromium and WebKitGTK (import + first filter + sort -10% and -13% without it on a text-heavy made-up file; real Wikimedia file level) and helps Firefox (12 to 15% worse without it)
 function textFromChunks(v) {
   const lr = v.liveRest; if (!lr) return; v.liveRest = null;
-  const fly = (v.inflight ||= new Map()); let done; const p = new Promise((r) => { done = r; }); for (const n of lr.names) fly.set(n, p);
+  const fly = (v.inflight ||= new Map()), dn = new Map(); for (const n of lr.names) { let r; fly.set(n, new Promise((x) => { r = x; })); dn.set(n, r); }   // one promise per column: a Save waiting on a short text column does not wait for the date columns behind it
+  const tsHeld = (nm) => !!(v.tsCache && v.tsCache.get(nm) && v.tsCache.get(nm).fmt);   // date columns held as epoch seconds get no text here: a Save, export or derive reads the seconds, and a sort or filter makes the text from them (tsFill)
   setTimeout(async () => {
-    try { for (const nm of lr.names) { if (view !== v) break; if (!v.cols.has(nm)) { try { const g = lr.L.columnGen(nm); let r, k = 0; while (!(r = g.next()).done) { if (++k % 4 === 0) await yieldNow(); if (view !== v) break; } if (r.done && view === v) v.cols.set(nm, r.value); } catch {} } fly.delete(nm); await yieldNow(); } }
-    finally { for (const nm of lr.names) fly.delete(nm); done(); }
+    try { for (const nm of lr.names) { if (view !== v) break; if (tsHeld(nm)) { fly.delete(nm); dn.get(nm)(); continue; } if (!v.cols.has(nm)) { try { const g = lr.L.columnGen(nm); let r, k = 0; while (!(r = g.next()).done) { if (++k % 4 === 0) { await yieldNow(); while (opBusy > 0 && !v.flyWait && view === v) await new Promise((res) => setTimeout(res, 10)); } if (view !== v) break; } if (r.done && view === v) v.cols.set(nm, r.value); } catch {} } fly.delete(nm); dn.get(nm)(); await yieldNow(); } }
+    finally { for (const nm of lr.names) { fly.delete(nm); dn.get(nm)(); } }
   }, 0);
 }
 async function warmCols(names, background) {
   const v = view; if (!v.flat || v.live || !LfcPack.unpackColumnsParallel || v.f.size > WHOLE_FILE_MAX) return;
   const fly = (v.inflight ||= new Map()), waits = [];
   const want = [];
-  for (const c of v.columns) { if (c.derived || !names.includes(c.name) || v.cols.has(c.name)) continue; const p = fly.get(c.name); if (p) waits.push(p); else want.push(c); }
+  for (const c of v.columns) { if (c.derived || !names.includes(c.name) || v.cols.has(c.name) || (c.type === 'date' && v.tsCache && v.tsCache.get(c.name) && v.tsCache.get(c.name).fmt)) continue; const p = fly.get(c.name);   /* a date column held as seconds is not warmed: Save and export read the seconds, a sort or filter makes its text then (loadColumns, tsFill) */ if (p) { waits.push(p); v.flyWait = true; } else want.push(c); }
   const isNum = (c) => c.type === 'integer' || c.type === 'number', rest = [];   // a column kept as dictionary text is filled from its dictionary, number columns too (taxi: 7; the decode of the stored file gave the same strings, checked row by row, at ~0.28 s)
   for (const c of want) { const d = v.dictCols && v.dictCols[c.name]; if (d && (!isNum(c) || d.dict.every((x) => typeof x === 'string')) && d.ids.length === v.total) { const arr = new Array(v.total), dict = d.dict, ids = d.ids; for (let i = 0; i < arr.length; i++) arr[i] = dict[ids[i]]; v.cols.set(c.name, arr); } else rest.push(c); }
   if (rest.length) {
@@ -3201,7 +3233,7 @@ async function warmCols(names, background) {
       }
     } finally { for (const c of rest) fly.delete(c.name); done(); }
   }
-  await Promise.all(waits);
+  await Promise.all(waits); v.flyWait = false;
 }
 const warmAll = () => (view && view.total <= 3000000 ? warmCols(view.columns.map((c) => c.name)) : Promise.resolve());
 const warmSome = (names) => warmCols(names);
@@ -3239,21 +3271,23 @@ function dropKeep(force) { if (self.__keepBusy && !force) { self.__keepDrop = tr
 const KEEP_MAX = 268435456;
 function keepWorkers(ws, wide, big) { dropKeep(); if (!ws.length || big || !(isFirefox || wide)) { for (const w of ws) w.terminate(); return; } self.__keep = ws.slice(); for (const w of ws) { w.onmessage = null; w.onerror = null; } self.__keepT = setTimeout(dropKeep, 60000); }
 const SAVE_IDS = false;   // off: Save gathered dictionary text per batch and LFC-pack packed it ~0.25 s slower (first Save +10% in Chromium); warmCols now fills number columns kept as dictionaries from the dictionary instead
+let opBusy = 0;   // a Save or export in progress: the idle text pass (textFromChunks) waits instead of taking turns with it on this thread (unless one of them waits for a column that pass is making)
 async function exportLfcp(m) {
   if (!view) return send('error', m.id, { message: 'No dataset is open.' });
-  let writable = null, name = null, closed = false;
+  let writable = null, name = null, closed = false; opBusy++;
   try {
     await LfcPack.init(); ensureFull();
     const t0 = performance.now();
     const cols0 = view.columns, LV = view.live || view.liveL || null, liveB = !m.noLiveBytes && !!(LV && LV.gather) && (cols0.length > 128 || !m.noBytesSave) && cols0.every((c) => view.cols.has(c.name) || LV.isText(c.name));   // a wide table still held as imported chunks: its text cells go to LFC-pack as bytes, so no column is turned into strings first
-    if (!liveB && !SAVE_IDS) await warmAll(); else if (!liveB && view.total <= 3000000) await warmCols(cols0.filter((c) => !(!c.derived && !view.cols.has(c.name) && view.dictCols && view.dictCols[c.name] && view.dictCols[c.name].ids.length === view.total)).map((c) => c.name)); const tWarm = performance.now() - t0;
+    const tsSkip = (c) => !m.noTs && c.type === 'date' && cols0.length <= 128 && !view.cols.has(c.name) && !!(view.tsCache && view.tsCache.get(c.name));   // epoch seconds already made from the kept bytes: no date text is needed
+    if (!liveB && !SAVE_IDS) { if (view.total <= 3000000) await warmCols(cols0.filter((c) => !tsSkip(c)).map((c) => c.name)); } else if (!liveB && view.total <= 3000000) await warmCols(cols0.filter((c) => !tsSkip(c) && !(!c.derived && !view.cols.has(c.name) && view.dictCols && view.dictCols[c.name] && view.dictCols[c.name].ids.length === view.total)).map((c) => c.name)); const tWarm = performance.now() - t0;
     const cols = view.columns, count = view.filtered ? view.indices.length : view.total, keyQ = cols.map((c, i) => (i ? ',' : '{') + JSON.stringify(c.name) + ':');
     name = safe(view.name.replace(/-[0-9a-f-]{36}\.json\.lfc$/, '')) + '-view-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)) + '.json.lfc';
     writable = await store.create(name);
     const meta = { producer: 'LFCFoundry Workbench', producerVersion: '0.2.0', sourceFormat: 'lfcp', sourceName: 'view of ' + view.name.slice(0, 150), sourceBytes: 0, tables: [{ name: 'rows', rows: count, columns: cols.slice(0, 128).map((c, i) => ({ id: 'field-' + (i + 1), name: c.name.slice(0, 100), type: c.type, nullable: c.nullable !== false })) }] };
     let outBytes = 0;
     const write = async (parts) => { for (const p of parts) { await writable.write(p); outBytes += p.byteLength; } };
-    const wideS = liveB && cols0.length > 128 && !m.noWideSave, BATCH = m.batch || 16384, PIECE = wideS ? (m.piece || 1024) : 0, tm = { rows: 0, text: 0, pack: 0 }, dOf = (c) => { if (c.derived || (c.type !== 'string' && (view.cols.has(c.name) || !SAVE_IDS))) return null; const d = view.dictCols ? view.dictCols[c.name] : null; return d && d.ids.length === view.total ? d : null; }, LT = !liveB && !m.noKeptText && view.liveT ? view.liveT : null, tOf = (c) => !!LT && LT.names.has(c.name) && !view.cols.has(c.name), allWarm = liveB || cols.every((c) => view.cols.has(c.name) || dOf(c) || tOf(c)),   /* a column kept as dictionary ids counts as in memory: its cells for the saved rows come from the ids */ popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
+    const wideS = liveB && cols0.length > 128 && !m.noWideSave, BATCH = m.batch || 16384, PIECE = wideS ? (m.piece || 1024) : 0, tm = { rows: 0, text: 0, pack: 0 }, dOf = (c) => { if (c.derived || (c.type !== 'string' && (view.cols.has(c.name) || !SAVE_IDS))) return null; const d = view.dictCols ? view.dictCols[c.name] : null; return d && d.ids.length === view.total ? d : null; }, LT = !liveB && !m.noKeptText && view.liveT ? view.liveT : null, tOf = (c) => !!LT && LT.names.has(c.name) && !view.cols.has(c.name), allWarm = liveB || cols.every((c) => view.cols.has(c.name) || dOf(c) || tOf(c) || tsSkip(c)),   /* a column kept as dictionary ids counts as in memory: its cells for the saved rows come from the ids */ popts = { level: 3, blockBytes: m.blockBytes || (cols.length >= 40 ? 8388608 : 2097152), share: false };   // wide tables: 8 MiB blocks, as the import writes them
     const packer2 = LfcPack.packStream(Object.assign({}, popts, { meta }));
     // Batches are packed on up to three helper threads while this thread gathers the next one; the packed blocks are written in order (LFC-pack packBlock / pushPacked, as the import does).
     const kept = !m.noKeep && self.__keep && self.__keep.length >= 2 && Math.ceil(count / (PIECE || BATCH)) >= (wideS ? 2 : 13) ? self.__keep : null;
@@ -3269,6 +3303,7 @@ async function exportLfcp(m) {
         const out = {}, n = end - start, fx = view.filtered ? view.indices.subarray(start, end) : null, loc = liveB ? LV.locate(start, end, fx) : null, PZ = PIECE && n > PIECE ? PIECE : 0, PP = !!(PZ && loc && loc.ord), outs = PP ? Array.from({ length: Math.ceil(n / PZ) }, () => ({})) : null; let locT = null;   // the batch's row numbers are cut out once, not looked up per cell
         for (const c of cols) {
           const src = view.cols.get(c.name);
+          if (!src && tsSkip(c)) { const tcol = view.tsCache.get(c.name), t = new Float64Array(n); if (fx) { for (let i = 0; i < n; i++) t[i] = tcol[fx[i]]; } else t.set(tcol.subarray(start, end)); out[c.name] = { kind: 'ts', unit: 's', values: t, fmt: tcol.fmt }; continue; }
           if (!src && tOf(c)) { locT ||= LT.L.locate(start, end, fx); out[c.name] = LT.L.gather(c.name, locT); continue; }   // kept text bytes (see keepText): no decode of the saved file
           if (!src && !liveB) { const d = dOf(c), a = new Array(n), ids = d.ids, dict = d.dict; if (fx) { for (let i = 0; i < n; i++) a[i] = dict[ids[fx[i]]]; } else for (let i = 0; i < n; i++) a[i] = dict[ids[start + i]]; out[c.name] = a; continue; }
           if (liveB && !ArrayBuffer.isView(src) && !(view.derived && view.derived.has(c.name)) && !(c.type === 'date' && cols.length <= 128 && !m.noTs)) { if (PP) { const gs = LV.gather(c.name, loc, PZ); for (let q = 0; q < gs.length; q++) { const g = gs[q], nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, g.start.length) : null; outs[q][c.name] = nv || g; } continue; } const g = LV.gather(c.name, loc), nv = c.type === "number" ? numFromText(g.bytes, g.start, g.end, n) : null; out[c.name] = nv || g; continue; }   // free-form numbers that print back exactly are saved as numbers, as the import does
@@ -3319,7 +3354,7 @@ async function exportLfcp(m) {
     if (self.__keepBusy) dropKeep(true);   // a failed Save: the kept threads may hold unfinished jobs, so they go
     if (writable && !closed) { try { await writable.abort(); } catch {} } if (name) await store.remove(name);
     send('error', m.id, { message: String(err && err.message || err) });
-  }
+  } finally { opBusy--; }
 }
 
 // ---- Parquet (flat files): the reader is compression part 7's parquet-reader.js (v1 and v2 pages, PLAIN, dictionary, delta, byte-stream-split, snappy, zstd, uncompressed), unchanged below this line.
